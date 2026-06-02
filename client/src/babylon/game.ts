@@ -43,7 +43,8 @@ import {
   type GameStoreSnapshot,
 } from './store';
 import { createGameWorld, FAIR_CENTER, type GameWorldObjects } from './world';
-import { getInterpolatedPlayers, type NetClient } from '../net';
+import { advanceSelfPrediction, getInterpolatedPlayers, type NetClient } from '../net';
+import { normalizeInput } from '@shared';
 
 export interface GameRuntimeHandle {
   dispose(): void;
@@ -224,12 +225,29 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
 
     const input = runtimeContext?.input;
 
-    // ── Net input: camera-relative WASD → world-space (vx, vz)
+    // ── Net input: camera-relative WASD → world-space (vx, vz).
+    //    Also runs CLIENT-SIDE PREDICTION via advanceSelfPrediction each
+    //    frame using the same @shared.movePlayer the server's step() uses,
+    //    so the local avatar moves at full render-rate (instead of jumping
+    //    once per 50ms server snapshot). reconcileSelf later smooths any
+    //    small disagreement between this prediction and the server.
     if (net && input) {
       const di = input.dir;
       const move = getCameraRelativeMoveXZ(objects.world.camera, di.x, di.y);
       const aim = objects.world.camera.alpha;
-      net.sendInput(move.x, move.z, aim);
+      const { x: nvx, y: nvy } = normalizeInput(move.x, move.z);
+
+      net.sendInput(nvx, nvy, aim);
+
+      if (net.predictedSelf && net.meta) {
+        advanceSelfPrediction(
+          net.predictedSelf,
+          { vx: nvx, vy: nvy, aim },
+          dt,
+          net.meta,
+          net.meta.playerSpeed,
+        );
+      }
     }
 
     if (input?.consumeTap()) audio.unlock();
