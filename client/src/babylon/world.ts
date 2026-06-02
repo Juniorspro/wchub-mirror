@@ -32,9 +32,9 @@ export interface GameWorldObjects {
   dispose(): void;
 }
 
-export const FAIR_CENTER = new Vector3(12, 0, 12);
-export const FAIR_SIZE = 24;
-export const PLAZA_RADIUS = 4;
+export const FAIR_CENTER = new Vector3(24, 0, 24);
+export const FAIR_SIZE = 48;
+export const PLAZA_RADIUS = 6;
 
 export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWorldObjects {
   // LLM-EXTENSION:WORLD — Multiplayer fairground: 24×24 grass ground centered at (12, 0, 12), a beige plaza disc in the middle, four perimeter tents at the corners with conical canvas tops, warm sun + soft ambient. Camera is ArcRotateCamera framed to follow the local avatar; game.ts re-targets camera.target each frame as the avatar walks. Stalls live in a separate module (entities.ts/stalls.ts) so they enumerate cleanly for proximity checks.
@@ -45,10 +45,14 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   // Follow-cam framing (game.ts updates camera.target each frame).
   base.camera.alpha = -Math.PI / 2;
   base.camera.beta = Math.PI / 3;
-  base.camera.radius = 9;
+  base.camera.radius = 11;
   base.camera.target.copyFrom(FAIR_CENTER);
   base.camera.lowerRadiusLimit = 4;
-  base.camera.upperRadiusLimit = 18;
+  base.camera.upperRadiusLimit = 24;
+  // Strip the camera's keyboard controls so WASD / arrows flow through
+  // to input.dir (useInput) and drive the player avatar instead of
+  // rotating the camera around its target.
+  base.camera.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
 
   // Outdoor lighting: warmer ambient, brighter sun.
   base.hemiLight.intensity = 0.85;
@@ -73,18 +77,18 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   const tentMeshes: Mesh[] = [];
   const tentColors = ['#d96b6b', '#6bb3d9', '#d9c46b', '#9bd96b'];
   const tentCorners: Array<[number, number]> = [
-    [2.5, 2.5], [21.5, 2.5], [2.5, 21.5], [21.5, 21.5],
+    [4, 4], [44, 4], [4, 44], [44, 44],
   ];
   tentCorners.forEach(([x, z], i) => {
-    const cabin = MeshBuilder.CreateBox(`tent-base-${i}`, { width: 2, height: 1.6, depth: 2 }, scene);
-    cabin.position.set(x, 0.8, z);
+    const cabin = MeshBuilder.CreateBox(`tent-base-${i}`, { width: 3, height: 2.2, depth: 3 }, scene);
+    cabin.position.set(x, 1.1, z);
     cabin.material = createStandardMaterial(scene, `tent-base-mat-${i}`, Color3.FromHexString('#f0e2c8'));
     tentMeshes.push(cabin);
 
     const roof = MeshBuilder.CreateCylinder(`tent-roof-${i}`, {
-      height: 1.4, diameterTop: 0, diameterBottom: 2.6, tessellation: 6,
+      height: 2.0, diameterTop: 0, diameterBottom: 3.8, tessellation: 6,
     }, scene);
-    roof.position.set(x, 2.3, z);
+    roof.position.set(x, 3.2, z);
     roof.material = createStandardMaterial(scene, `tent-roof-mat-${i}`, Color3.FromHexString(tentColors[i]));
     tentMeshes.push(roof);
   });

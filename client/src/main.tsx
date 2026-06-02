@@ -25,7 +25,7 @@ if (typeof window !== 'undefined' && !(window as unknown as { GAME_CONFIG?: unkn
     maxPlayers: 12,
     tickHz: 20,
     port: 2567,
-    world: { width: 24, height: 24 },
+    world: { width: 48, height: 48 },
     prodHost: 'your-game-name-xxxxxxxx.rezona-394.workers.dev',
   };
 }

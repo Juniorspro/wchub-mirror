@@ -40,10 +40,11 @@ export interface StallDef {
 }
 
 // Stalls arranged in a ring around the plaza. Distance from plaza center
-// is 7 units; angles split evenly. Each stall faces the plaza center.
-const RING_RADIUS = 7;
-const PLAZA_X = 12;
-const PLAZA_Z = 12;
+// is 14 units (so the central plaza stays visible and walkable); angles
+// split evenly. Each stall faces the plaza center.
+const RING_RADIUS = 14;
+const PLAZA_X = 24;
+const PLAZA_Z = 24;
 
 function ringPos(angleRad: number): { x: number; z: number; facing: number } {
   return {

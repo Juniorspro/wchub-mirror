@@ -25,10 +25,10 @@ export const gameConfig = {
 
   /** World footprint in Babylon ground-plane units (XZ).
    *  width → X axis, height → Z axis. Y (up) is constant. */
-  world: { width: 24, height: 24 },
+  world: { width: 48, height: 48 },
 
   /** Player walking speed in world units per second */
-  player: { speed: 4 },
+  player: { speed: 6 },
 
   /** Production worker host (placeholder until deploy) */
   prodHost: "your-game-name-xxxxxxxx.rezona-394.workers.dev",
