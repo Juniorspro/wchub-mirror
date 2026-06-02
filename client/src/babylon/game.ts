@@ -283,9 +283,7 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
           // carrying the OLD outfit between click and server echo would
           // immediately revert the just-applied local change → flicker.
           if (!isSelf) {
-            const textureCsv = (p as unknown as { textureItems?: string }).textureItems ?? '';
-            const accessoryCsv = (p as unknown as { accessoryItems?: string }).accessoryItems ?? '';
-            applyOutfitIfChanged(p.id, textureCsv, accessoryCsv);
+            applyOutfitIfChanged(p.id, p.textureItems, p.accessoryItems);
           }
 
           // Camera + stall proximity follow the local player.

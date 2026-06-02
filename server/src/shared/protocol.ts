@@ -56,8 +56,11 @@ export interface PlayerSnapshot {
   color: string;
   username: string;
   ack: number; // 最近已应用的输入 seq → reconcile
-  // MIGRATION: 客户端要渲染的每一个 @type 字段都在这里镜像一份（hp/score/level/...）。
-  //   NetClient.onStateChange 的解码循环同步补齐对应读取。
+  // Dressup Lounge — every player's outfit, CSV ids parsed client-side
+  // by actor.applyOutfit. Sync over the schema so remote players see
+  // each other's clothing changes.
+  textureItems: string;
+  accessoryItems: string;
 }
 
 export interface StateMsg {

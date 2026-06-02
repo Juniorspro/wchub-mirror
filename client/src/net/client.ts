@@ -220,7 +220,10 @@ export class NetClient {
         color: p.color as string,
         username: p.username as string,
         ack: p.ack as number,
-        // MIGRATION: 在此补齐你加到 PlayerSnapshot 的游戏字段，例如 hp: p.hp as number,
+        // Dressup Lounge — pass the two outfit CSV strings through so the
+        // Babylon render loop can call applyOutfitIfChanged on remote players.
+        textureItems: (p.textureItems as string) ?? '',
+        accessoryItems: (p.accessoryItems as string) ?? '',
       });
     });
 
