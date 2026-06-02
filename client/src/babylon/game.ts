@@ -109,6 +109,7 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
       a.setPosition(FAIR_CENTER.x, 0, FAIR_CENTER.z);
       avatars.set(sid, a);
       if (isSelf) localAvatar = a;
+      console.log(`[fair] avatar spawned: ${sid} (self=${isSelf})`);
     }
     return a;
   }
@@ -230,43 +231,57 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
       markStoreFlag('selfId-set');
     }
 
-    // ── Spawn / position local avatar from net.predictedSelf
-    if (net?.meta && net.predictedSelf) {
-      const selfSid = net.meta.selfId;
-      const self = ensureAvatar(selfSid, true);
-      self.setPosition(net.predictedSelf.x, 0, net.predictedSelf.y);
-      self.setRotationY(net.predictedSelf.aim);
-      // Camera follows local avatar
-      objects.world.camera.target.set(net.predictedSelf.x, 1.2, net.predictedSelf.y);
-
-      // Stall proximity
-      const nearest = objects.entities.findNearestStall(net.predictedSelf.x, net.predictedSelf.y);
-      setNearbyStall(nearest ? nearest.id : null);
-    }
-
-    // ── Position remote avatars + apply their outfits
+    // ── Drive every avatar from the latest snapshot.
+    //    Self uses net.predictedSelf if it's been initialised (smoother
+    //    immediate-response feel); falls back to its snapshot row when not
+    //    yet available so the local avatar still spawns right after join.
+    //    Other avatars use the latest snapshot row directly.
     if (net?.meta) {
       const selfSid = net.meta.selfId;
-      const others = getInterpolatedPlayers(net);
+      const latestSnap = net.snapshots[net.snapshots.length - 1];
       const seen = new Set<string>();
-      seen.add(selfSid);
-      for (const p of others) {
-        if (p.id === selfSid) continue;
-        seen.add(p.id);
-        const a = ensureAvatar(p.id, false);
-        a.setPosition(p.x, 0, p.y);
-        a.setRotationY(p.aim);
-      }
-      // Apply outfit from latest schema snapshot (cheap diff via key cache).
-      const snap = net.snapshots[net.snapshots.length - 1];
-      if (snap) {
-        for (const p of snap.players) {
+
+      // Use interpolated positions where possible (smoother for ≥2 snapshots);
+      // fall back to the latest snapshot row otherwise.
+      const interpolated = getInterpolatedPlayers(net);
+      const interpById = new Map<string, { x: number; y: number; aim: number }>();
+      for (const p of interpolated) interpById.set(p.id, { x: p.x, y: p.y, aim: p.aim });
+
+      if (latestSnap) {
+        for (const p of latestSnap.players) {
+          seen.add(p.id);
+          const isSelf = p.id === selfSid;
+          const a = ensureAvatar(p.id, isSelf);
+
+          let px = p.x;
+          let py = p.y;
+          let pa = p.aim;
+          if (isSelf && net.predictedSelf) {
+            px = net.predictedSelf.x;
+            py = net.predictedSelf.y;
+            pa = net.predictedSelf.aim;
+          } else if (!isSelf) {
+            const interp = interpById.get(p.id);
+            if (interp) { px = interp.x; py = interp.y; pa = interp.aim; }
+          }
+          a.setPosition(px, 0, py);
+          a.setRotationY(pa);
+
+          // Outfit diff (cheap key compare)
           const textureCsv = (p as unknown as { textureItems?: string }).textureItems ?? '';
           const accessoryCsv = (p as unknown as { accessoryItems?: string }).accessoryItems ?? '';
           applyOutfitIfChanged(p.id, textureCsv, accessoryCsv);
+
+          // Camera + stall proximity follow the local player.
+          if (isSelf) {
+            objects.world.camera.target.set(px, 1.2, py);
+            const nearest = objects.entities.findNearestStall(px, py);
+            setNearbyStall(nearest ? nearest.id : null);
+          }
         }
       }
-      // Despawn anyone who's gone (excluding self).
+
+      // Despawn avatars that aren't in the latest snapshot anymore.
       for (const sid of avatars.keys()) {
         if (!seen.has(sid)) disposeAvatar(sid);
       }
