@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // worker 名 = workers.dev 域名第一段，格式 `<名称前缀>-<8位hex>`，
+  // 必须与 server/src/game.config.ts 的 prodHost 第一段逐字一致。部署前替换占位符。
+  "name": "your-game-name-xxxxxxxx",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "containers": [
+    {
+      "class_name": "GameServer",
+      "image": "../server/Dockerfile",
+      "instance_type": "basic",
+      "max_instances": 50
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "GAME_SERVER", "class_name": "GameServer" },
+      { "name": "MATCHMAKER", "class_name": "Matchmaker" }
+    ]
+  },
+
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["GameServer"] },
+    { "tag": "v2", "new_sqlite_classes": ["Matchmaker"] }
+  ],
+
+  "assets": {
+    "directory": "../client",
+    "binding": "ASSETS"
+  }
+}
