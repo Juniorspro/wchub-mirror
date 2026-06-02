@@ -29,6 +29,7 @@ import { RUNTIME_CONFIG } from './config';
 import { createSceneEntities, type SceneEntities, type StallDef } from './entities';
 import { createItemField, type ItemField } from './items';
 import {
+  getGameSnapshot,
   hydratePresetsFromStorage,
   resetGameStore,
   setChatMessages,
@@ -108,7 +109,16 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
       a = createCharacterAvatar(scene, { id: sid });
       a.setPosition(FAIR_CENTER.x, 0, FAIR_CENTER.z);
       avatars.set(sid, a);
-      if (isSelf) localAvatar = a;
+      if (isSelf) {
+        localAvatar = a;
+        // Self's outfit is owned by the local store — apply current outfit
+        // immediately on spawn so the avatar isn't bare while we wait for
+        // the next user click.
+        const snap0 = getGameSnapshot();
+        const textureCsv = snap0.outfit.textureItemIds.join(',');
+        const accessoryCsv = snap0.outfit.accessoryItemIds.join(',');
+        applyOutfitIfChanged(sid, textureCsv, accessoryCsv);
+      }
       console.log(`[fair] avatar spawned: ${sid} (self=${isSelf})`);
     }
     return a;
@@ -267,10 +277,16 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
           a.setPosition(px, 0, py);
           a.setRotationY(pa);
 
-          // Outfit diff (cheap key compare)
-          const textureCsv = (p as unknown as { textureItems?: string }).textureItems ?? '';
-          const accessoryCsv = (p as unknown as { accessoryItems?: string }).accessoryItems ?? '';
-          applyOutfitIfChanged(p.id, textureCsv, accessoryCsv);
+          // Outfit diff (cheap key compare) — ONLY for remote players. The
+          // local store owns self's outfit (see syncLocalOutfit + the spawn
+          // hook in ensureAvatar). Without this guard, the snapshot still
+          // carrying the OLD outfit between click and server echo would
+          // immediately revert the just-applied local change → flicker.
+          if (!isSelf) {
+            const textureCsv = (p as unknown as { textureItems?: string }).textureItems ?? '';
+            const accessoryCsv = (p as unknown as { accessoryItems?: string }).accessoryItems ?? '';
+            applyOutfitIfChanged(p.id, textureCsv, accessoryCsv);
+          }
 
           // Camera + stall proximity follow the local player.
           if (isSelf) {
