@@ -46,14 +46,24 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // One NetClient per mount. Reconnects across HMR via cleanup → fresh client.
+    // `disposed` guards against React StrictMode's double-mount race: the
+    // first effect's cleanup runs WHILE the first net.connect() is still
+    // awaiting joinOrCreate. At that moment net.room is null so disconnect
+    // is a no-op; the await later resolves and silently leaks an extra
+    // sessionId in the room — which the surviving second runtime then
+    // renders as a duplicate avatar. The .then() below cancels that orphan
+    // by calling disconnect once the flag is set.
+    let disposed = false;
+
     const net = new NetClient({
       onStatus: (s) => console.log('[net]', s),
       onHello: (meta) => console.log('[net] hello', meta.selfId),
     });
     netRef.current = net;
     setNetState(net);
-    void net.connect(readRoomCode());
+    void net.connect(readRoomCode()).then(() => {
+      if (disposed) net.disconnect();
+    });
 
     const runtimeContext: GameRuntimeContext = {
       input,
@@ -65,6 +75,7 @@ export default function App() {
     const runtime = startGame(canvas, runtimeContext);
 
     return () => {
+      disposed = true;
       net.disconnect();
       netRef.current = null;
       setNetState(null);
