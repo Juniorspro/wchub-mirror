@@ -12,11 +12,11 @@ import { Color3, MeshBuilder, TransformNode, type Mesh, type Scene, type Standar
 import { createStandardMaterial } from './helpers';
 import {
   getAccessoryItem,
-  getTextureItem,
+  getTextureItemOrCustom,
   type AccessorySocket,
   type BodyRegion,
 } from './items';
-import { disposePatternTextureCache, getImageTexture, getPatternTexture, patternKey, type Pattern } from './textures';
+import { disposePatternTextureCache, getImageTexture, getPatternTexture, patternKey, uniformDesign, type Pattern } from './textures';
 import type { Config } from '../game/schema';
 
 export interface AvatarUpdateContext {
@@ -245,7 +245,12 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
       return;
     }
     material.diffuseColor.set(1, 1, 1);
-    material.diffuseTexture = getPatternTexture(scene, patternKey(regionKey, pattern), pattern);
+    // Skin regions are not unfolded garments; wrap the single Pattern in a
+    // uniformDesign so it goes through the now-design-shaped compositor.
+    // Seams baked into the texture do show on non-solid skin patterns, but
+    // the current catalog only uses solid skin tones (which take the early-
+    // return diffuseColor path above), so this is fine in practice.
+    material.diffuseTexture = getPatternTexture(scene, patternKey(regionKey, pattern), uniformDesign(pattern));
   }
 
   function applyOutfit(textureItemIds: readonly string[], accessoryItemIds: readonly string[]): void {
@@ -258,7 +263,7 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
     };
 
     const allItems = textureItemIds
-      .map((id) => getTextureItem(id))
+      .map((id) => getTextureItemOrCustom(id))
       .filter((i): i is NonNullable<typeof i> => Boolean(i));
 
     const bodypaintItems = allItems.filter((i) => i.paints).sort((a, b) => a.zIndex - b.zIndex);

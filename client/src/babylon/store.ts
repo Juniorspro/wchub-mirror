@@ -9,9 +9,20 @@
 import {
   WARDROBE_ACCESSORY_ITEMS,
   WARDROBE_TEXTURE_ITEMS,
+  encodeLookId,
   type AccessorySocket,
   type TextureSlot,
 } from './items';
+import type { GarmentDesign } from './textures';
+
+export type CustomSlot = Exclude<TextureSlot, 'bodypaint'>;
+
+export interface SavedLook {
+  readonly name: string;
+  readonly slot: CustomSlot;
+  readonly design: GarmentDesign;
+  readonly createdAt: number;
+}
 
 export interface OutfitState {
   readonly textureItemIds: readonly string[];
@@ -46,6 +57,8 @@ export interface GameStoreSnapshot {
   readonly nearbyStallId: string | null;
   /** Tail-window of chat history (room-broadcast events). */
   readonly chat: readonly ChatEntry[];
+  /** Local saved per-panel designs the player has named. localStorage-backed. */
+  readonly savedLooks: readonly SavedLook[];
 }
 
 type GameStoreListener = (snapshot: GameStoreSnapshot) => void;
@@ -72,6 +85,7 @@ const initialSnapshot: GameStoreSnapshot = {
   roomCode: '',
   nearbyStallId: null,
   chat: [],
+  savedLooks: [],
 };
 
 let snapshot: GameStoreSnapshot = initialSnapshot;
@@ -233,4 +247,73 @@ export function hydratePresetsFromStorage(): void {
   } catch {
     // Corrupted / unreadable — fall through to empty presets.
   }
+  // Also hydrate the saved-looks gallery so it survives reloads.
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const raw = localStorage.getItem(SAVED_LOOKS_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      const looks: SavedLook[] = [];
+      for (const e of parsed) {
+        if (e && typeof e === 'object'
+          && typeof (e as SavedLook).name === 'string'
+          && typeof (e as SavedLook).slot === 'string'
+          && typeof (e as SavedLook).createdAt === 'number'
+          && (e as SavedLook).design && (e as { design: { kind: string } }).design.kind === 'garment') {
+          looks.push(e as SavedLook);
+        }
+      }
+      setGameSnapshot({ savedLooks: looks });
+    }
+  } catch {
+    /* corrupted savedLooks — fall through to empty */
+  }
+}
+
+// ─── Custom per-panel designs ──────────────────────────────────────────────
+
+const SAVED_LOOKS_KEY = 'dressup.savedLooks.v1';
+
+function persistSavedLooks(looks: readonly SavedLook[]): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(SAVED_LOOKS_KEY, JSON.stringify(looks));
+    }
+  } catch { /* quota / private mode — in-memory only */ }
+}
+
+// Equip a custom GarmentDesign in the given slot. The design is encoded
+// into a look:<slot>:<b64> id and inserted in textureItemIds, REPLACING any
+// existing entry that matches the same slot (so equipping a new shirt
+// design swaps out the previous shirt — catalog or look).
+export function equipCustomDesign(slot: CustomSlot, design: GarmentDesign): void {
+  const lookId = encodeLookId(slot, design);
+  // Drop the existing entry in this slot. Catalog entries are identified by
+  // the WARDROBE_TEXTURE_ITEMS index; look:<slot>: entries by the prefix.
+  const slotPrefix = `look:${slot}:`;
+  const catalogSlotIds = new Set(
+    WARDROBE_TEXTURE_ITEMS.filter((i) => i.slot === slot).map((i) => i.id),
+  );
+  const next = snapshot.outfit.textureItemIds
+    .filter((id) => !id.startsWith(slotPrefix) && !catalogSlotIds.has(id));
+  next.push(lookId);
+  setOutfit(next, snapshot.outfit.accessoryItemIds);
+}
+
+export function saveLook(name: string, slot: CustomSlot, design: GarmentDesign): void {
+  const trimmed = name.trim().slice(0, 24);
+  if (!trimmed) return;
+  // Replace by name if it already exists; otherwise append.
+  const existing = snapshot.savedLooks.filter((l) => l.name !== trimmed || l.slot !== slot);
+  const entry: SavedLook = { name: trimmed, slot, design, createdAt: Date.now() };
+  const next = [...existing, entry].slice(-50);
+  setGameSnapshot({ savedLooks: next });
+  persistSavedLooks(next);
+}
+
+export function deleteLook(name: string, slot: CustomSlot): void {
+  const next = snapshot.savedLooks.filter((l) => !(l.name === name && l.slot === slot));
+  setGameSnapshot({ savedLooks: next });
+  persistSavedLooks(next);
 }

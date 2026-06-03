@@ -39,7 +39,7 @@ const CORS_MAX_AGE = "86400";
 export class GameServer extends Container<Env> {
   defaultPort = gameConfig.port;
   sleepAfter = gameConfig.sleepAfter;
-  enableInternet = false;
+  enableInternet = true;
 }
 
 export class Matchmaker extends DurableObject<Env> {

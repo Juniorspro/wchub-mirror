@@ -9,13 +9,13 @@ export type AssetMeta = {
 
 export const ASSETS: Record<string, string> = {
   "shirt-comic": new URL("./assets/sprite/sprite_shirt-comic_d5032e.png", import.meta.url).href,
-  "shirt-denim": new URL("./assets/sprite/sprite_shirt-denim_59bbeb.png", import.meta.url).href,
+  "shirt-denim": new URL("./assets/sprite/sprite_shirt-denim_3790c5.png", import.meta.url).href,
   "shirt-flames": new URL("./assets/sprite/sprite_shirt-flames_92613b.png", import.meta.url).href,
-  "shirt-flannel": new URL("./assets/sprite/sprite_shirt-flannel_ea7e2d.png", import.meta.url).href,
+  "shirt-flannel": new URL("./assets/sprite/sprite_shirt-flannel_eacef8.png", import.meta.url).href,
   "shirt-galaxy": new URL("./assets/sprite/sprite_shirt-galaxy_f0ec76.png", import.meta.url).href,
-  "shirt-hawaiian": new URL("./assets/sprite/sprite_shirt-hawaiian_a95e17.png", import.meta.url).href,
-  "shirt-knit": new URL("./assets/sprite/sprite_shirt-knit_922bff.png", import.meta.url).href,
-  "shirt-leather": new URL("./assets/sprite/sprite_shirt-leather_372dad.png", import.meta.url).href,
+  "shirt-hawaiian": new URL("./assets/sprite/sprite_shirt-hawaiian_09bd15.png", import.meta.url).href,
+  "shirt-knit": new URL("./assets/sprite/sprite_shirt-knit_7dcebd.png", import.meta.url).href,
+  "shirt-leather": new URL("./assets/sprite/sprite_shirt-leather_5ea7df.png", import.meta.url).href,
   "shirt-leopard": new URL("./assets/sprite/sprite_shirt-leopard_b5d69c.png", import.meta.url).href,
   "shirt-rainbow": new URL("./assets/sprite/sprite_shirt-rainbow_4b035d.png", import.meta.url).href,
   "shoes-canvas": new URL("./assets/sprite/sprite_shoes-canvas_1442a2.png", import.meta.url).href,

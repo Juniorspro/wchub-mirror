@@ -15,7 +15,9 @@ import { Color3, MeshBuilder, type Mesh, type Scene } from '@babylonjs/core';
 import { createStandardMaterial } from './helpers';
 
 // A stall sells either a TextureSlot ('bodypaint' | 'shirt' | 'pants' | 'shoes')
-// OR an AccessorySocket-grouped category ('hat' | 'glasses' | 'scarf' | 'bag').
+// OR an AccessorySocket-grouped category ('hat' | 'glasses' | 'scarf' | 'bag')
+// OR the special 'customize' stall — a dedicated booth where players paint
+// per-panel garment designs.
 export type StallCategory =
   | 'bodypaint'
   | 'shirt'
@@ -24,7 +26,8 @@ export type StallCategory =
   | 'hat'
   | 'glasses'
   | 'scarf'
-  | 'bag';
+  | 'bag'
+  | 'customize';
 
 export interface StallDef {
   id: string;
@@ -56,12 +59,16 @@ function ringPos(angleRad: number): { x: number; z: number; facing: number } {
 }
 
 export const STALL_LAYOUT: StallDef[] = [
-  { id: 'stall-shirts',    label: "Sasha's Shirts",     category: 'shirt',     ...ringPos(0),                color: '#c14444' },
-  { id: 'stall-pants',     label: 'Pants Pavilion',     category: 'pants',     ...ringPos(Math.PI / 3),      color: '#3a6ea5' },
-  { id: 'stall-shoes',     label: 'Sneaker Stand',      category: 'shoes',     ...ringPos((2 * Math.PI) / 3), color: '#e8c84a' },
-  { id: 'stall-hats',      label: 'The Hattery',        category: 'hat',       ...ringPos(Math.PI),          color: '#9bd96b' },
-  { id: 'stall-accessories', label: 'Glasses + Bags',   category: 'glasses',   ...ringPos((4 * Math.PI) / 3), color: '#d96bc4' },
-  { id: 'stall-scarves',   label: 'Cozy Scarves',       category: 'scarf',     ...ringPos((5 * Math.PI) / 3), color: '#e89c4a' },
+  { id: 'stall-shirts',    label: "Sasha's Shirts",     category: 'shirt',     ...ringPos(0),                  color: '#c14444' },
+  { id: 'stall-pants',     label: 'Pants Pavilion',     category: 'pants',     ...ringPos(Math.PI / 3),        color: '#3a6ea5' },
+  { id: 'stall-shoes',     label: 'Sneaker Stand',      category: 'shoes',     ...ringPos((2 * Math.PI) / 3),  color: '#e8c84a' },
+  { id: 'stall-hats',      label: 'The Hattery',        category: 'hat',       ...ringPos(Math.PI),            color: '#9bd96b' },
+  { id: 'stall-accessories', label: 'Glasses + Bags',   category: 'glasses',   ...ringPos((4 * Math.PI) / 3),  color: '#d96bc4' },
+  { id: 'stall-scarves',   label: 'Cozy Scarves',       category: 'scarf',     ...ringPos((5 * Math.PI) / 3),  color: '#e89c4a' },
+  // Design Bench — sits closer to the plaza center (smaller radius) so it's
+  // visually distinct from the catalog stalls and on the natural path from
+  // the spawn point. Per-panel garment customization lives here.
+  { id: 'stall-customize', label: 'The Design Bench',   category: 'customize', x: PLAZA_X, z: PLAZA_Z - 5,     facing: 0, color: '#a85dd9' },
 ];
 
 /** How close a player needs to be (in world units) to "browse" a stall. */

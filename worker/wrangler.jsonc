@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   // worker 名 = workers.dev 域名第一段，格式 `<名称前缀>-<8位hex>`，
   // 必须与 server/src/game.config.ts 的 prodHost 第一段逐字一致。部署前替换占位符。
-  "name": "your-game-name-xxxxxxxx",
+  "name": "dressup-fair",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -30,7 +30,7 @@
   ],
 
   "assets": {
-    "directory": "../client",
+    "directory": "../client/dist",
     "binding": "ASSETS"
   }
 }

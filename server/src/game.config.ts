@@ -31,7 +31,7 @@ export const gameConfig = {
   player: { speed: 6 },
 
   /** Production worker host (placeholder until deploy) */
-  prodHost: "your-game-name-xxxxxxxx.rezona-394.workers.dev",
+  prodHost: "dressup-fair.rezona-394.workers.dev",
 } as const;
 
 export type GameConfig = typeof gameConfig;
