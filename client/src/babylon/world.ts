@@ -74,10 +74,14 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   const allMaterials: StandardMaterial[] = [];
 
   // ─── Ground ───────────────────────────────────────────────────────────────
+  // Wide enough to fit the expanded 200×110 playable area, the stadium
+  // to the north (z up to ~190), and a buffer past the world edges so
+  // the horizon stays uninterrupted at max camera radius. Centered on
+  // the playable midpoint rather than the original park center.
   const ground = MeshBuilder.CreateGround('park-ground', {
-    width: 260, height: 260, subdivisions: 1,
+    width: 360, height: 320, subdivisions: 1,
   }, scene);
-  ground.position.set(FAIR_CENTER.x, 0, 80);
+  ground.position.set(80, 0, 90);
   ground.material = createStandardMaterial(scene, 'park-ground-mat', Color3.FromHexString('#74a05f'));
   ground.receiveShadows = true;
 

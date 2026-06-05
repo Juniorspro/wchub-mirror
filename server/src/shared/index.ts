@@ -9,4 +9,5 @@
 
 export * from './constants';
 export * from './math';
+export * from './obstacles';
 export * from './protocol';
