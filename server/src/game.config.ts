@@ -24,8 +24,16 @@ export const gameConfig = {
   sleepAfter: "10m",
 
   /** World footprint in Babylon ground-plane units (XZ).
-   *  width → X axis, height → Z axis. Y (up) is constant. */
-  world: { width: 48, height: 48 },
+   *  width → X axis, height → Z axis. Y (up) is constant.
+   *  Players are clamped to (0, 0) → (width, height). Sized to include
+   *  the original 48×48 park PLUS the eastern soccer field, the
+   *  northern stadium approach (stopping just before the stadium's
+   *  south wall at z≈90), and breathing room for outdoor exploration. */
+  world: { width: 120, height: 85 },
+
+  /** Where new players spawn (lounge plaza center). The park sits in
+   *  the SW corner of the world, so spawn is NOT width/2 / height/2. */
+  spawn: { x: 24, y: 24 },
 
   /** Player walking speed in world units per second */
   player: { speed: 6 },

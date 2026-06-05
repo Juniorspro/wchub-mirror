@@ -106,56 +106,178 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
   torso.scaling.set(1.0, 1.0, 0.58);
   torso.material = materials.torso;
 
+  // Shoulder spheres + arms lowered by ~0.1 so the body's natural shoulder
+  // line sits at y≈1.95, lining up with the shirt's sleeve top — which in
+  // turn lets the shoulder dome (apex ~0.07 above sleeve top) reach exactly
+  // the neck base at y=2.02 instead of towering past it.
   const shoulderL = MeshBuilder.CreateSphere(`body-shoulder-l-${id}`, { diameter: 0.22, segments: 14 }, scene);
   shoulderL.parent = root;
-  shoulderL.position.set(-0.42, 1.92, 0);
+  shoulderL.position.set(-0.42, 1.82, 0);
   shoulderL.material = materials.arms;
 
   const shoulderR = MeshBuilder.CreateSphere(`body-shoulder-r-${id}`, { diameter: 0.22, segments: 14 }, scene);
   shoulderR.parent = root;
-  shoulderR.position.set(0.42, 1.92, 0);
+  shoulderR.position.set(0.42, 1.82, 0);
   shoulderR.material = materials.arms;
 
-  const armL = MeshBuilder.CreateCapsule(`body-arm-l-${id}`, { height: 1.0, radius: 0.13, tessellation: 18, capSubdivisions: 8 }, scene);
-  armL.parent = root;
-  armL.position.set(-0.53, 1.55, 0);
-  armL.material = materials.arms;
+  // ─── Arm L — jointed for walking animation ──────────────────────────────
+  // Structure: shoulderJoint → upperArm → elbowJoint → lowerArm + hand.
+  // Rotating shoulderJoint swings the WHOLE arm; rotating elbowJoint
+  // articulates only the lower arm + hand. Joints are TransformNodes
+  // (invisible) used purely as rotation pivots.
+  const shoulderJointL = new TransformNode(`joint-shoulder-l-${id}`, scene);
+  shoulderJointL.parent = root;
+  shoulderJointL.position.set(-0.53, 1.95, 0);
 
-  const armR = MeshBuilder.CreateCapsule(`body-arm-r-${id}`, { height: 1.0, radius: 0.13, tessellation: 18, capSubdivisions: 8 }, scene);
-  armR.parent = root;
-  armR.position.set(0.53, 1.55, 0);
-  armR.material = materials.arms;
+  const upperArmL = MeshBuilder.CreateCapsule(`body-upper-arm-l-${id}`, {
+    height: 0.55, radius: 0.13, tessellation: 18, capSubdivisions: 8,
+  }, scene);
+  upperArmL.parent = shoulderJointL;
+  upperArmL.position.set(0, -0.275, 0);
+  upperArmL.material = materials.arms;
+
+  const elbowJointL = new TransformNode(`joint-elbow-l-${id}`, scene);
+  elbowJointL.parent = shoulderJointL;
+  elbowJointL.position.set(0, -0.55, 0);
+
+  // Joint bridge sphere — fills the gap exposed between upper/lower arm
+  // capsule hemispheres when the elbow rotates. Slightly larger than the
+  // upper-arm radius (0.13) so it never disappears inside either capsule.
+  const elbowBridgeL = MeshBuilder.CreateSphere(`body-elbow-bridge-l-${id}`, { diameter: 0.16, segments: 12 }, scene);
+  elbowBridgeL.parent = elbowJointL;
+  elbowBridgeL.position.set(0, 0, 0);
+  elbowBridgeL.material = materials.arms;
+
+  const lowerArmL = MeshBuilder.CreateCapsule(`body-lower-arm-l-${id}`, {
+    height: 0.5, radius: 0.12, tessellation: 18, capSubdivisions: 8,
+  }, scene);
+  lowerArmL.parent = elbowJointL;
+  lowerArmL.position.set(0, -0.25, 0);
+  lowerArmL.material = materials.arms;
 
   const handMeshL = MeshBuilder.CreateSphere(`body-hand-l-${id}`, { diameter: 0.2, segments: 14 }, scene);
-  handMeshL.parent = root;
-  handMeshL.position.set(-0.53, 0.96, 0);
+  handMeshL.parent = elbowJointL;
+  handMeshL.position.set(0, -0.55, 0);
   handMeshL.material = materials.arms;
 
+  // ─── Arm R — mirror of L ────────────────────────────────────────────────
+  const shoulderJointR = new TransformNode(`joint-shoulder-r-${id}`, scene);
+  shoulderJointR.parent = root;
+  shoulderJointR.position.set(0.53, 1.95, 0);
+
+  const upperArmR = MeshBuilder.CreateCapsule(`body-upper-arm-r-${id}`, {
+    height: 0.55, radius: 0.13, tessellation: 18, capSubdivisions: 8,
+  }, scene);
+  upperArmR.parent = shoulderJointR;
+  upperArmR.position.set(0, -0.275, 0);
+  upperArmR.material = materials.arms;
+
+  const elbowJointR = new TransformNode(`joint-elbow-r-${id}`, scene);
+  elbowJointR.parent = shoulderJointR;
+  elbowJointR.position.set(0, -0.55, 0);
+
+  const elbowBridgeR = MeshBuilder.CreateSphere(`body-elbow-bridge-r-${id}`, { diameter: 0.16, segments: 12 }, scene);
+  elbowBridgeR.parent = elbowJointR;
+  elbowBridgeR.position.set(0, 0, 0);
+  elbowBridgeR.material = materials.arms;
+
+  const lowerArmR = MeshBuilder.CreateCapsule(`body-lower-arm-r-${id}`, {
+    height: 0.5, radius: 0.12, tessellation: 18, capSubdivisions: 8,
+  }, scene);
+  lowerArmR.parent = elbowJointR;
+  lowerArmR.position.set(0, -0.25, 0);
+  lowerArmR.material = materials.arms;
+
   const handMeshR = MeshBuilder.CreateSphere(`body-hand-r-${id}`, { diameter: 0.2, segments: 14 }, scene);
-  handMeshR.parent = root;
-  handMeshR.position.set(0.53, 0.96, 0);
+  handMeshR.parent = elbowJointR;
+  handMeshR.position.set(0, -0.55, 0);
   handMeshR.material = materials.arms;
 
-  const legL = MeshBuilder.CreateCapsule(`body-leg-l-${id}`, { height: 1.0, radius: 0.18, tessellation: 18, capSubdivisions: 8 }, scene);
-  legL.parent = root;
-  legL.position.set(-0.22, 0.6, 0);
-  legL.material = materials.legs;
+  // ─── Leg L — jointed for walking animation ──────────────────────────────
+  const hipJointL = new TransformNode(`joint-hip-l-${id}`, scene);
+  hipJointL.parent = root;
+  hipJointL.position.set(-0.22, 1.1, 0);
 
-  const legR = MeshBuilder.CreateCapsule(`body-leg-r-${id}`, { height: 1.0, radius: 0.18, tessellation: 18, capSubdivisions: 8 }, scene);
-  legR.parent = root;
-  legR.position.set(0.22, 0.6, 0);
-  legR.material = materials.legs;
+  const thighL = MeshBuilder.CreateCapsule(`body-thigh-l-${id}`, {
+    height: 0.55, radius: 0.18, tessellation: 18, capSubdivisions: 8,
+  }, scene);
+  thighL.parent = hipJointL;
+  thighL.position.set(0, -0.275, 0);
+  thighL.material = materials.legs;
 
-  const footL = MeshBuilder.CreateSphere(`body-foot-l-${id}`, { diameter: 0.46, segments: 20, slice: 0.5 }, scene);
-  footL.parent = root;
-  footL.position.set(-0.22, 0, 0.1);
-  footL.scaling.set(0.82, 0.7, 1.7);
+  const kneeJointL = new TransformNode(`joint-knee-l-${id}`, scene);
+  kneeJointL.parent = hipJointL;
+  kneeJointL.position.set(0, -0.55, 0);
+
+  // Knee bridge — same role as the elbow bridge but at the knee. Slightly
+  // larger than the thigh radius (0.18) so it spans the seam between thigh
+  // and shin even at full knee bend.
+  const kneeBridgeL = MeshBuilder.CreateSphere(`body-knee-bridge-l-${id}`, { diameter: 0.22, segments: 12 }, scene);
+  kneeBridgeL.parent = kneeJointL;
+  kneeBridgeL.position.set(0, 0, 0);
+  kneeBridgeL.material = materials.legs;
+
+  const shinL = MeshBuilder.CreateCapsule(`body-shin-l-${id}`, {
+    height: 0.5, radius: 0.17, tessellation: 18, capSubdivisions: 8,
+  }, scene);
+  shinL.parent = kneeJointL;
+  shinL.position.set(0, -0.25, 0);
+  shinL.material = materials.legs;
+
+  // Ankle joint — sits at the bottom of the shin. The foot is parented
+  // here (not directly to the knee) so the walk-anim update can
+  // counter-rotate the foot against the knee bend, keeping the foot
+  // aligned with the thigh's direction instead of flexing like an
+  // articulated ankle when the knee folds.
+  const ankleJointL = new TransformNode(`joint-ankle-l-${id}`, scene);
+  ankleJointL.parent = kneeJointL;
+  ankleJointL.position.set(0, -0.55, 0);
+
+  // Foot — shifted forward (z=0.07 → 0.12) and Z scale tightened
+  // (1.45 → 1.2) so the heel sits closer to the ankle instead of
+  // sticking out far behind it. Toe length is roughly preserved.
+  const footL = MeshBuilder.CreateSphere(`body-foot-l-${id}`, { diameter: 0.34, segments: 20, slice: 0.5 }, scene);
+  footL.parent = ankleJointL;
+  footL.position.set(0, 0, 0.12);
+  footL.scaling.set(0.85, 0.7, 1.2);
   footL.material = materials.feet;
 
-  const footR = MeshBuilder.CreateSphere(`body-foot-r-${id}`, { diameter: 0.46, segments: 20, slice: 0.5 }, scene);
-  footR.parent = root;
-  footR.position.set(0.22, 0, 0.1);
-  footR.scaling.set(0.82, 0.7, 1.7);
+  // ─── Leg R — mirror of L ────────────────────────────────────────────────
+  const hipJointR = new TransformNode(`joint-hip-r-${id}`, scene);
+  hipJointR.parent = root;
+  hipJointR.position.set(0.22, 1.1, 0);
+
+  const thighR = MeshBuilder.CreateCapsule(`body-thigh-r-${id}`, {
+    height: 0.55, radius: 0.18, tessellation: 18, capSubdivisions: 8,
+  }, scene);
+  thighR.parent = hipJointR;
+  thighR.position.set(0, -0.275, 0);
+  thighR.material = materials.legs;
+
+  const kneeJointR = new TransformNode(`joint-knee-r-${id}`, scene);
+  kneeJointR.parent = hipJointR;
+  kneeJointR.position.set(0, -0.55, 0);
+
+  const kneeBridgeR = MeshBuilder.CreateSphere(`body-knee-bridge-r-${id}`, { diameter: 0.22, segments: 12 }, scene);
+  kneeBridgeR.parent = kneeJointR;
+  kneeBridgeR.position.set(0, 0, 0);
+  kneeBridgeR.material = materials.legs;
+
+  const shinR = MeshBuilder.CreateCapsule(`body-shin-r-${id}`, {
+    height: 0.5, radius: 0.17, tessellation: 18, capSubdivisions: 8,
+  }, scene);
+  shinR.parent = kneeJointR;
+  shinR.position.set(0, -0.25, 0);
+  shinR.material = materials.legs;
+
+  const ankleJointR = new TransformNode(`joint-ankle-r-${id}`, scene);
+  ankleJointR.parent = kneeJointR;
+  ankleJointR.position.set(0, -0.55, 0);
+
+  const footR = MeshBuilder.CreateSphere(`body-foot-r-${id}`, { diameter: 0.34, segments: 20, slice: 0.5 }, scene);
+  footR.parent = ankleJointR;
+  footR.position.set(0, 0, 0.12);
+  footR.scaling.set(0.85, 0.7, 1.2);
   footR.material = materials.feet;
 
   // Face features
@@ -204,13 +326,16 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
   backCenter.parent = root;
   backCenter.position.set(0, 1.55, -0.32);
 
+  // Hand sockets attach to the ELBOW joints so any held accessory swings
+  // with the arm during the walk cycle. Local position (0, -0.55, 0)
+  // matches the hand mesh — held items end up centred on the hand.
   const handLSocket = new TransformNode(`socket-hand-l-${id}`, scene);
-  handLSocket.parent = root;
-  handLSocket.position.set(-0.53, 0.96, 0);
+  handLSocket.parent = elbowJointL;
+  handLSocket.position.set(0, -0.55, 0);
 
   const handRSocket = new TransformNode(`socket-hand-r-${id}`, scene);
-  handRSocket.parent = root;
-  handRSocket.position.set(0.53, 0.96, 0);
+  handRSocket.parent = elbowJointR;
+  handRSocket.position.set(0, -0.55, 0);
 
   const sockets: Sockets = {
     head_top: headTop,
@@ -253,7 +378,67 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
     material.diffuseTexture = getPatternTexture(scene, patternKey(regionKey, pattern), uniformDesign(pattern));
   }
 
+  // Map a garment mesh's name to the joint it should rig to. Garment
+  // builders name their meshes with side-suffixed parts:
+  //   sleeves (single): ${label}-sleeve-{l|r}, ${label}-shoulder-{l|r}, ${label}-cuff-{l|r}
+  //   sleeves (split):  upper=${label}-sleeve-{l|r}, lower=${label}-sleeve-lower-{l|r}
+  //   pants (single):   ${label}-leg-{l|r}-{front|back}
+  //   pants (split):    upper=${label}-leg-{l|r}-{front|back},
+  //                     lower=${label}-leg-lower-{l|r}-{front|back}
+  //   shoes:            ${label}-{sole|upper|lace}-{l|r}
+  // Torso shell, collar, hem, waistband, hood, pocket, lapel, strings,
+  // buttons stay parented to root.
+  function jointForGarmentMesh(name: string): TransformNode | null {
+    // Lower-sleeve (forearm) → elbow. Must be checked BEFORE the shoulder
+    // regex so `-sleeve-lower-l` isn't matched as `-sleeve-l` first.
+    // Actually `-sleeve-l\b` requires a word boundary AFTER the `l`,
+    // which `-sleeve-lower-l` lacks (next char `o` is a word char), but
+    // explicit ordering makes the intent clear.
+    if (/-sleeve-lower-l\b/.test(name)) return elbowJointL;
+    if (/-sleeve-lower-r\b/.test(name)) return elbowJointR;
+    // Elbow + knee patches — small spheres at the joint pivot in the
+    // garment's material, masking the V-gap that opens between the
+    // upper/lower cylinders when the limb bends. Stay at the pivot
+    // (local 0,0,0 on the joint) so they don't move as the joint
+    // rotates — the surrounding cylinders rotate around them.
+    if (/-elbow-l\b/.test(name)) return elbowJointL;
+    if (/-elbow-r\b/.test(name)) return elbowJointR;
+    if (/-knee-l\b/.test(name)) return kneeJointL;
+    if (/-knee-r\b/.test(name)) return kneeJointR;
+    // Upper sleeve, shoulder dome, cuff → shoulder joint
+    if (/-sleeve-l\b|-shoulder-l\b|-cuff-l\b/.test(name)) return shoulderJointL;
+    if (/-sleeve-r\b|-shoulder-r\b|-cuff-r\b/.test(name)) return shoulderJointR;
+    // Lower pant leg (shin) → knee
+    if (/-leg-lower-l-(back|front)\b/.test(name)) return kneeJointL;
+    if (/-leg-lower-r-(back|front)\b/.test(name)) return kneeJointR;
+    // Upper pant leg (thigh) → hip
+    if (/-leg-l-(back|front)\b/.test(name)) return hipJointL;
+    if (/-leg-r-(back|front)\b/.test(name)) return hipJointR;
+    // Shoes → ankle (counter-rotated against knee bend → no foot kink)
+    if (/-sole-l\b|-upper-l\b|-lace-l\b/.test(name)) return ankleJointL;
+    if (/-sole-r\b|-upper-r\b|-lace-r\b/.test(name)) return ankleJointR;
+    return null;
+  }
+
   function applyOutfit(textureItemIds: readonly string[], accessoryItemIds: readonly string[]): void {
+    // Reset all joint rotations to the rest pose BEFORE building +
+    // re-parenting garments. setParent() preserves WORLD transform, so if
+    // the avatar is mid-walk-cycle when applyOutfit fires (joints rotated
+    // 30°+), the freshly-built mesh's local position/rotation gets baked
+    // RELATIVE to that rotated joint frame. Next frame the joints return
+    // to other angles and the cloth ends up visibly skewed/detached from
+    // the body. Reset → re-rig → next update() restores the animation.
+    shoulderJointL.rotation.set(0, 0, 0);
+    shoulderJointR.rotation.set(0, 0, 0);
+    elbowJointL.rotation.set(0, 0, 0);
+    elbowJointR.rotation.set(0, 0, 0);
+    hipJointL.rotation.set(0, 0, 0);
+    hipJointR.rotation.set(0, 0, 0);
+    kneeJointL.rotation.set(0, 0, 0);
+    kneeJointR.rotation.set(0, 0, 0);
+    ankleJointL.rotation.set(0, 0, 0);
+    ankleJointR.rotation.set(0, 0, 0);
+
     const regionPattern: Record<BodyRegion, Pattern> = {
       head: SKIN_DEFAULT,
       torso: TORSO_DEFAULT,
@@ -290,7 +475,15 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
     for (const item of garmentItems) {
       if (!item.build) continue;
       const built = item.build(scene, root);
-      for (const m of built) attachedGarmentMeshes.push(m);
+      for (const m of built) {
+        attachedGarmentMeshes.push(m);
+        // Rig: meshes named after limbs follow the corresponding joint. The
+        // builders construct everything in world space parented to root;
+        // setParent() re-parents while preserving world transform so the
+        // mesh visually stays put — then joint rotation cascades into it.
+        const joint = jointForGarmentMesh(m.name);
+        if (joint) m.setParent(joint);
+      }
     }
 
     clearAccessories();
@@ -304,8 +497,27 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
     }
   }
 
+  // Walking animation state. game.ts calls setPosition every frame from the
+  // server snapshot (or local prediction for self). We treat the smoothed
+  // difference between consecutive positions as the avatar's velocity.
+  // baseY is the ground-plane Y the game wants; root.y = baseY + bob each
+  // frame so bob doesn't fight position writes. swayZ rotates around the
+  // forward axis for a gentle side-to-side gait.
+  let baseX = 0, baseY = 0, baseZ = 0;
+  let prevX = 0, prevZ = 0;
+  let prevInitialised = false; // guards a huge first-frame velocity spike
+  let smoothedSpeed = 0;       // EMA of instantaneous |Δpos|/dt
+  let walkPhase = 0;
+  let bob = 0;
+  let swayZ = 0;
+
   function setPosition(x: number, y: number, z: number): void {
-    root.position.set(x, y, z);
+    baseX = x; baseY = y; baseZ = z;
+    if (!prevInitialised) {
+      prevX = x; prevZ = z;
+      prevInitialised = true;
+    }
+    root.position.set(x, y + bob, z);
   }
 
   function setRotationY(rad: number): void {
@@ -315,6 +527,115 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
   function update({ config, deltaSeconds }: AvatarUpdateContext): void {
     const speed = config?.idleRotationSpeed ?? 0;
     if (speed > 0) root.rotation.y += deltaSeconds * speed;
+
+    // Instantaneous speed from position delta. With high-refresh-rate
+    // monitors dt is tiny (~16ms or less) and floating-point noise makes
+    // raw |Δpos|/dt twitchy — feed it through a low-pass EMA so the bob
+    // amplitude tracks the underlying gait, not jitter.
+    const dt = Math.max(deltaSeconds, 1 / 240);
+    const dx = baseX - prevX;
+    const dz = baseZ - prevZ;
+    prevX = baseX;
+    prevZ = baseZ;
+    const instSpeed = Math.hypot(dx, dz) / dt;
+    // Per-frame alpha so the response time is consistent across frame
+    // rates: time constant ≈ 0.15s.
+    const alpha = 1 - Math.exp(-dt / 0.15);
+    smoothedSpeed = smoothedSpeed + (instSpeed - smoothedSpeed) * alpha;
+
+    if (smoothedSpeed > 0.5) {
+      const intensity = Math.min(smoothedSpeed / 6, 1);
+      walkPhase += dt * (5 + intensity * 3);
+
+      // Reference signal: sin(walkPhase) represents the L-leg position
+      // through the gait cycle. Phase=π/2 → L leg fully forward (heel
+      // strike). Phase=3π/2 → L leg fully back (toe off). R leg lags by π.
+      const sL = Math.sin(walkPhase);
+      const sR = Math.sin(walkPhase + Math.PI);
+
+      // Body bob — torso rises and falls TWICE per gait cycle, peaking
+      // mid-stance when both legs straighten (foot directly under pelvis).
+      // Math: |sin| has period π, so abs(sin(walkPhase)) gives 2 peaks per
+      // 2π → matches the two foot plants.
+      bob = Math.abs(Math.sin(walkPhase)) * 0.04 * intensity;
+      // Side-to-side weight shift — one full cycle per gait. Subtle.
+      swayZ = Math.cos(walkPhase) * 0.025 * intensity;
+
+      // HIP swing — leg rotates forward/back around the hip pivot.
+      // Positive rotation.x on the hip pushes the foot FORWARD.
+      const hipSwing = 0.55 * intensity;
+      hipJointL.rotation.x = sL * hipSwing;
+      hipJointR.rotation.x = sR * hipSwing;
+
+      // KNEE bend — Babylon left-handed: POSITIVE rotation.x at the knee
+      // makes the shin fold UP-AND-BACK relative to the thigh (natural
+      // knee bend, foot tucks toward the buttocks).
+      //
+      // Phase: the L leg's swing phase runs walkPhase ∈ (π/2, 3π/2) —
+      // from toe-off (hipL maxed back at +sin = +1) through neutral hip
+      // at π, to heel-strike (hipL maxed forward at -sin = -1). The knee
+      // should be BENT throughout swing (so the foot clears the ground)
+      // and STRAIGHT during stance. -cos(walkPhase) gives that exactly:
+      //   walkPhase=π/2  → -cos = 0      (toe-off, knee straight)
+      //   walkPhase=π    → -cos = 1      (mid-swing, peak bend)
+      //   walkPhase=3π/2 → -cos = 0      (heel-strike, knee straight)
+      //   walkPhase=0    → -cos = -1 → 0 (stance, no bend)
+      // The previous formula peaked near heel-strike instead — wrong
+      // phase — so the foot lifted just as it should have been touching
+      // down, and the lower-pant cylinder rotated dramatically at the
+      // exact moment it should have been resting straight.
+      const kneeAmp = 1.2 * intensity;
+      const bendL = Math.max(0, -Math.cos(walkPhase)) * kneeAmp;
+      const bendR = Math.max(0,  Math.cos(walkPhase)) * kneeAmp;
+      kneeJointL.rotation.x = bendL;
+      kneeJointR.rotation.x = bendR;
+
+      // ARM swing — opposite phase to legs (R arm forward when L leg
+      // forward). NEGATIVE shoulder.rotation.x pulls arm FORWARD in
+      // Babylon's left-handed convention (hand swings toward +Z).
+      const armSwing = 0.5 * intensity;
+      shoulderJointL.rotation.x = -sL * armSwing;
+      shoulderJointR.rotation.x = -sR * armSwing;
+
+      // ELBOW bend — NEGATIVE rotation.x folds the forearm UP-AND-FORWARD
+      // (hand reaches toward chest). Positive would bend the elbow
+      // backwards like a T-rex. Bend is biggest when the arm is on its
+      // BACK stroke (natural arm carry).
+      const elbowBase = 0.2 * intensity;
+      const elbowVar = 0.35 * intensity;
+      elbowJointL.rotation.x = -(elbowBase + Math.max(0, sL) * elbowVar);
+      elbowJointR.rotation.x = -(elbowBase + Math.max(0, sR) * elbowVar);
+    } else {
+      // Idle — exponentially dampen everything toward zero.
+      const damp = Math.exp(-dt / 0.18);
+      bob *= damp;
+      swayZ *= damp;
+      shoulderJointL.rotation.x *= damp;
+      shoulderJointR.rotation.x *= damp;
+      hipJointL.rotation.x *= damp;
+      hipJointR.rotation.x *= damp;
+      kneeJointL.rotation.x *= damp;
+      kneeJointR.rotation.x *= damp;
+      elbowJointL.rotation.x *= damp;
+      elbowJointR.rotation.x *= damp;
+      if (Math.abs(bob) < 0.001) bob = 0;
+      if (Math.abs(swayZ) < 0.001) swayZ = 0;
+    }
+    // Ankle counter — PARTIAL (~half) so the foot tilts naturally with
+    // the leg without snapping flat or dragging the toes through the
+    // ground. Full counter (−1 × each) locked the foot world-horizontal,
+    // which read as unnaturally stiff during big hip swings. No counter
+    // (rotate fully with shin) made the foot kink at the ankle during
+    // knee bend. Half-and-half gives a believable ankle that points the
+    // toes down slightly during back-swing and the heel up slightly at
+    // heel-strike — exactly how a stylized walk reads.
+    const ANKLE_HIP_K = 0.5;
+    const ANKLE_KNEE_K = 0.5;
+    ankleJointL.rotation.x = -(hipJointL.rotation.x * ANKLE_HIP_K + kneeJointL.rotation.x * ANKLE_KNEE_K);
+    ankleJointR.rotation.x = -(hipJointR.rotation.x * ANKLE_HIP_K + kneeJointR.rotation.x * ANKLE_KNEE_K);
+
+    root.position.set(baseX, baseY + bob, baseZ);
+    root.rotation.z = swayZ;
   }
 
   function dispose(): void {
@@ -325,14 +646,12 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
     torso.dispose();
     shoulderL.dispose();
     shoulderR.dispose();
-    armL.dispose();
-    armR.dispose();
-    legL.dispose();
-    legR.dispose();
-    footL.dispose();
-    footR.dispose();
-    handMeshL.dispose();
-    handMeshR.dispose();
+    // Joints are TransformNodes — disposing them recursively disposes the
+    // upperArm/lowerArm/hand/thigh/shin/foot meshes parented under them.
+    shoulderJointL.dispose();
+    shoulderJointR.dispose();
+    hipJointL.dispose();
+    hipJointR.dispose();
     eyeL.dispose();
     eyeR.dispose();
     eyeHighlightL.dispose();

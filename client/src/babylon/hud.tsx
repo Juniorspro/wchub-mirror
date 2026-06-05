@@ -30,6 +30,7 @@ import {
   type SavedLook,
 } from './store';
 import {
+  JERSEY_PRESETS,
   WARDROBE_ACCESSORY_ITEMS,
   WARDROBE_TEXTURE_ITEMS,
   type AccessoryItemDef,
@@ -269,6 +270,12 @@ function CustomizePanel({ slot, savedLooks }: { slot: CustomSlot; savedLooks: re
   const [colorA, setColorA] = useState<string>('#f5f5f5');
   const [colorB, setColorB] = useState<string>('#1a1a1d');
 
+  // Personalization (shirt slot only) — back-name + back-number text. Both
+  // baked into design.overlay so they round-trip through the look: id and
+  // remote players see them too.
+  const [numberText, setNumberText] = useState<string>('');
+  const [nameText, setNameText] = useState<string>('');
+
   // Re-draw the preview canvas whenever the design changes.
   useEffect(() => {
     const c = canvasRef.current;
@@ -281,6 +288,7 @@ function CustomizePanel({ slot, savedLooks }: { slot: CustomSlot; savedLooks: re
   // For shoes, hide the per-panel diagram and apply the active pattern to
   // ALL four panels — the shoe sphere UV doesn't split into quadrants.
   const isShoes = slot === 'shoes';
+  const isShirt = slot === 'shirt';
   const labels: Record<PanelKey, string> = slot === 'pants' ? PANTS_PANEL_LABEL : PANEL_LABEL;
 
   const applyKindColors = (k: Pattern['kind'], a: string, b: string) => {
@@ -302,10 +310,88 @@ function CustomizePanel({ slot, savedLooks }: { slot: CustomSlot; savedLooks: re
 
   const onEquip = () => equipCustomDesign(slot, design);
   const onSave = () => { saveLook(name || `${slot}-${Date.now() % 10000}`, slot, design); setName(''); };
-  const onLoad = (l: SavedLook) => { setDesign(l.design); };
+  const onLoad = (l: SavedLook) => {
+    setDesign(l.design);
+    setNumberText(l.design.overlay?.numberText ?? '');
+    setNameText(l.design.overlay?.nameText ?? '');
+  };
+
+  // Load a World Cup jersey preset as the starting point. After this the
+  // player typically just tweaks number + name, hits Equip.
+  const onLoadPreset = (preset: { id: string; design: GarmentDesign }) => {
+    setDesign(preset.design);
+    setNumberText(preset.design.overlay?.numberText ?? '');
+    setNameText(preset.design.overlay?.nameText ?? '');
+  };
+
+  // Number input — digits only, max 3 chars. Updates design.overlay.numberText
+  // and supplies default colors if the design has no overlay yet.
+  const onNumberChange = (raw: string) => {
+    const cleaned = raw.replace(/\D/g, '').slice(0, 3);
+    setNumberText(cleaned);
+    setDesign((prev) => ({
+      ...prev,
+      overlay: {
+        ...prev.overlay,
+        numberText: cleaned || undefined,
+        numberColor: prev.overlay?.numberColor ?? '#1a1a1d',
+      },
+    }));
+  };
+
+  // Name input — letters + spaces, uppercased on render, max 14 chars.
+  const onNameChange = (raw: string) => {
+    const cleaned = raw.replace(/[^A-Za-z .-]/g, '').slice(0, 14);
+    setNameText(cleaned);
+    setDesign((prev) => ({
+      ...prev,
+      overlay: {
+        ...prev.overlay,
+        nameText: cleaned || undefined,
+        nameColor: prev.overlay?.nameColor ?? '#1a1a1d',
+      },
+    }));
+  };
 
   return (
     <div style={customPanelStyle}>
+      {isShirt ? (
+        <>
+          <div style={presetRowStyle}>
+            <span style={presetLabelStyle}>Preset</span>
+            <div style={presetChipsStyle}>
+              {JERSEY_PRESETS.map((p) => (
+                <button
+                  key={p.id} type="button"
+                  onClick={() => onLoadPreset(p)}
+                  style={presetChipStyle}
+                  title={p.label}
+                >{p.label}</button>
+              ))}
+            </div>
+          </div>
+          <div style={personalizeRowStyle}>
+            <label style={personalizeLabelStyle}>
+              <span style={fieldLabelStyle}>Number</span>
+              <input
+                type="text" inputMode="numeric"
+                value={numberText} onChange={(e) => onNumberChange(e.target.value)}
+                placeholder="10" maxLength={3}
+                style={personalizeNumberInputStyle}
+              />
+            </label>
+            <label style={personalizeLabelStyle}>
+              <span style={fieldLabelStyle}>Name</span>
+              <input
+                type="text"
+                value={nameText} onChange={(e) => onNameChange(e.target.value)}
+                placeholder="YOUR NAME" maxLength={14}
+                style={personalizeNameInputStyle}
+              />
+            </label>
+          </div>
+        </>
+      ) : null}
       <div style={customPreviewRowStyle}>
         <canvas ref={canvasRef} width={160} height={160} style={previewCanvasStyle} />
         {!isShoes ? (
@@ -617,6 +703,47 @@ const chatSendStyle: CSSProperties = {
 };
 
 // ─── Customize panel styles ─────────────────────────────────────────────────
+const presetRowStyle: CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 4,
+  paddingBottom: 6,
+  borderBottom: '1px dashed rgba(0,0,0,0.08)',
+};
+const presetLabelStyle: CSSProperties = {
+  fontSize: '0.7rem', opacity: 0.6,
+};
+const presetChipsStyle: CSSProperties = {
+  display: 'flex', flexWrap: 'wrap', gap: 4,
+};
+const presetChipStyle: CSSProperties = {
+  padding: '0.2rem 0.5rem', fontSize: '0.68rem',
+  borderRadius: 999,
+  border: '1px solid rgba(0,0,0,0.18)',
+  background: '#fafafa', color: '#1a1a1d', cursor: 'pointer',
+};
+
+const personalizeRowStyle: CSSProperties = {
+  display: 'flex', gap: 8,
+  paddingBottom: 6,
+  borderBottom: '1px dashed rgba(0,0,0,0.08)',
+};
+const personalizeLabelStyle: CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 2,
+};
+const fieldLabelStyle: CSSProperties = {
+  fontSize: '0.66rem', opacity: 0.65, textTransform: 'uppercase', letterSpacing: '0.04em',
+};
+const personalizeNumberInputStyle: CSSProperties = {
+  width: 64, padding: '0.3rem 0.4rem',
+  borderRadius: 6, border: '1px solid rgba(0,0,0,0.18)',
+  background: '#fff', color: '#1a1a1d', fontSize: '0.9rem', fontWeight: 700, textAlign: 'center',
+};
+const personalizeNameInputStyle: CSSProperties = {
+  flex: 1, padding: '0.3rem 0.5rem',
+  borderRadius: 6, border: '1px solid rgba(0,0,0,0.18)',
+  background: '#fff', color: '#1a1a1d', fontSize: '0.82rem',
+  textTransform: 'uppercase', letterSpacing: '0.03em',
+};
+
 const slotPickerRowStyle: CSSProperties = {
   display: 'flex', gap: 4, paddingBottom: 6,
   borderBottom: '1px solid rgba(0,0,0,0.06)',

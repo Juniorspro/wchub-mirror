@@ -52,11 +52,11 @@ function pickColor(): string {
   return COLOR_PALETTE[Math.floor(Math.random() * COLOR_PALETTE.length)];
 }
 
-/** Drop a fresh player somewhere inside the lounge with a small spawn jitter. */
+/** Drop a fresh player at the lounge plaza with a small spawn jitter. */
 export function spawnAt(p: Player): void {
-  const { width, height } = gameConfig.world;
-  p.x = width / 2 + (Math.random() - 0.5) * 6;
-  p.y = height / 2 + (Math.random() - 0.5) * 6;
+  const { spawn } = gameConfig;
+  p.x = spawn.x + (Math.random() - 0.5) * 6;
+  p.y = spawn.y + (Math.random() - 0.5) * 6;
   p.aim = Math.random() * Math.PI * 2;
   p.color = pickColor();
   p.alive = true;

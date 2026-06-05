@@ -89,8 +89,31 @@ export default function App() {
   }, [configRef, input, screenRef]);
 
   return (
-    <div ref={containerRef} {...input.handlers} className="game-shell">
+    <div ref={containerRef} className="game-shell">
       <canvas ref={canvasRef} className="game-canvas" aria-label="Dressup Lounge viewport" />
+      {/* Mobile virtual-joystick zone — input.handlers (touch/pointer) used
+          to cover the entire container, which swallowed mouse-drag on the
+          canvas and prevented ArcRotateCamera from orbiting. Confining the
+          handlers to a bottom-left square lets the rest of the canvas
+          receive pointer-drag events for free camera look-around, while
+          mobile players still get a touch joystick in the corner.
+          On desktop the keyboard listener (auto-attached by useInput at
+          document level) is unaffected — WASD continues to work. */}
+      <div
+        {...input.handlers}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: 0,
+          bottom: 0,
+          width: 'min(240px, 38vw)',
+          height: 'min(240px, 38vw)',
+          touchAction: 'none',
+          pointerEvents: 'auto',
+          // Invisible — purely an input target.
+          background: 'transparent',
+        }}
+      />
       <Hud phaseRef={phaseRef} net={netState ?? undefined} />
     </div>
   );

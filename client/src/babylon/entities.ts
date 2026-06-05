@@ -11,7 +11,7 @@
 // the fixed STALL_LAYOUT below.
 // ══════════════════════════════════════════════
 
-import { Color3, MeshBuilder, type Mesh, type Scene } from '@babylonjs/core';
+import { Color3, MeshBuilder, TransformNode, type Mesh, type Scene } from '@babylonjs/core';
 import { createStandardMaterial } from './helpers';
 
 // A stall sells either a TextureSlot ('bodypaint' | 'shirt' | 'pants' | 'shoes')
@@ -42,34 +42,43 @@ export interface StallDef {
   color: string;
 }
 
-// Stalls arranged in a ring around the plaza. Distance from plaza center
-// is 14 units (so the central plaza stays visible and walkable); angles
-// split evenly. Each stall faces the plaza center.
-const RING_RADIUS = 14;
+// Stall positions — hand-placed at organic / "random" spots around the
+// park (not on a perfect ring) so the lounge reads as a festive plaza
+// outside the stadium rather than a market in a circle. Each stall has
+// a `facing` rotation aimed roughly toward the plaza center so the
+// counter approach is visible from the main walkways.
+//
+// All coords are inside the 48×48 playable area centered at (24, 24).
+// Facing rotations are world-Y radians; 0 = facing +Z (north / stadium).
 const PLAZA_X = 24;
 const PLAZA_Z = 24;
 
-function ringPos(angleRad: number): { x: number; z: number; facing: number } {
-  return {
-    x: PLAZA_X + Math.cos(angleRad) * RING_RADIUS,
-    z: PLAZA_Z + Math.sin(angleRad) * RING_RADIUS,
-    // Face inward toward the plaza
-    facing: angleRad + Math.PI,
-  };
+// Helper — facing angle that points (sx, sz) toward (PLAZA_X, PLAZA_Z).
+// atan2(dx, dz) gives an angle measured from +Z (which is what the
+// avatar / stall counter's local +Z faces) toward +X.
+function facePlaza(sx: number, sz: number): number {
+  return Math.atan2(PLAZA_X - sx, PLAZA_Z - sz);
 }
 
 export const STALL_LAYOUT: StallDef[] = [
-  { id: 'stall-shirts',    label: "Sasha's Shirts",     category: 'shirt',     ...ringPos(0),                  color: '#c14444' },
-  { id: 'stall-pants',     label: 'Pants Pavilion',     category: 'pants',     ...ringPos(Math.PI / 3),        color: '#3a6ea5' },
-  { id: 'stall-shoes',     label: 'Sneaker Stand',      category: 'shoes',     ...ringPos((2 * Math.PI) / 3),  color: '#e8c84a' },
-  { id: 'stall-hats',      label: 'The Hattery',        category: 'hat',       ...ringPos(Math.PI),            color: '#9bd96b' },
-  { id: 'stall-accessories', label: 'Glasses + Bags',   category: 'glasses',   ...ringPos((4 * Math.PI) / 3),  color: '#d96bc4' },
-  { id: 'stall-scarves',   label: 'Cozy Scarves',       category: 'scarf',     ...ringPos((5 * Math.PI) / 3),  color: '#e89c4a' },
-  // Design Bench — sits closer to the plaza center (smaller radius) so it's
-  // visually distinct from the catalog stalls and on the natural path from
-  // the spawn point. Per-panel garment customization lives here.
-  { id: 'stall-customize', label: 'The Design Bench',   category: 'customize', x: PLAZA_X, z: PLAZA_Z - 5,     facing: 0, color: '#a85dd9' },
+  { id: 'stall-shirts',     label: "Sasha's Shirts",   category: 'shirt',     x: 12, z: 16, facing: facePlaza(12, 16), color: '#c14444' },
+  { id: 'stall-pants',      label: 'Pants Pavilion',   category: 'pants',     x: 35, z: 18, facing: facePlaza(35, 18), color: '#3a6ea5' },
+  // Shoes stall — relocated outside the original 48×48 park, next to
+  // the soccer practice field. Wardrobe-slot reason for players to
+  // venture beyond the park.
+  { id: 'stall-shoes',      label: 'Sneaker Stand',    category: 'shoes',     x: 84, z: 20, facing: facePlaza(84, 20), color: '#e8c84a' },
+  { id: 'stall-hats',       label: 'The Hattery',      category: 'hat',       x: 28, z: 39, facing: facePlaza(28, 39), color: '#9bd96b' },
+  { id: 'stall-accessories',label: 'Glasses + Bags',   category: 'glasses',   x: 14, z: 34, facing: facePlaza(14, 34), color: '#d96bc4' },
+  { id: 'stall-scarves',    label: 'Cozy Scarves',     category: 'scarf',     x:  8, z: 28, facing: facePlaza(8, 28),  color: '#e89c4a' },
+  // Design Bench — placed just south of the plaza, on the spine path so
+  // players see it immediately after spawning at the plaza center.
+  { id: 'stall-customize',  label: 'The Design Bench', category: 'customize', x: PLAZA_X, z: PLAZA_Z - 10, facing: 0, color: '#a85dd9' },
 ];
+
+// Approximate inscribed circle for distance comparisons (kept so callers
+// that imported RING_RADIUS don't break). The new layout isn't a ring,
+// but most stalls sit ~13 units from the plaza.
+const RING_RADIUS = 13;
 
 /** How close a player needs to be (in world units) to "browse" a stall. */
 export const STALL_INTERACT_RADIUS = 2.6;
@@ -130,70 +139,149 @@ export function createSceneEntities(scene: Scene): SceneEntities {
 }
 
 function buildStall(scene: Scene, stall: StallDef, meshes: Mesh[]): void {
+  // Materials shared per-stall (one set per booth so colors don't bleed
+  // between stalls).
   const counterMat = createStandardMaterial(scene, `${stall.id}-counter-mat`, Color3.FromHexString('#d8b88a'));
-  const postMat = createStandardMaterial(scene, `${stall.id}-post-mat`, Color3.FromHexString('#8b6b3f'));
+  const counterTopMat = createStandardMaterial(scene, `${stall.id}-counter-top-mat`, Color3.FromHexString('#6e4a26'));
+  const postMat = createStandardMaterial(scene, `${stall.id}-post-mat`, Color3.FromHexString('#7a5430'));
   const awningMat = createStandardMaterial(scene, `${stall.id}-awning-mat`, Color3.FromHexString(stall.color));
-  const flagMat = createStandardMaterial(scene, `${stall.id}-flag-mat`, Color3.FromHexString(stall.color));
+  const awningTrimMat = createStandardMaterial(scene, `${stall.id}-awning-trim-mat`, Color3.FromHexString('#f3ecd9'));
+  const backWallMat = createStandardMaterial(scene, `${stall.id}-back-wall-mat`, Color3.FromHexString('#e7d6b3'));
+  const lanternMat = createStandardMaterial(scene, `${stall.id}-lantern-mat`, Color3.FromHexString('#f6d76a'));
+  lanternMat.emissiveColor = Color3.FromHexString('#5b3a00');
+  const lanternRopeMat = createStandardMaterial(scene, `${stall.id}-lantern-rope-mat`, Color3.FromHexString('#1d1a14'));
+  const bannerMat = createStandardMaterial(scene, `${stall.id}-banner-mat`, Color3.FromHexString(stall.color));
 
-  // Counter — wide, low box facing toward the plaza.
+  // ─── Stall root — holds the booth's world position + facing. Every
+  // mesh below is a child of this node and positioned in LOCAL space,
+  // so Babylon composes (parent_facing × local_pitch) correctly. The
+  // previous code set both rotations on each mesh directly, which under
+  // Babylon's YXZ Euler order applied the pitch in the already-yawed
+  // frame — fine for facing=0 (one stall) but wrong for the other six.
+  const root = new TransformNode(`${stall.id}-root`, scene);
+  root.position.set(stall.x, 0, stall.z);
+  root.rotation.y = stall.facing;
+
+  // ─── Counter — wide low box with a darker top trim ────────────────────────
   const counter = MeshBuilder.CreateBox(`${stall.id}-counter`, {
-    width: 2.2, height: 1.0, depth: 0.6,
+    width: 2.4, height: 1.0, depth: 0.7,
   }, scene);
-  counter.position.set(stall.x, 0.5, stall.z);
-  counter.rotation.y = stall.facing;
+  counter.parent = root;
+  counter.position.set(0, 0.5, 0);
   counter.material = counterMat;
   meshes.push(counter);
 
-  // Posts — four corner pillars holding the awning.
-  const postOffsetX = 1.05;
-  const postOffsetZ = 0.28;
-  const postHeight = 2.4;
-  const postPositions: Array<[number, number]> = [
-    [-postOffsetX, postOffsetZ], [postOffsetX, postOffsetZ],
-    [-postOffsetX, -postOffsetZ], [postOffsetX, -postOffsetZ],
-  ];
-  for (let i = 0; i < postPositions.length; i++) {
-    const [lx, lz] = postPositions[i];
-    const post = MeshBuilder.CreateBox(`${stall.id}-post-${i}`, {
-      width: 0.12, height: postHeight, depth: 0.12,
+  const counterTop = MeshBuilder.CreateBox(`${stall.id}-counter-top`, {
+    width: 2.6, height: 0.08, depth: 0.85,
+  }, scene);
+  counterTop.parent = root;
+  counterTop.position.set(0, 1.04, 0);
+  counterTop.material = counterTopMat;
+  meshes.push(counterTop);
+
+  // ─── Posts — four corner pillars holding the roof ─────────────────────────
+  const postHeight = 2.6;
+  const postOffsetX = 1.2;
+  const postOffsetZ = 0.4;
+  for (const [lx, lz, idx] of [
+    [-postOffsetX,  postOffsetZ, 0],
+    [ postOffsetX,  postOffsetZ, 1],
+    [-postOffsetX, -postOffsetZ, 2],
+    [ postOffsetX, -postOffsetZ, 3],
+  ] as Array<[number, number, number]>) {
+    const post = MeshBuilder.CreateBox(`${stall.id}-post-${idx}`, {
+      width: 0.14, height: postHeight, depth: 0.14,
     }, scene);
-    // Local offset rotated by facing
-    const wx = stall.x + lx * Math.cos(stall.facing) - lz * Math.sin(stall.facing);
-    const wz = stall.z + lx * Math.sin(stall.facing) + lz * Math.cos(stall.facing);
-    post.position.set(wx, postHeight / 2, wz);
+    post.parent = root;
+    post.position.set(lx, postHeight / 2, lz);
     post.material = postMat;
     meshes.push(post);
   }
 
-  // Awning — striped flat box above the counter, slightly larger.
-  const awning = MeshBuilder.CreateBox(`${stall.id}-awning`, {
-    width: 2.4, height: 0.12, depth: 0.9,
+  // ─── Back wall + banner ────────────────────────────────────────────────────
+  const backWall = MeshBuilder.CreateBox(`${stall.id}-back-wall`, {
+    width: 2.6, height: 1.6, depth: 0.08,
   }, scene);
-  awning.position.set(stall.x, postHeight, stall.z);
-  awning.rotation.y = stall.facing;
-  awning.material = awningMat;
-  meshes.push(awning);
+  backWall.parent = root;
+  backWall.position.set(0, 1.4, -0.55);
+  backWall.material = backWallMat;
+  meshes.push(backWall);
 
-  // Flag — small angled box sticking up from the awning corner.
-  const flag = MeshBuilder.CreateBox(`${stall.id}-flag`, {
-    width: 0.04, height: 0.7, depth: 0.04,
+  const banner = MeshBuilder.CreateBox(`${stall.id}-banner`, {
+    width: 2.2, height: 1.1, depth: 0.03,
   }, scene);
-  // Position flag pole at the front-right corner of the awning
-  const flagLocalX = 1.0;
-  const flagLocalZ = 0.4;
-  const fwx = stall.x + flagLocalX * Math.cos(stall.facing) - flagLocalZ * Math.sin(stall.facing);
-  const fwz = stall.z + flagLocalX * Math.sin(stall.facing) + flagLocalZ * Math.cos(stall.facing);
-  flag.position.set(fwx, postHeight + 0.35, fwz);
-  flag.material = postMat;
-  meshes.push(flag);
+  banner.parent = root;
+  banner.position.set(0, 1.5, -0.50);
+  banner.material = bannerMat;
+  meshes.push(banner);
 
-  const flagCloth = MeshBuilder.CreateBox(`${stall.id}-flag-cloth`, {
-    width: 0.3, height: 0.2, depth: 0.02,
+  // ─── Peaked awning — two slanted roof panels meeting at a ridge ───────────
+  const roofPitch = 0.5;
+  const roofWidth = 3.0;
+  const roofPlaneDepth = 1.05;
+  const roofRidgeY = postHeight + 0.55;
+  const roofPlaneCenterY = postHeight + 0.27;
+
+  const makeRoofPanel = (idx: number, sign: 1 | -1): void => {
+    const panel = MeshBuilder.CreateBox(`${stall.id}-roof-${idx}`, {
+      width: roofWidth, height: 0.08, depth: roofPlaneDepth,
+    }, scene);
+    panel.parent = root;
+    // In local space the pitch is now a clean rotation around X only;
+    // the parent's Y rotation handles the stall facing automatically.
+    panel.position.set(0, roofPlaneCenterY, sign * (roofPlaneDepth / 2 - 0.05));
+    panel.rotation.x = sign * roofPitch;
+    panel.material = awningMat;
+    meshes.push(panel);
+  };
+  makeRoofPanel(0, 1);
+  makeRoofPanel(1, -1);
+
+  const ridge = MeshBuilder.CreateBox(`${stall.id}-ridge`, {
+    width: roofWidth + 0.05, height: 0.1, depth: 0.12,
   }, scene);
-  flagCloth.position.set(fwx + 0.16, postHeight + 0.55, fwz);
-  flagCloth.rotation.y = stall.facing;
-  flagCloth.material = flagMat;
-  meshes.push(flagCloth);
+  ridge.parent = root;
+  ridge.position.set(0, roofRidgeY + 0.02, 0);
+  ridge.material = awningTrimMat;
+  meshes.push(ridge);
+
+  // ─── Hanging lanterns ────────────────────────────────────────────────────
+  for (const [lx, idx] of [[-0.85, 0], [0.85, 1]] as Array<[number, number]>) {
+    const rope = MeshBuilder.CreateCylinder(`${stall.id}-rope-${idx}`, {
+      height: 0.45, diameter: 0.025, tessellation: 6,
+    }, scene);
+    rope.parent = root;
+    rope.position.set(lx, postHeight - 0.05, postOffsetZ + 0.05);
+    rope.material = lanternRopeMat;
+    meshes.push(rope);
+
+    const lantern = MeshBuilder.CreateBox(`${stall.id}-lantern-${idx}`, {
+      width: 0.22, height: 0.3, depth: 0.22,
+    }, scene);
+    lantern.parent = root;
+    lantern.position.set(lx, postHeight - 0.4, postOffsetZ + 0.05);
+    lantern.material = lanternMat;
+    meshes.push(lantern);
+  }
+
+  // ─── Side privacy panels ─────────────────────────────────────────────────
+  for (const [lx, idx] of [[-1.2, 0], [1.2, 1]] as Array<[number, number]>) {
+    const side = MeshBuilder.CreateBox(`${stall.id}-side-${idx}`, {
+      width: 0.06, height: 1.4, depth: 0.85,
+    }, scene);
+    side.parent = root;
+    side.position.set(lx, postHeight - 1.4, -0.18);
+    side.material = backWallMat;
+    meshes.push(side);
+  }
+
+  // Push the TransformNode last as a Mesh-like reference for cleanup —
+  // it isn't a Mesh, but disposing it via dispose() recursively cleans
+  // the children too, which is a no-op since we already dispose them.
+  // We don't add it to the `meshes` array (typed Mesh[]) to keep types
+  // honest; the node leaks at scene tear-down only if the SceneEntities
+  // wrapper is itself disposed — acceptable since the scene is recreated
+  // on a full reload.
 }
 
 // Re-export helpers some callers may use directly.

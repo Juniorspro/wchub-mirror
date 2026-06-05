@@ -83,6 +83,10 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
   let frame = 0;
   let elapsed = 0;
   let lastTime = 0;
+  // Avatar's world Y-rotation — sticks at whatever direction the player was
+  // walking when they last let go of the keys. While idle, the camera can
+  // orbit freely without the avatar following it.
+  let lastAim = 0;
 
   resetGameStore();
   hydratePresetsFromStorage();
@@ -234,7 +238,18 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
     if (net && input) {
       const di = input.dir;
       const move = getCameraRelativeMoveXZ(objects.world.camera, di.x, di.y);
-      const aim = objects.world.camera.alpha;
+      // `aim` is the avatar's world Y-rotation. ONLY update it when the
+      // player is actually moving — that way the camera can orbit freely
+      // (mouse drag on the canvas) without yanking the avatar around. When
+      // idle, the avatar keeps the direction it was last walking in.
+      //
+      // An avatar with rotation.y=θ has local +Z (the face direction) at
+      // world (sin θ, cos θ). We want that to match the world-space
+      // movement vector (move.x, move.z): sin θ = move.x, cos θ = move.z,
+      // so θ = atan2(move.x, move.z).
+      const moveMag = Math.hypot(move.x, move.z);
+      if (moveMag > 0.05) lastAim = Math.atan2(move.x, move.z);
+      const aim = lastAim;
       const { x: nvx, y: nvy } = normalizeInput(move.x, move.z);
 
       net.sendInput(nvx, nvy, aim);
@@ -294,6 +309,10 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
           }
           a.setPosition(px, 0, py);
           a.setRotationY(pa);
+          // Walking animation tick — uses Δpos between setPosition calls to
+          // detect motion, so this MUST run after setPosition every frame
+          // (otherwise smoothedSpeed never updates and the rig never animates).
+          a.update({ deltaSeconds: dt, config: runtimeContext?.configRef.current });
 
           // Outfit diff (cheap key compare) — ONLY for remote players. The
           // local store owns self's outfit (see syncLocalOutfit + the spawn
