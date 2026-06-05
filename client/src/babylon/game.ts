@@ -325,7 +325,28 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
 
           // Camera + stall proximity follow the local player.
           if (isSelf) {
-            objects.world.camera.target.set(px, 1.2, py);
+            // Hybrid camera follow:
+            //   • When the player is ACTIVELY moving (WASD / joystick),
+            //     snap the camera target to the player position. Zero
+            //     follow delay — the world doesn't drift behind the
+            //     avatar as they walk further from spawn.
+            //   • When IDLE, exp-lerp toward the player so sub-pixel
+            //     prediction noise doesn't propagate to camera shake.
+            // The earlier pure-lerp version had a ~0.5 unit steady-state
+            // trailing offset that read as "delay the further they
+            // travel" — gone now since the snap branch is active whenever
+            // the player is intentionally moving.
+            const cam = objects.world.camera;
+            const dirInput = runtimeContext?.input?.dir;
+            const isMovingInput = !!dirInput && (Math.abs(dirInput.x) + Math.abs(dirInput.y)) > 0.05;
+            if (isMovingInput) {
+              cam.target.set(px, 1.2, py);
+            } else {
+              const camAlpha = 1 - Math.exp(-dt / 0.05);
+              cam.target.x += (px - cam.target.x) * camAlpha;
+              cam.target.y += (1.2 - cam.target.y) * camAlpha;
+              cam.target.z += (py - cam.target.z) * camAlpha;
+            }
             const nearest = objects.entities.findNearestStall(px, py);
             setNearbyStall(nearest ? nearest.id : null);
           }

@@ -245,17 +245,17 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   const grassMat = makeFoliageMaterial(scene, 'grass-sprite-mat', grassTex);
   allMaterials.push(grassMat);
 
-  // Hand-generated lattice with small jitter — deterministic so all
-  // clients see the same scatter. Filtered to keep tufts off walkways,
-  // off the plaza, and away from the stadium itself.
+  // Grass lattice — step bumped 2.6 → 4.5 so we render ~75 tufts (×2
+  // planes = ~150 transparent meshes) instead of ~290 (~580). Visual
+  // density is preserved by slightly larger tufts in buildGrassTuft;
+  // GPU jitter on lower-end hardware drops dramatically.
   let grassIdx = 0;
-  for (let gx = 2; gx < 46; gx += 2.6) {
-    for (let gz = 2; gz < 46; gz += 2.6) {
-      // Deterministic jitter so the grid doesn't read as a checkerboard.
+  for (let gx = 2; gx < 46; gx += 4.5) {
+    for (let gz = 2; gz < 46; gz += 4.5) {
       const jx = (Math.sin(grassIdx * 12.9898) * 43758.5453) % 1;
       const jz = (Math.sin(grassIdx * 78.233)  * 43758.5453) % 1;
-      const x = gx + jx * 1.5;
-      const z = gz + jz * 1.5;
+      const x = gx + jx * 2.5;
+      const z = gz + jz * 2.5;
       grassIdx++;
       if (!isGrassOpenArea(x, z)) continue;
       for (const m of buildGrassTuft(scene, x, z, grassMat, grassIdx)) allMeshes.push(m);
@@ -275,6 +275,19 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   ];
   for (const [x, z, rot] of benchSpec) {
     for (const m of buildBench(scene, x, z, rot)) allMeshes.push(m);
+  }
+
+  // ─── Perf: freeze the world matrix of every static decoration ──────────
+  // None of these meshes move, rotate, or scale after construction.
+  // Freezing tells Babylon to skip the per-frame world-matrix recompute
+  // for them, which adds up across hundreds of static decorations and
+  // measurably reduces the per-frame CPU cost that was causing jitter.
+  // Also disable pickability so the picking ray doesn't iterate them.
+  ground.isPickable = false;
+  ground.freezeWorldMatrix();
+  for (const m of allMeshes) {
+    m.isPickable = false;
+    m.freezeWorldMatrix();
   }
 
   return {
