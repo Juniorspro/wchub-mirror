@@ -8,18 +8,25 @@ export type AssetMeta = {
 };
 
 export const ASSETS: Record<string, string> = {
-  "shirt-comic": new URL("./assets/sprite/sprite_shirt-comic_d5032e.png", import.meta.url).href,
-  "shirt-denim": new URL("./assets/sprite/sprite_shirt-denim_3790c5.png", import.meta.url).href,
-  "shirt-flames": new URL("./assets/sprite/sprite_shirt-flames_92613b.png", import.meta.url).href,
-  "shirt-flannel": new URL("./assets/sprite/sprite_shirt-flannel_eacef8.png", import.meta.url).href,
-  "shirt-galaxy": new URL("./assets/sprite/sprite_shirt-galaxy_f0ec76.png", import.meta.url).href,
-  "shirt-hawaiian": new URL("./assets/sprite/sprite_shirt-hawaiian_09bd15.png", import.meta.url).href,
-  "shirt-knit": new URL("./assets/sprite/sprite_shirt-knit_7dcebd.png", import.meta.url).href,
-  "shirt-leather": new URL("./assets/sprite/sprite_shirt-leather_5ea7df.png", import.meta.url).href,
-  "shirt-leopard": new URL("./assets/sprite/sprite_shirt-leopard_b5d69c.png", import.meta.url).href,
-  "shirt-rainbow": new URL("./assets/sprite/sprite_shirt-rainbow_4b035d.png", import.meta.url).href,
+  "grass-tuft": new URL("./assets/sprite/sprite_grass-tuft_665842.png", import.meta.url).href,
+  "ground-grass": new URL("./assets/sprite/sprite_ground-grass_1813ec.png", import.meta.url).href,
+  "ground-path": new URL("./assets/sprite/sprite_ground-path_d62b30.png", import.meta.url).href,
+  "jersey-argentina-fabric": new URL("./assets/sprite/sprite_jersey-argentina-fabric_d81d80.png", import.meta.url).href,
+  "jersey-croatia-fabric": new URL("./assets/sprite/sprite_jersey-croatia-fabric_58ae31.png", import.meta.url).href,
+  "jersey-germany-fabric": new URL("./assets/sprite/sprite_jersey-germany-fabric_a0f09e.png", import.meta.url).href,
+  "oak-tree": new URL("./assets/sprite/sprite_oak-tree_1b24ee.png", import.meta.url).href,
+  "portal-cover-adventure": new URL("./assets/sprite/sprite_portal-cover-adventure_7921e1.png", import.meta.url).href,
+  "portal-cover-cards": new URL("./assets/sprite/sprite_portal-cover-cards_52fb70.png", import.meta.url).href,
+  "portal-cover-defender": new URL("./assets/sprite/sprite_portal-cover-defender_2f613b.png", import.meta.url).href,
+  "portal-cover-puzzle": new URL("./assets/sprite/sprite_portal-cover-puzzle_13454b.png", import.meta.url).href,
+  "portal-cover-racing": new URL("./assets/sprite/sprite_portal-cover-racing_037b47.png", import.meta.url).href,
+  "shirt-galaxy": new URL("./assets/sprite/sprite_shirt-galaxy_2c03ae.png", import.meta.url).href,
+  "shirt-geometric": new URL("./assets/sprite/sprite_shirt-geometric_82bec3.png", import.meta.url).href,
+  "shirt-tropical": new URL("./assets/sprite/sprite_shirt-tropical_a99ba7.png", import.meta.url).href,
   "shoes-canvas": new URL("./assets/sprite/sprite_shoes-canvas_1442a2.png", import.meta.url).href,
   "shoes-leather": new URL("./assets/sprite/sprite_shoes-leather_232d06.png", import.meta.url).href,
+  "stadium-crowd": new URL("./assets/sprite/sprite_stadium-crowd_1c49a4.png", import.meta.url).href,
+  "stadium-turf": new URL("./assets/sprite/sprite_stadium-turf_f0a345.png", import.meta.url).href,
 };
 
 export const ASSET_META: Record<string, AssetMeta> = {};

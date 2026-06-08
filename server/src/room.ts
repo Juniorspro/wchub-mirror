@@ -76,6 +76,12 @@ export class GameRoom extends Room<GameState> {
 
     registerMessages(this, this.state);
     this.setSimulationInterval(() => step(this.state), 1000 / gameConfig.tickHz);
+    // BANDWIDTH: server simulation still ticks at gameConfig.tickHz (20Hz)
+    // for input fidelity, but we patch the schema to clients at ~15Hz to
+    // cut steady-state bytes ~25%. The client interpolation buffer
+    // (SNAPSHOT_DELAY_MS = 120ms) is already wide enough to absorb a
+    // 67ms patch interval without visible stutter.
+    this.setPatchRate(67);
   }
 
   onAuth(_client: Client, opts: CreateOpts, context: AuthContext) {

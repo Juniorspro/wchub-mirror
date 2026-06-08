@@ -55,7 +55,7 @@ export interface PlayerSnapshot {
   alive: boolean;
   color: string;
   username: string;
-  ack: number; // 最近已应用的输入 seq → reconcile
+  ack: number; // 最近已应用的输入 seq → reconcile（BANDWIDTH: 不再随 schema 广播，而是经 targeted `ack` 消息回送给发送者；其它玩家的 ack 字段恒为 0）
   // Dressup Lounge — every player's outfit, CSV ids parsed client-side
   // by actor.applyOutfit. Sync over the schema so remote players see
   // each other's clothing changes.

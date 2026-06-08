@@ -27,12 +27,40 @@ import type { IdentityStatus, PendingInput, PredictedSelf, SessionMeta, TimedSna
 
 export type NetStatus = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';
 
+/** Server-side fixture snapshot pushed via `event:fixtures`. Mirrors the
+ *  shape the betting event broadcasts — kept here so the store can be
+ *  typed without depending on server code. */
+export interface BettingFixtureSnapshot {
+  readonly id: string;
+  readonly homeTeam: string;
+  readonly awayTeam: string;
+  readonly homeCode: string;
+  readonly awayCode: string;
+  readonly kickoffMs: number;
+  readonly status: string;
+  readonly scoreHome: number;
+  readonly scoreAway: number;
+  readonly minute: number;
+  readonly result: 'HOME' | 'DRAW' | 'AWAY' | null;
+  readonly poolHome: number;
+  readonly poolDraw: number;
+  readonly poolAway: number;
+  readonly countHome: number;
+  readonly countDraw: number;
+  readonly countAway: number;
+  readonly phase: 'AWAIT_BET' | 'BET_WINDOW' | 'LIVE' | 'RESOLVED';
+}
+
 export interface NetClientCallbacks {
   onStatus?: (status: NetStatus) => void;
   onHello?: (meta: SessionMeta) => void;
   onEvent?: (event: ServerEvent) => void;
   onState?: (snapshot: TimedSnapshot) => void;
   onIdentity?: (status: IdentityStatus) => void;
+  /** Fired when ANY player (including self) jumps. The server validates
+   *  + rate-limits and broadcasts back; clients trigger the visual hop
+   *  on the avatar matching `sessionId`. */
+  onJump?: (sessionId: string) => void;
 }
 
 // 注入的运行时配置（vite injectGameConfigPlugin / Worker /game.config.js → window.GAME_CONFIG）。
@@ -61,6 +89,49 @@ export class NetClient {
   readonly snapshots: TimedSnapshot[] = [];
   predictedSelf: PredictedSelf | null = null;
   readonly pendingInputs: PendingInput[] = [];
+  /** Last input-seq the server confirmed it applied. Used by reconcile
+   *  to drop already-applied pending inputs from the replay buffer.
+   *  Filled from a targeted `ack` message — formerly lived in the
+   *  per-player schema and was broadcast wastefully to every peer. */
+  private confirmedAck = 0;
+  /** Cold identity + outfit cache (was per-tick schema, now event-driven
+   *  via `roster-*` messages). The schema only carries x/y/aim now;
+   *  every PlayerSnapshot we build merges in the matching roster row.
+   *  Populated on first connect via `roster-request`, then patched by
+   *  `roster-update` broadcasts when anyone equips or renames. */
+  private readonly roster = new Map<string, {
+    username: string;
+    color: string;
+    textureItems: string;
+    accessoryItems: string;
+  }>();
+  /** Sids we've already asked for one-off roster fills. Prevents request
+   *  storms when the same player appears in the schema before the
+   *  server has responded. */
+  private readonly rosterRequested = new Set<string>();
+  /** Server-confirmed jump events queued for the next render frame to
+   *  drain. Each entry is the sessionId of the player that jumped — the
+   *  render loop maps it to that avatar and triggers the visual hop. */
+  readonly pendingJumps: string[] = [];
+  /** Server-confirmed compliment events: from → to. Render loop drains
+   *  one per frame: triggers a floating-heart visual on the recipient,
+   *  and if THIS client is the recipient, awards the coin bonus. */
+  readonly pendingCompliments: Array<{ from: string; to: string }> = [];
+  /** Server-confirmed wave emote events. Plays a wave animation on the
+   *  matching avatar (the sender's). */
+  readonly pendingWaves: string[] = [];
+  /** Server-pushed match fixtures (with live scores + pool sizes). The
+   *  HUD reads this through the store to render the match ticker +
+   *  betting popup. Snapshot fan-out below. */
+  bettingFixtures: ReadonlyArray<BettingFixtureSnapshot> = [];
+  /** Targeted bet confirmations from the server. Queue drained by the
+   *  render loop to deduct from local balance + show confirmation toast. */
+  readonly pendingBetConfirms: Array<{ matchId: string; camp: string; amount: number }> = [];
+  /** Targeted resolve payouts (one entry per match result you bet on).
+   *  Render loop credits coins + shows the result toast. */
+  readonly pendingBetResults: Array<{
+    matchId: string; result: string; payout: number; profit: number; camp: string;
+  }> = [];
   private inputSeq = 0;
 
   serverClockOffset: number | null = null;
@@ -141,6 +212,140 @@ export class NetClient {
         this.cbs.onIdentity?.(m);
       });
       room.onMessage('pong', () => {});
+      // Targeted ack from the server — used by reconcileSelf to prune
+      // already-applied pending inputs. See server messages.ts.
+      room.onMessage('ack', (seq: unknown) => {
+        const n = typeof seq === 'number' ? seq : Number(seq);
+        if (Number.isFinite(n) && n > this.confirmedAck) this.confirmedAck = n;
+      });
+      room.onMessage('jump', (m: { from?: unknown } | undefined) => {
+        const from = typeof m?.from === 'string' ? m.from : '';
+        if (!from) return;
+        this.pendingJumps.push(from);
+        this.cbs.onJump?.(from);
+      });
+      room.onMessage('compliment', (m: { from?: unknown; to?: unknown } | undefined) => {
+        const from = typeof m?.from === 'string' ? m.from : '';
+        const to = typeof m?.to === 'string' ? m.to : '';
+        if (!from || !to) return;
+        this.pendingCompliments.push({ from, to });
+      });
+      room.onMessage('wave', (m: { from?: unknown } | undefined) => {
+        const from = typeof m?.from === 'string' ? m.from : '';
+        if (!from) return;
+        this.pendingWaves.push(from);
+      });
+      // Roster snapshot — server's reply to our `roster-request`. Bulk
+      // fill (initial connect, no sid filter) OR single-record fill
+      // (when a new sid appeared in the schema). Either way, just merge.
+      room.onMessage('roster-snapshot', (m: { players?: unknown } | undefined) => {
+        const list = Array.isArray(m?.players) ? m!.players as unknown[] : [];
+        for (const entry of list) {
+          if (!entry || typeof entry !== 'object') continue;
+          const r = entry as Record<string, unknown>;
+          const sid = typeof r.sid === 'string' ? r.sid : '';
+          if (!sid) continue;
+          this.roster.set(sid, {
+            username: typeof r.username === 'string' ? r.username : 'anon',
+            color: typeof r.color === 'string' ? r.color : '#7bb6e8',
+            textureItems: typeof r.textureItems === 'string' ? r.textureItems : '',
+            accessoryItems: typeof r.accessoryItems === 'string' ? r.accessoryItems : '',
+          });
+        }
+        // First time we have self's identity → maybe fire hello.
+        this.tryFireHello();
+      });
+      // Roster delta — broadcast on equip / rename. Only the changed
+      // fields are present; merge them into the cache.
+      room.onMessage('roster-update', (m: { sid?: unknown; fields?: unknown } | undefined) => {
+        const sid = typeof m?.sid === 'string' ? m.sid : '';
+        if (!sid) return;
+        const fields = (m?.fields && typeof m.fields === 'object') ? m.fields as Record<string, unknown> : {};
+        const cur = this.roster.get(sid) ?? {
+          username: 'anon', color: '#7bb6e8', textureItems: '', accessoryItems: '',
+        };
+        if (typeof fields.username === 'string') cur.username = fields.username;
+        if (typeof fields.color === 'string') cur.color = fields.color;
+        if (typeof fields.textureItems === 'string') cur.textureItems = fields.textureItems;
+        if (typeof fields.accessoryItems === 'string') cur.accessoryItems = fields.accessoryItems;
+        this.roster.set(sid, cur);
+      });
+      // Ask the server for the full roster as soon as the room opens.
+      // The schema's `players` map gives us positions, but identities
+      // and outfits come back via this initial bulk fill (then incremental
+      // roster-update on changes).
+      room.send('roster-request');
+
+      // Betting event subscriptions.
+      room.onMessage('event:fixtures', (m: { fixtures?: unknown } | undefined) => {
+        const list = Array.isArray(m?.fixtures) ? m!.fixtures as unknown[] : [];
+        const out: BettingFixtureSnapshot[] = [];
+        for (const f of list) {
+          if (!f || typeof f !== 'object') continue;
+          const r = f as Record<string, unknown>;
+          if (typeof r.id !== 'string') continue;
+          out.push({
+            id: r.id,
+            homeTeam: String(r.homeTeam ?? ''),
+            awayTeam: String(r.awayTeam ?? ''),
+            homeCode: String(r.homeCode ?? ''),
+            awayCode: String(r.awayCode ?? ''),
+            kickoffMs: Number(r.kickoffMs) || 0,
+            status: String(r.status ?? 'SCHEDULED'),
+            scoreHome: Number(r.scoreHome) || 0,
+            scoreAway: Number(r.scoreAway) || 0,
+            minute: Number(r.minute) || 0,
+            result: (r.result === 'HOME' || r.result === 'DRAW' || r.result === 'AWAY') ? r.result : null,
+            poolHome: Number(r.poolHome) || 0,
+            poolDraw: Number(r.poolDraw) || 0,
+            poolAway: Number(r.poolAway) || 0,
+            countHome: Number(r.countHome) || 0,
+            countDraw: Number(r.countDraw) || 0,
+            countAway: Number(r.countAway) || 0,
+            phase: (r.phase === 'AWAIT_BET' || r.phase === 'BET_WINDOW' || r.phase === 'LIVE' || r.phase === 'RESOLVED') ? r.phase : 'AWAIT_BET',
+          });
+        }
+        this.bettingFixtures = out;
+      });
+      room.onMessage('event:bet-update', (m: { matchId?: unknown; poolHome?: unknown; poolDraw?: unknown; poolAway?: unknown; countHome?: unknown; countDraw?: unknown; countAway?: unknown } | undefined) => {
+        const id = typeof m?.matchId === 'string' ? m.matchId : '';
+        if (!id) return;
+        // Patch the cached fixture in place so live odds reflect immediately.
+        const idx = this.bettingFixtures.findIndex((f) => f.id === id);
+        if (idx < 0) return;
+        const cur = this.bettingFixtures[idx];
+        const next: BettingFixtureSnapshot = {
+          ...cur,
+          poolHome: Number(m?.poolHome) || cur.poolHome,
+          poolDraw: Number(m?.poolDraw) || cur.poolDraw,
+          poolAway: Number(m?.poolAway) || cur.poolAway,
+          countHome: Number(m?.countHome) || cur.countHome,
+          countDraw: Number(m?.countDraw) || cur.countDraw,
+          countAway: Number(m?.countAway) || cur.countAway,
+        };
+        const arr = [...this.bettingFixtures];
+        arr[idx] = next;
+        this.bettingFixtures = arr;
+      });
+      room.onMessage('event:bet-ok', (m: { matchId?: unknown; camp?: unknown; amount?: unknown } | undefined) => {
+        const matchId = typeof m?.matchId === 'string' ? m.matchId : '';
+        const camp = typeof m?.camp === 'string' ? m.camp : '';
+        const amount = Number(m?.amount);
+        if (!matchId || !camp || !Number.isFinite(amount)) return;
+        this.pendingBetConfirms.push({ matchId, camp, amount });
+      });
+      room.onMessage('event:resolve-self', (m: { matchId?: unknown; result?: unknown; payout?: unknown; profit?: unknown; camp?: unknown } | undefined) => {
+        const matchId = typeof m?.matchId === 'string' ? m.matchId : '';
+        const result = typeof m?.result === 'string' ? m.result : '';
+        const payout = Number(m?.payout);
+        const profit = Number(m?.profit);
+        const camp = typeof m?.camp === 'string' ? m.camp : '';
+        if (!matchId || !result) return;
+        this.pendingBetResults.push({ matchId, result, payout, profit, camp });
+      });
+      // Ask for the initial snapshot.
+      room.send('event:request-fixtures');
+
       room.onLeave(() => this.setStatus('disconnected'));
       room.onError(() => this.setStatus('error'));
     } catch {
@@ -164,6 +369,9 @@ export class NetClient {
     this.serverClockOffset = null;
     this.identityStatus = null;
     this.inputSeq = 0;
+    this.confirmedAck = 0;
+    this.roster.clear();
+    this.rosterRequested.clear();
     this.meta = null;
     this.roomCode = '';
   }
@@ -210,37 +418,60 @@ export class NetClient {
     };
 
     const players: PlayerSnapshot[] = [];
+    const myAck = this.confirmedAck;
+    const selfSid = this.meta?.selfId ?? '';
+    // Build a set of sids currently in the schema so we can prune
+    // roster entries for players who left (no broadcast needed —
+    // disappearance from the map IS the leave signal).
+    const liveSids = new Set<string>();
     s.players.forEach((p, id) => {
+      liveSids.add(id);
+      // BANDWIDTH: identity + outfit no longer travel in the schema.
+      // Fall back to roster cache; if we don't have a record yet, ask
+      // the server for this one sid (rate-limited by rosterRequested).
+      let r = this.roster.get(id);
+      if (!r) {
+        if (!this.rosterRequested.has(id) && this.room) {
+          this.rosterRequested.add(id);
+          this.room.send('roster-request', { sid: id });
+        }
+        r = { username: 'anon', color: '#7bb6e8', textureItems: '', accessoryItems: '' };
+      }
       players.push({
         id,
         x: p.x as number,
         y: p.y as number,
         aim: p.aim as number,
-        alive: p.alive as boolean,
-        color: p.color as string,
-        username: p.username as string,
-        ack: p.ack as number,
-        // Dressup Lounge — pass the two outfit CSV strings through so the
-        // Babylon render loop can call applyOutfitIfChanged on remote players.
-        textureItems: (p.textureItems as string) ?? '',
-        accessoryItems: (p.accessoryItems as string) ?? '',
+        // BANDWIDTH: alive/color/username/outfit removed from per-tick
+        // schema. alive is hard-coded true (no death mechanic); the
+        // rest come from the roster cache.
+        alive: true,
+        color: r.color,
+        username: r.username,
+        ack: id === selfSid ? myAck : 0,
+        textureItems: r.textureItems,
+        accessoryItems: r.accessoryItems,
       });
     });
+    // Prune roster + request-set for players who disconnected.
+    for (const sid of this.roster.keys()) {
+      if (!liveSids.has(sid)) {
+        this.roster.delete(sid);
+        this.rosterRequested.delete(sid);
+      }
+    }
 
     // MIGRATION: 共享世界实体（怪/道具/子弹）在此仿 players 解码成数组并挂到快照上。
 
     const t = s.t || performance.now();
 
-    // 首帧拿到 self → 补全 meta（color/username）+ 发 hello（一次）
-    if (this.meta && !this.helloSent) {
-      const self = players.find((p) => p.id === this.meta!.selfId);
-      if (self) {
-        this.meta.selfColor = self.color;
-        this.meta.username = self.username;
-        this.helloSent = true;
-        this.cbs.onHello?.(this.meta);
-      }
-    }
+    // 首帧拿到 self → 补全 meta（color/username）+ 发 hello（一次）。
+    // BANDWIDTH: color + username are no longer in the schema, so we
+    // also need the roster row for selfId before we can fire hello with
+    // real values (vs. 'anon' / default color). If the roster snapshot
+    // hasn't arrived yet, defer — `tryFireHello` is called again from
+    // the roster-snapshot handler, whichever lands second wins.
+    this.tryFireHello();
 
     const tagged: TimedSnapshot = { t, players, recvAt };
     this.snapshots.push(tagged);
@@ -255,6 +486,22 @@ export class NetClient {
       this.predictedSelf = reconcileSelf(this.predictedSelf, snap, this.meta, this.pendingInputs);
     }
     this.cbs.onState?.(tagged);
+  }
+
+  /** Fire the onHello callback once we have BOTH the schema (so we know
+   *  the room's playing field — selfId already came from sessionId) AND
+   *  the roster row for self (the cold identity fields that used to be
+   *  in the schema). Called from both onStateChange and the
+   *  roster-snapshot/roster-update handlers; only the second arrival
+   *  actually fires. */
+  private tryFireHello(): void {
+    if (!this.meta || this.helloSent) return;
+    const r = this.roster.get(this.meta.selfId);
+    if (!r) return;
+    this.meta.selfColor = r.color;
+    this.meta.username = r.username;
+    this.helloSent = true;
+    this.cbs.onHello?.(this.meta);
   }
 
   private setStatus(s: NetStatus): void {

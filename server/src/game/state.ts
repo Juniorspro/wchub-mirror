@@ -1,19 +1,26 @@
 // ============================================================================
 // game/state.ts — Dressup Lounge state schema
 //
-// Authoritative fields only (every player must agree on these). Visual-only
-// state (camera, eye-blink, particles, HUD animation) stays client-local and
-// is NOT in the schema.
+// HOT path only. The schema is the high-frequency motion channel — every
+// field here is diffed and re-broadcast at the patch rate (~15Hz). So we
+// keep it minimum-viable: position + aim only.
 //
-// Outfit: serialized as comma-separated lists. Two strings keep the schema
-// flat — clients parse them into texture / accessory id arrays when they
-// invoke actor.applyOutfit.
+// COLD fields (username, color, outfit) used to live here too, which meant
+// every outfit-change re-broadcast a ~900-byte CSV to every peer. They now
+// ride event-driven `roster-*` messages (see messages.ts). The Player object
+// still carries non-@type mirrors of these so server logic can read them,
+// but they're never auto-synced.
+//
+// BANDWIDTH: alive is also gone from the schema — no death/respawn mechanic
+// exists in this game, so it's a constant true. Re-introduce as @type if a
+// future game adds combat.
 // ============================================================================
 
 import { Schema, MapSchema, type } from "@colyseus/schema";
 import { gameConfig } from "../game.config";
 
 export class Player extends Schema {
+  // ── HOT (synced via schema, 15Hz patches) ────────────────────────────────
   // Position on the lounge floor — the server treats it as 2D (x, y), and
   // the Babylon client maps server.y → mesh.position.z (ground-plane axis).
   // Babylon's vertical (up) axis isn't synced; everyone shares one ground level.
@@ -22,24 +29,24 @@ export class Player extends Schema {
   // Facing direction in radians (rotation around Babylon Y-up axis).
   @type("number") aim: number = 0;
 
-  // Framework-standard fields (PlayerSnapshot expects these to exist).
-  @type("string") username: string = "anon";
-  @type("string") color: string = "#7bb6e8";
-  @type("boolean") alive: boolean = true;
-
-  // Outfit — CSV of item ids. Clients call actor.applyOutfit after parsing.
-  @type("string") textureItems: string =
+  // ── COLD (server-only mirror; broadcast via `roster-*` messages) ─────────
+  // Read by server logic, fan'd out by messages.ts on join / equip / rename.
+  // NOT @type — these never enter the per-tick patch.
+  username: string = "anon";
+  color: string = "#7bb6e8";
+  alive: boolean = true;
+  textureItems: string =
     "skin-light,shirt-white-tee,pants-blue-jeans,shoes-white-sneakers";
-  @type("string") accessoryItems: string = "";
-
-  // Acknowledged input seq (for self-prediction reconciliation).
-  @type("number") ack: number = 0;
+  accessoryItems: string = "";
 }
 
 export class GameState extends Schema {
   @type({ map: Player }) players = new MapSchema<Player>();
-  @type("number") tick: number = 0;
   @type("string") code: string = "";
+  // BANDWIDTH: `tick` was here as @type("number") and bumped every server
+  // step — generating a 20Hz keepalive patch even with zero player motion.
+  // It's gone now (no consumer ever read it; the client cast accessed
+  // `state.t` not `state.tick` — a years-old typo).
 }
 
 // A small palette of friendly avatar tint colors picked per join — gives every

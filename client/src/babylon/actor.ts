@@ -8,7 +8,7 @@
 // (paints skin + builds garments + builds accessories) and dispose.
 // ══════════════════════════════════════════════
 
-import { Color3, MeshBuilder, TransformNode, type Mesh, type Scene, type StandardMaterial } from '@babylonjs/core';
+import { Color3, DynamicTexture, Mesh, MeshBuilder, StandardMaterial, TransformNode, type Scene } from '@babylonjs/core';
 import { createStandardMaterial } from './helpers';
 import {
   getAccessoryItem,
@@ -31,6 +31,15 @@ export interface CharacterAvatar {
   applyOutfit(textureItemIds: readonly string[], accessoryItemIds: readonly string[]): void;
   setPosition(x: number, y: number, z: number): void;
   setRotationY(rad: number): void;
+  /** Trigger a one-shot visual jump (gravity-driven Y offset). No-op if
+   *  already in the air — wait for landing before next jump fires. */
+  triggerJump(): void;
+  /** Spawn a floating heart particle above the head that rises and fades. */
+  triggerCompliment(): void;
+  triggerChat(text: string): void;
+  /** Wave the right arm — a brief shoulder rotation that overrides the
+   *  walk animation on that arm for ~1.2s. */
+  triggerWave(): void;
   update(context: AvatarUpdateContext): void;
   dispose(): void;
 }
@@ -350,11 +359,16 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
   let attachedAccessoryMeshes: Mesh[] = [];
 
   function clearGarments(): void {
-    for (const m of attachedGarmentMeshes) m.dispose();
+    // mesh.dispose(doNotRecurse=false, disposeMaterialAndTextures=true).
+    // Default args leave materials hanging on scene.materials forever;
+    // every outfit re-equip would otherwise leak ~5-10 per change. Per-
+    // outfit textures created by makeDesignMaterial (DynamicTexture in
+    // some paths, Texture in image-pattern paths) are also dropped.
+    for (const m of attachedGarmentMeshes) m.dispose(false, true);
     attachedGarmentMeshes = [];
   }
   function clearAccessories(): void {
-    for (const m of attachedAccessoryMeshes) m.dispose();
+    for (const m of attachedAccessoryMeshes) m.dispose(false, true);
     attachedAccessoryMeshes = [];
   }
 
@@ -511,6 +525,218 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
   let bob = 0;
   let swayZ = 0;
 
+  // ─── Jump state ─────────────────────────────────────────────────────────
+  // Simple gravity-driven hop: y(t) = v0 * t − 0.5 * g * t², ends when y
+  // returns to 0. Tuned so the avatar lifts ~1.5 units (≈ half its own
+  // height) over ~0.8 seconds — readable as a jump without disrupting the
+  // walking animation.
+  const JUMP_V0 = 7.0;     // initial vertical velocity, units/sec
+  const JUMP_G  = 18.0;    // gravity, units/sec²  → peak ~1.36, total ~0.78s
+  let jumpActive = false;
+  let jumpT = 0;
+  let jumpY = 0;
+
+  function triggerJump(): void {
+    // Ignore re-triggers while already in the air — wait for landing.
+    if (jumpActive) return;
+    jumpActive = true;
+    jumpT = 0;
+    jumpY = 0;
+  }
+
+  // ─── Wave emote — temporarily override the R shoulder rotation ───────
+  // Active for WAVE_DURATION seconds. While active, shoulderJointR is
+  // driven by waveT (oscillating) instead of by the walking animation.
+  // jumpActive + wave coexist; same with walking + wave.
+  const WAVE_DURATION = 1.6;
+  let waveActive = false;
+  let waveT = 0;
+
+  function triggerWave(): void {
+    waveActive = true;
+    waveT = 0;
+  }
+
+  // ─── Compliment particle — a small floating heart above the head ─────
+  // Lifetime ~1.8s. Plane billboards to face the camera (BILLBOARDMODE_Y
+  // keeps it upright but rotates around Y to face the viewer). Material
+  // alpha-fades out across the lifetime; world Y rises ~1.5 units.
+  function triggerCompliment(): void {
+    const tex = new DynamicTexture(`heart-tex-${Math.floor(performance.now() * 1000)}`, { width: 128, height: 128 }, scene, false);
+    tex.hasAlpha = true;
+    const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
+    ctx.clearRect(0, 0, 128, 128);
+    ctx.font = '96px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('💖', 64, 64);
+    tex.update();
+
+    const mat = new StandardMaterial(`heart-mat-${Math.floor(performance.now() * 1000)}`, scene);
+    mat.diffuseTexture = tex;
+    mat.diffuseTexture.hasAlpha = true;
+    mat.useAlphaFromDiffuseTexture = true;
+    mat.emissiveTexture = tex;
+    mat.emissiveColor = new Color3(0.9, 0.4, 0.5);
+    mat.disableLighting = false;
+    mat.backFaceCulling = false;
+
+    const plane = MeshBuilder.CreatePlane(`heart-plane-${Math.floor(performance.now() * 1000)}`, {
+      size: 0.8, sideOrientation: Mesh.DOUBLESIDE,
+    }, scene);
+    plane.parent = root;
+    plane.position.set(0, 3.0, 0);
+    plane.billboardMode = Mesh.BILLBOARDMODE_Y;
+    plane.material = mat;
+    plane.isPickable = false;
+
+    const LIFETIME = 1.8;
+    let t = 0;
+    const obs = scene.onBeforeRenderObservable.add(() => {
+      const dt = scene.getEngine().getDeltaTime() / 1000;
+      t += dt;
+      plane.position.y = 3.0 + t * 1.5;       // rise
+      mat.alpha = Math.max(0, 1 - t / LIFETIME);
+      if (t >= LIFETIME) {
+        plane.dispose();
+        mat.dispose();
+        tex.dispose();
+        scene.onBeforeRenderObservable.remove(obs);
+      }
+    });
+  }
+
+  // ─── Chat bubble — text speech bubble above the head ──────────────────
+  // Lifetime ~4s. Replaces any previous bubble so spamming chat doesn't
+  // stack bubbles. Word-wraps to keep long messages readable.
+  let activeChatBubble: { mesh: Mesh; mat: StandardMaterial; tex: DynamicTexture; obs: { remove: () => void } | null } | null = null;
+  function triggerChat(text: string): void {
+    // Dispose any prior bubble so only one shows at a time.
+    if (activeChatBubble) {
+      const a = activeChatBubble;
+      if (a.obs) scene.onBeforeRenderObservable.remove(a.obs as never);
+      a.mesh.dispose();
+      a.mat.dispose();
+      a.tex.dispose();
+      activeChatBubble = null;
+    }
+    const trimmed = text.slice(0, 80);
+    if (!trimmed) return;
+
+    // Word-wrap at ~22 chars per line.
+    const MAX_CHARS_PER_LINE = 22;
+    const lines: string[] = [];
+    const words = trimmed.split(' ');
+    let line = '';
+    for (const w of words) {
+      if ((line + ' ' + w).trim().length > MAX_CHARS_PER_LINE) {
+        if (line) lines.push(line);
+        line = w;
+      } else {
+        line = (line + ' ' + w).trim();
+      }
+    }
+    if (line) lines.push(line);
+    const numLines = Math.min(lines.length, 3);
+
+    // Canvas sized to fit the wrapped text + bubble padding.
+    const canvasW = 512;
+    const canvasH = 128 + (numLines - 1) * 56;
+    const id = Math.floor(performance.now() * 1000);
+    const tex = new DynamicTexture(`chat-tex-${id}`, { width: canvasW, height: canvasH }, scene, false);
+    tex.hasAlpha = true;
+    const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
+    ctx.clearRect(0, 0, canvasW, canvasH);
+    // Rounded-rectangle white bubble with a small tail at the bottom.
+    const pad = 22;
+    const bubbleY0 = pad;
+    const bubbleY1 = canvasH - pad - 18; // leave room for the tail
+    const bubbleX0 = pad;
+    const bubbleX1 = canvasW - pad;
+    const r = 28;
+    ctx.fillStyle = 'rgba(255,255,255,0.96)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 4;
+    // Rounded-rect path (manual since some Canvas2D contexts lack roundRect):
+    ctx.beginPath();
+    ctx.moveTo(bubbleX0 + r, bubbleY0);
+    ctx.lineTo(bubbleX1 - r, bubbleY0);
+    ctx.quadraticCurveTo(bubbleX1, bubbleY0, bubbleX1, bubbleY0 + r);
+    ctx.lineTo(bubbleX1, bubbleY1 - r);
+    ctx.quadraticCurveTo(bubbleX1, bubbleY1, bubbleX1 - r, bubbleY1);
+    // Tail at the bottom-center
+    ctx.lineTo(canvasW / 2 + 18, bubbleY1);
+    ctx.lineTo(canvasW / 2, bubbleY1 + 22);
+    ctx.lineTo(canvasW / 2 - 18, bubbleY1);
+    ctx.lineTo(bubbleX0 + r, bubbleY1);
+    ctx.quadraticCurveTo(bubbleX0, bubbleY1, bubbleX0, bubbleY1 - r);
+    ctx.lineTo(bubbleX0, bubbleY0 + r);
+    ctx.quadraticCurveTo(bubbleX0, bubbleY0, bubbleX0 + r, bubbleY0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // Text inside the bubble
+    ctx.fillStyle = '#202028';
+    ctx.font = 'bold 40px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const lineH = 48;
+    const textCenterY = (bubbleY0 + bubbleY1) / 2 - ((numLines - 1) * lineH) / 2;
+    for (let i = 0; i < numLines; i++) {
+      ctx.fillText(lines[i], canvasW / 2, textCenterY + i * lineH);
+    }
+    tex.update();
+
+    const mat = new StandardMaterial(`chat-mat-${id}`, scene);
+    mat.diffuseTexture = tex;
+    mat.diffuseTexture.hasAlpha = true;
+    mat.useAlphaFromDiffuseTexture = true;
+    mat.emissiveTexture = tex;
+    mat.emissiveColor = new Color3(0.95, 0.95, 0.95);
+    mat.specularColor = new Color3(0, 0, 0);
+    mat.disableLighting = false;
+    mat.backFaceCulling = false;
+
+    // Plane sized to match the canvas aspect; ~2 world units wide.
+    const planeW = 2.2;
+    const planeH = planeW * (canvasH / canvasW);
+    const plane = MeshBuilder.CreatePlane(`chat-plane-${id}`, {
+      width: planeW, height: planeH, sideOrientation: Mesh.DOUBLESIDE,
+    }, scene);
+    plane.parent = root;
+    plane.position.set(0, 3.4 + planeH / 2, 0);
+    plane.billboardMode = Mesh.BILLBOARDMODE_Y;
+    plane.material = mat;
+    plane.isPickable = false;
+
+    const LIFETIME = 4.0;
+    const FADE_START = 3.2;
+    let elapsed = 0;
+    const obs = scene.onBeforeRenderObservable.add(() => {
+      const dt = scene.getEngine().getDeltaTime() / 1000;
+      elapsed += dt;
+      // Pop-in scale: 0→1 over the first 0.15s
+      if (elapsed < 0.15) {
+        const k = elapsed / 0.15;
+        const s = 0.6 + 0.4 * k;
+        plane.scaling.set(s, s, s);
+      } else {
+        plane.scaling.set(1, 1, 1);
+      }
+      if (elapsed > FADE_START) {
+        mat.alpha = Math.max(0, 1 - (elapsed - FADE_START) / (LIFETIME - FADE_START));
+      }
+      if (elapsed >= LIFETIME) {
+        plane.dispose();
+        mat.dispose();
+        tex.dispose();
+        scene.onBeforeRenderObservable.remove(obs);
+        if (activeChatBubble && activeChatBubble.tex === tex) activeChatBubble = null;
+      }
+    });
+    activeChatBubble = { mesh: plane, mat, tex, obs: obs as unknown as { remove: () => void } };
+  }
+
   function setPosition(x: number, y: number, z: number): void {
     baseX = x; baseY = y; baseZ = z;
     if (!prevInitialised) {
@@ -596,6 +822,8 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
       const armSwing = 0.5 * intensity;
       shoulderJointL.rotation.x = -sL * armSwing;
       shoulderJointR.rotation.x = -sR * armSwing;
+      // Wave override — see below; wave drives shoulderJointR.rotation.x
+      // post-walk so the gesture wins over the walking swing.
 
       // ELBOW bend — NEGATIVE rotation.x folds the forearm UP-AND-FORWARD
       // (hand reaches toward chest). Positive would bend the elbow
@@ -634,7 +862,51 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
     ankleJointL.rotation.x = -(hipJointL.rotation.x * ANKLE_HIP_K + kneeJointL.rotation.x * ANKLE_KNEE_K);
     ankleJointR.rotation.x = -(hipJointR.rotation.x * ANKLE_HIP_K + kneeJointR.rotation.x * ANKLE_KNEE_K);
 
-    root.position.set(baseX, baseY + bob, baseZ);
+    // ── Wave emote override — drives the R shoulder regardless of the
+    //    walking/idle state. Active for WAVE_DURATION seconds after
+    //    triggerWave(). The arm rotates UP (negative X pulls the hand
+    //    forward and slightly up), then oscillates side-to-side a few
+    //    times for a friendly hand-wave shape, then eases out.
+    if (waveActive) {
+      waveT += dt;
+      const phase = waveT / WAVE_DURATION;        // 0 → 1
+      if (phase >= 1) {
+        waveActive = false;
+        // Don't reset shoulderJointR.rotation.x here — the next walk-anim
+        // tick will overwrite it, and idle damping will damp it from this
+        // last value back to 0.
+      } else {
+        // Raise + wiggle: lift the arm forward-up (~-1.0 rad) plus add a
+        // sine oscillation for the side-to-side wave (rotation.z).
+        const liftEnvelope = Math.sin(phase * Math.PI);  // 0 → 1 → 0
+        shoulderJointR.rotation.x = -1.1 * liftEnvelope;
+        // ROTATION.Z controls the side-to-side hand wave around the
+        // arm's vertical axis. 3 full oscillations across the lifetime.
+        shoulderJointR.rotation.z = Math.sin(waveT * 12) * 0.5 * liftEnvelope;
+      }
+    } else {
+      // Damp any residual rotation.z (from a prior wave) toward 0 so the
+      // arm doesn't permanently tilt sideways.
+      const damp = Math.exp(-dt / 0.18);
+      shoulderJointR.rotation.z *= damp;
+      if (Math.abs(shoulderJointR.rotation.z) < 0.001) shoulderJointR.rotation.z = 0;
+    }
+
+    // Tick the jump (if active) and write the combined vertical offset.
+    // Closed form: y(t) = v0 * t − 0.5 * g * t². Jump ends when y returns
+    // to 0 (which it does at t = 2 * v0 / g) — clamp to 0 and clear the
+    // flag so the next triggerJump() fires immediately at the landing.
+    if (jumpActive) {
+      jumpT += dt;
+      jumpY = JUMP_V0 * jumpT - 0.5 * JUMP_G * jumpT * jumpT;
+      if (jumpY <= 0 && jumpT > 0.05) {
+        jumpY = 0;
+        jumpActive = false;
+        jumpT = 0;
+      }
+    }
+
+    root.position.set(baseX, baseY + bob + jumpY, baseZ);
     root.rotation.z = swayZ;
   }
 
@@ -673,7 +945,11 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
     root.dispose();
   }
 
-  return { root, mesh: torso, applyOutfit, setPosition, setRotationY, update, dispose };
+  return {
+    root, mesh: torso, applyOutfit, setPosition, setRotationY,
+    triggerJump, triggerCompliment, triggerWave, triggerChat,
+    update, dispose,
+  };
 }
 
 /** Call once at scene teardown to drop cached pattern/image textures. */

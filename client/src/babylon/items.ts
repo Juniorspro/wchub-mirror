@@ -30,9 +30,7 @@ export interface TextureItemDef {
   paints?: Partial<Record<BodyRegion, Pattern>>;
   build?: (scene: Scene, parent: TransformNode) => Mesh[];
   /** Optional GarmentDesign that the Customize editor can load as a starting
-   * point when the player picks this catalog item as a preset. Set on
-   * jerseys so the player can load e.g. Argentina, then change the number
-   * and name on the back. */
+   * point when the player picks this catalog item as a preset. */
   design?: GarmentDesign;
 }
 
@@ -765,8 +763,12 @@ const JERSEY_CATALOG: readonly JerseyCatalogEntry[] = [
     accents: { collarColor: '#1a1a1d', cuffColor: '#1a1a1d' },
     design: {
       kind: 'garment',
-      back:    { kind: 'vStripes', colors: ['#75aadb', '#f5f5f5'], thickness: 36 },
-      front:   { kind: 'vStripes', colors: ['#75aadb', '#f5f5f5'], thickness: 36 },
+      // Body uses AI-painted vertical-stripe fabric with knit-weave texture;
+      // sleeves stay solid light-blue to match the historical kit (sleeves
+      // are usually solid, not striped). Fallback color = stripe blue so
+      // the canvas isn't bright pink before the PNG arrives.
+      back:    imageAsset('jersey-argentina-fabric', '#75aadb'),
+      front:   imageAsset('jersey-argentina-fabric', '#75aadb'),
       sleeveL: solid('#75aadb'),
       sleeveR: solid('#75aadb'),
       overlay: {
@@ -799,8 +801,11 @@ const JERSEY_CATALOG: readonly JerseyCatalogEntry[] = [
     accents: { collarColor: '#1a1a1d', cuffColor: '#c14444' },
     design: {
       kind: 'garment',
+      // Back stays solid white; only the FRONT body shows the famous
+      // black-band horizontal stripes (AI fabric with knit-weave texture).
+      // Sleeves stay solid white to match the historic kit.
       back:    solid('#f5f5f5'),
-      front:   { kind: 'hStripes', colors: ['#f5f5f5', '#1a1a1d'], thickness: 60 },
+      front:   imageAsset('jersey-germany-fabric', '#f5f5f5'),
       sleeveL: solid('#f5f5f5'),
       sleeveR: solid('#f5f5f5'),
       overlay: {
@@ -913,10 +918,14 @@ const JERSEY_CATALOG: readonly JerseyCatalogEntry[] = [
     accents: { collarColor: '#19387c', cuffColor: '#19387c' },
     design: {
       kind: 'garment',
-      back:    { kind: 'checker', colorA: '#c14444', colorB: '#f5f5f5', size: 36 },
-      front:   { kind: 'checker', colorA: '#c14444', colorB: '#f5f5f5', size: 36 },
-      sleeveL: { kind: 'checker', colorA: '#c14444', colorB: '#f5f5f5', size: 36 },
-      sleeveR: { kind: 'checker', colorA: '#c14444', colorB: '#f5f5f5', size: 36 },
+      // ALL four panels use the AI checker fabric — Croatia's iconic
+      // šahovnica pattern wraps the whole body including the sleeves.
+      // Procedural checker rendered as a coarse grid at this resolution;
+      // the AI version reads as a crisp jersey kit with knit texture.
+      back:    imageAsset('jersey-croatia-fabric', '#c41e2a'),
+      front:   imageAsset('jersey-croatia-fabric', '#c41e2a'),
+      sleeveL: imageAsset('jersey-croatia-fabric', '#c41e2a'),
+      sleeveR: imageAsset('jersey-croatia-fabric', '#c41e2a'),
       overlay: {
         crestColor: '#19387c', crestInitial: 'H',
         sleeveStripeColor: '#19387c',
@@ -1035,6 +1044,48 @@ export const WARDROBE_TEXTURE_ITEMS: TextureItemDef[] = [
       front: { kind: 'twoTone', top: '#f5f5f5', bottom: '#c14444' },
       sleeveL: solid('#f5f5f5'), sleeveR: solid('#f5f5f5'),
     }, 'shirt-logo-tee'),
+  },
+
+  // ─── AI-generated fabric prints ───────────────────────────────────────────
+  // Each shirt uses a single tileable AI-painted texture on all four
+  // garment panels (back / front / sleeveL / sleeveR). textures.ts already
+  // supports `kind: 'image'` patterns — the canvas painter renders the
+  // panel's fallback color first, async-loads the PNG, and redraws the
+  // panel + seams when the bitmap arrives. Pattern-only artwork (no text,
+  // no logo, no shirt silhouette) so the repetition across panels reads
+  // as a uniform fabric, not a duplicated logo.
+  {
+    id: 'shirt-ai-tropical', label: 'Tropical Hawaiian',  slot: 'shirt', zIndex: 40,
+    swatch: imageAsset('shirt-tropical', '#2c8a8c'),
+    build: (s, p) => buildTshirt(s, p, {
+      kind: 'garment',
+      back:    imageAsset('shirt-tropical', '#2c8a8c'),
+      front:   imageAsset('shirt-tropical', '#2c8a8c'),
+      sleeveL: imageAsset('shirt-tropical', '#2c8a8c'),
+      sleeveR: imageAsset('shirt-tropical', '#2c8a8c'),
+    }, 'shirt-ai-tropical'),
+  },
+  {
+    id: 'shirt-ai-galaxy', label: 'Galaxy Nebula',  slot: 'shirt', zIndex: 40,
+    swatch: imageAsset('shirt-galaxy', '#2a1a4e'),
+    build: (s, p) => buildTshirt(s, p, {
+      kind: 'garment',
+      back:    imageAsset('shirt-galaxy', '#2a1a4e'),
+      front:   imageAsset('shirt-galaxy', '#2a1a4e'),
+      sleeveL: imageAsset('shirt-galaxy', '#2a1a4e'),
+      sleeveR: imageAsset('shirt-galaxy', '#2a1a4e'),
+    }, 'shirt-ai-galaxy'),
+  },
+  {
+    id: 'shirt-ai-geometric', label: 'Memphis Pop',  slot: 'shirt', zIndex: 40,
+    swatch: imageAsset('shirt-geometric', '#f4ead0'),
+    build: (s, p) => buildTshirt(s, p, {
+      kind: 'garment',
+      back:    imageAsset('shirt-geometric', '#f4ead0'),
+      front:   imageAsset('shirt-geometric', '#f4ead0'),
+      sleeveL: imageAsset('shirt-geometric', '#f4ead0'),
+      sleeveR: imageAsset('shirt-geometric', '#f4ead0'),
+    }, 'shirt-ai-geometric'),
   },
 
   // ─── World Cup football jerseys ───────────────────────────────────────────

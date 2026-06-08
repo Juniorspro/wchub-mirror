@@ -10,8 +10,13 @@ export const TICK_HZ = 20;
 export const TICK_MS = 1000 / TICK_HZ;
 
 // World footprint in Babylon ground-plane units (XZ). Must match game.config.world.
-export const MAP_W = 48;
-export const MAP_H = 48;
+// Bug history: these were left at 48/48 when game.config.world grew. The
+// client uses these to fill `meta.mapW`/`meta.mapH`, which feeds the
+// movePlayer clamp inside client-side prediction. So even though the
+// server happily moved the player out to (200, 110), the client kept
+// snapping them back at (48, 48). KEEP THESE IN SYNC WITH game.config.world.
+export const MAP_W = 220;
+export const MAP_H = 220;
 
 // Player walking speed in world units per second (must match game.config.player.speed)
 export const PLAYER_SPEED = 6;

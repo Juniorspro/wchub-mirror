@@ -50,7 +50,9 @@ export interface StallDef {
 //
 // All coords are inside the 48×48 playable area centered at (24, 24).
 // Facing rotations are world-Y radians; 0 = facing +Z (north / stadium).
-const PLAZA_X = 24;
+// Map recenter (2026-06-08): PLAZA_X moved from 24 → 110 to put the
+// fair plaza (and the stadium that frames it) on the new map midline.
+const PLAZA_X = 110;
 const PLAZA_Z = 24;
 
 // Helper — facing angle that points (sx, sz) toward (PLAZA_X, PLAZA_Z).
@@ -61,17 +63,14 @@ function facePlaza(sx: number, sz: number): number {
 }
 
 export const STALL_LAYOUT: StallDef[] = [
-  { id: 'stall-shirts',     label: "Sasha's Shirts",   category: 'shirt',     x: 12, z: 16, facing: facePlaza(12, 16), color: '#c14444' },
-  { id: 'stall-pants',      label: 'Pants Pavilion',   category: 'pants',     x: 35, z: 18, facing: facePlaza(35, 18), color: '#3a6ea5' },
-  // Shoes stall — relocated outside the original 48×48 park, next to
-  // the soccer practice field. Wardrobe-slot reason for players to
-  // venture beyond the park.
-  { id: 'stall-shoes',      label: 'Sneaker Stand',    category: 'shoes',     x: 84, z: 20, facing: facePlaza(84, 20), color: '#e8c84a' },
-  { id: 'stall-hats',       label: 'The Hattery',      category: 'hat',       x: 28, z: 39, facing: facePlaza(28, 39), color: '#9bd96b' },
-  { id: 'stall-accessories',label: 'Glasses + Bags',   category: 'glasses',   x: 14, z: 34, facing: facePlaza(14, 34), color: '#d96bc4' },
-  { id: 'stall-scarves',    label: 'Cozy Scarves',     category: 'scarf',     x:  8, z: 28, facing: facePlaza(8, 28),  color: '#e89c4a' },
-  // Design Bench — placed just south of the plaza, on the spine path so
-  // players see it immediately after spawning at the plaza center.
+  // All x values += 86 from the original layout (map recenter).
+  { id: 'stall-shirts',     label: "Sasha's Shirts",   category: 'shirt',     x:  98, z: 16, facing: facePlaza( 98, 16), color: '#c14444' },
+  { id: 'stall-pants',      label: 'Pants Pavilion',   category: 'pants',     x: 121, z: 18, facing: facePlaza(121, 18), color: '#3a6ea5' },
+  { id: 'stall-shoes',      label: 'Sneaker Stand',    category: 'shoes',     x: 170, z: 20, facing: facePlaza(170, 20), color: '#e8c84a' },
+  { id: 'stall-hats',       label: 'The Hattery',      category: 'hat',       x: 114, z: 39, facing: facePlaza(114, 39), color: '#9bd96b' },
+  { id: 'stall-accessories',label: 'Glasses + Bags',   category: 'glasses',   x: 100, z: 34, facing: facePlaza(100, 34), color: '#d96bc4' },
+  { id: 'stall-scarves',    label: 'Cozy Scarves',     category: 'scarf',     x:  94, z: 28, facing: facePlaza( 94, 28), color: '#e89c4a' },
+  // Design Bench — just south of the plaza on the spine path.
   { id: 'stall-customize',  label: 'The Design Bench', category: 'customize', x: PLAZA_X, z: PLAZA_Z - 10, facing: 0, color: '#a85dd9' },
 ];
 

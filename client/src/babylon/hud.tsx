@@ -17,10 +17,15 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject } from 'react';
 import type { Phase } from '@rezona/core/3d';
 import {
+  clearBetResult,
   deleteLook,
   equipCustomDesign,
   getGameSnapshot,
   hydratePresetsFromStorage,
+  isItemOwned,
+  placeLocalBet,
+  priceFor,
+  purchaseItem,
   saveLook,
   subscribeGameStore,
   toggleAccessoryItem,
@@ -68,6 +73,14 @@ export function Hud({ phaseRef: _phaseRef, net }: HudProps) {
 
   const handleItemClick = (item: TextureItemDef | AccessoryItemDef) => {
     if (!stallItems) return;
+    // Economy gate: free items (priceFor === 0) and already-owned items
+    // toggle directly. Priced items require purchase first. If the player
+    // can't afford it, do nothing (the chip shows the locked state so the
+    // failure is visible without a popup).
+    if (!isItemOwned(item.id)) {
+      const bought = purchaseItem(item.id);
+      if (!bought) return;
+    }
     if (stallItems.kind === 'texture') toggleTextureItem(item.id);
     else toggleAccessoryItem(item.id);
   };
@@ -78,6 +91,9 @@ export function Hud({ phaseRef: _phaseRef, net }: HudProps) {
     <>
       <div style={topBadgeStyle}>
         <strong>Fairground</strong>
+        <span style={coinBadgeStyle} title="Coins — earn the daily bonus by checking in every 24h">
+          🪙 {snap.balance}
+        </span>
         <span style={{ opacity: 0.75, fontSize: '0.72rem' }}>
           {snap.roomCode ? `Room: ${snap.roomCode}` : snap.message}
         </span>
@@ -97,7 +113,23 @@ export function Hud({ phaseRef: _phaseRef, net }: HudProps) {
           }
           onItemClick={handleItemClick}
           savedLooks={snap.savedLooks}
+          balance={snap.balance}
         />
+      ) : null}
+
+      <SocialPanel
+        nearestName={snap.nearestOtherName}
+        crowdCount={snap.crowdCount}
+        crowdTimer={snap.crowdTimer}
+      />
+
+      {snap.nearbyPortalLabel ? (
+        <PortalPrompt label={snap.nearbyPortalLabel} />
+      ) : null}
+
+      <BettingPanel net={net} fixtures={snap.bettingFixtures} myBets={snap.myBets} balance={snap.balance} />
+      {snap.lastBetResult ? (
+        <BetResultToast result={snap.lastBetResult} fixtures={snap.bettingFixtures} />
       ) : null}
 
       <ChatPanel net={net} chat={snap.chat} selfId={snap.selfId} />
@@ -113,12 +145,14 @@ function StallPanel({
   isEquipped,
   onItemClick,
   savedLooks,
+  balance,
 }: {
   stall: StallDef;
   items: Array<TextureItemDef | AccessoryItemDef>;
   isEquipped: (id: string) => boolean;
   onItemClick: (item: TextureItemDef | AccessoryItemDef) => void;
   savedLooks: readonly SavedLook[];
+  balance: number;
 }) {
   // Customize is only meaningful for garment slots (shirt / pants / shoes).
   const inlineSlot: CustomSlot | null =
@@ -166,16 +200,38 @@ function StallPanel({
         <div style={stallGridStyle}>
           {items.map((item) => {
             const equipped = isEquipped(item.id);
+            const owned = isItemOwned(item.id);
+            const cost = priceFor(item.id);
+            // Locked = priced + not owned. We still let the click handler
+            // run (it'll call purchaseItem under the hood) — but visually
+            // dim the tile when the player can't afford it yet.
+            const locked = !owned;
+            const canAfford = owned || balance >= cost;
+            const tileStyle: CSSProperties = {
+              ...itemTileStyle,
+              ...(equipped ? itemTileEquippedStyle : {}),
+              ...(locked && !canAfford ? itemTileLockedStyle : {}),
+            };
             return (
               <button
                 key={item.id}
-                style={equipped ? { ...itemTileStyle, ...itemTileEquippedStyle } : itemTileStyle}
+                style={tileStyle}
                 onClick={() => onItemClick(item)}
                 aria-pressed={equipped}
+                title={
+                  equipped ? 'Equipped'
+                  : owned ? 'Owned — click to equip'
+                  : canAfford ? `Buy for ${cost} coins`
+                  : `Need ${cost - balance} more coins`
+                }
               >
                 <span style={{ ...swatchStyle, background: patternSwatchCss(item.swatch) }} />
                 <span style={itemLabelStyle}>{item.label}</span>
-                {equipped ? <span style={equippedDotStyle}>✓</span> : null}
+                {equipped ? (
+                  <span style={equippedDotStyle}>✓</span>
+                ) : locked ? (
+                  <span style={priceDotStyle}>🪙{cost}</span>
+                ) : null}
               </button>
             );
           })}
@@ -492,6 +548,231 @@ function SavedLookSwatch({ design }: { design: GarmentDesign }) {
 
 // ─── Chat panel ─────────────────────────────────────────────────────────────
 
+// ─── Social panel ───────────────────────────────────────────────────────────
+// Bottom-center floating prompts that promote multiplayer interaction:
+//   • "Press E to compliment <name>" — appears when a player is within
+//     compliment range. Compliments give the recipient +5 coins (anti-farm
+//     rate-limited on the server) and pop a floating heart on their avatar.
+//   • Crowd bonus progress — fills while ≥2 other players are within range;
+//     awards +50 coins at 30s of sustained crowd time, then resets.
+//   • "Press F to wave" — always-visible secondary hint.
+// All three are read-only displays; the input handlers live in game.ts.
+function SocialPanel({
+  nearestName,
+  crowdCount,
+  crowdTimer,
+}: {
+  nearestName: string;
+  crowdCount: number;
+  crowdTimer: number;
+}) {
+  const CROWD_THRESHOLD = 30;
+  const crowdPct = Math.min(100, Math.round((crowdTimer / CROWD_THRESHOLD) * 100));
+  const crowdActive = crowdCount >= 2;
+  return (
+    <div style={socialPanelStyle}>
+      {nearestName ? (
+        <div style={socialHintStyle}>
+          <kbd style={kbdStyle}>E</kbd>
+          <span>compliment <strong>{nearestName}</strong> (+5🪙 to them)</span>
+        </div>
+      ) : null}
+      <div style={{ ...socialHintStyle, opacity: 0.7 }}>
+        <kbd style={kbdStyle}>F</kbd>
+        <span>wave 👋</span>
+      </div>
+      {crowdActive ? (
+        <div style={socialHintStyle} title={`+50🪙 when this bar fills`}>
+          <span style={{ fontSize: '0.85rem' }}>👥 Crowd bonus</span>
+          <div style={crowdBarOuterStyle}>
+            <div style={{ ...crowdBarFillStyle, width: `${crowdPct}%` }} />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── Betting panel ──────────────────────────────────────────────────────────
+// Bottom-right corner widget showing the next match + (during the bet
+// window) three camp buttons. Click a camp + amount to place a bet. A
+// stake slider/buttons control how many coins to stake.
+function BettingPanel({
+  net,
+  fixtures,
+  myBets,
+  balance,
+}: {
+  net: NetClient | undefined;
+  fixtures: ReadonlyArray<import('./store').BettingFixtureSnapshot>;
+  myBets: ReadonlyMap<string, { camp: 'HOME' | 'DRAW' | 'AWAY'; amount: number }>;
+  balance: number;
+}) {
+  // Default stake — players can step up/down with the buttons.
+  const [stake, setStake] = useState<number>(50);
+  // Tick every second so the kick-off countdown updates.
+  const [, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (fixtures.length === 0) return null;
+  // Find the "primary" match — first one not yet resolved.
+  const primary = fixtures.find((f) => f.phase !== 'RESOLVED') ?? fixtures[0];
+  const now = Date.now();
+  const timeToKickoff = primary.kickoffMs - now;
+  const myBet = myBets.get(primary.id);
+
+  // Format the headline based on phase.
+  let headline = '';
+  if (primary.phase === 'BET_WINDOW') {
+    const mins = Math.floor(timeToKickoff / 60000);
+    const secs = Math.max(0, Math.floor((timeToKickoff % 60000) / 1000));
+    headline = `Kick-off in ${mins}:${secs.toString().padStart(2, '0')}`;
+  } else if (primary.phase === 'LIVE') {
+    headline = `LIVE · ${primary.minute}'`;
+  } else if (primary.phase === 'AWAIT_BET') {
+    const hours = Math.floor(timeToKickoff / 3600000);
+    const mins = Math.floor((timeToKickoff % 3600000) / 60000);
+    headline = `Bets open in ${hours > 0 ? `${hours}h ` : ''}${mins}m`;
+  } else if (primary.phase === 'RESOLVED') {
+    headline = `Final: ${primary.scoreHome}–${primary.scoreAway}`;
+  }
+
+  const totalPool = primary.poolHome + primary.poolDraw + primary.poolAway;
+  const odds = (campPool: number): string => {
+    if (campPool <= 0 || totalPool <= 0) return '—';
+    const mult = totalPool / campPool;
+    return `×${mult.toFixed(2)}`;
+  };
+
+  const placeBet = (camp: 'HOME' | 'DRAW' | 'AWAY') => {
+    if (!net || primary.phase !== 'BET_WINDOW') return;
+    if (myBet) return;  // one bet per match
+    if (balance < stake) return;
+    // Optimistically deduct + record locally; server confirms via
+    // `event:bet-ok` (no-op when it arrives since we already deducted).
+    const ok = placeLocalBet(primary.id, camp, stake);
+    if (!ok) return;
+    net.send('event:bet', { matchId: primary.id, camp, amount: stake });
+  };
+
+  const stakeOptions = [10, 50, 100, 200];
+
+  return (
+    <div style={bettingPanelStyle}>
+      <div style={bettingHeaderStyle}>
+        <span style={{ fontSize: '0.95rem', fontWeight: 700 }}>🏟️ {primary.homeTeam} vs {primary.awayTeam}</span>
+        <span style={{ fontSize: '0.78rem', opacity: 0.8 }}>{headline}</span>
+      </div>
+      {(primary.phase === 'LIVE' || primary.phase === 'RESOLVED') ? (
+        <div style={liveScoreStyle}>
+          {primary.scoreHome} – {primary.scoreAway}
+        </div>
+      ) : null}
+      <div style={bettingCampsStyle}>
+        {(['HOME', 'DRAW', 'AWAY'] as const).map((camp) => {
+          const label = camp === 'HOME' ? primary.homeCode : camp === 'AWAY' ? primary.awayCode : 'DRAW';
+          const pool = camp === 'HOME' ? primary.poolHome : camp === 'AWAY' ? primary.poolAway : primary.poolDraw;
+          const count = camp === 'HOME' ? primary.countHome : camp === 'AWAY' ? primary.countAway : primary.countDraw;
+          const isMine = myBet?.camp === camp;
+          const disabled = primary.phase !== 'BET_WINDOW' || !!myBet || balance < stake;
+          const won = primary.phase === 'RESOLVED' && primary.result === camp;
+          return (
+            <button
+              key={camp}
+              onClick={() => placeBet(camp)}
+              disabled={disabled}
+              style={{
+                ...bettingCampButtonStyle,
+                ...(isMine ? bettingCampMineStyle : {}),
+                ...(won ? bettingCampWonStyle : {}),
+                opacity: disabled && !isMine && !won ? 0.55 : 1,
+                cursor: disabled ? 'default' : 'pointer',
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>{label}</div>
+              <div style={{ fontSize: '0.7rem', opacity: 0.85 }}>{odds(pool)}</div>
+              <div style={{ fontSize: '0.65rem', opacity: 0.7 }}>{count} 🪙{pool}</div>
+            </button>
+          );
+        })}
+      </div>
+      {primary.phase === 'BET_WINDOW' && !myBet ? (
+        <div style={bettingStakeRowStyle}>
+          <span style={{ fontSize: '0.72rem', opacity: 0.7 }}>Stake</span>
+          {stakeOptions.map((opt) => (
+            <button
+              key={opt}
+              onClick={() => setStake(opt)}
+              style={{
+                ...bettingStakeButtonStyle,
+                ...(stake === opt ? bettingStakeButtonActiveStyle : {}),
+              }}
+              disabled={balance < opt}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {myBet ? (
+        <div style={bettingMyBetStyle}>
+          You bet {myBet.amount} 🪙 on <strong>{myBet.camp === 'HOME' ? primary.homeCode : myBet.camp === 'AWAY' ? primary.awayCode : 'DRAW'}</strong>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── Bet-result toast ───────────────────────────────────────────────────────
+// Briefly shown center-screen when a bet you placed resolves. Auto-clears.
+function BetResultToast({
+  result,
+  fixtures,
+}: {
+  result: { matchId: string; profit: number; payout: number };
+  fixtures: ReadonlyArray<import('./store').BettingFixtureSnapshot>;
+}) {
+  useEffect(() => {
+    const id = setTimeout(() => clearBetResult(), 5500);
+    return () => clearTimeout(id);
+  }, [result.matchId]);
+  const f = fixtures.find((x) => x.id === result.matchId);
+  const won = result.profit > 0;
+  const drawnEven = result.profit === 0 && result.payout > 0;
+  return (
+    <div style={{ ...betToastStyle, ...(won ? betToastWonStyle : drawnEven ? betToastEvenStyle : betToastLostStyle) }}>
+      <div style={{ fontSize: '1.05rem', fontWeight: 800 }}>
+        {won ? '🎉 You won!' : drawnEven ? '↩ Refunded' : '🪨 You lost'}
+      </div>
+      <div style={{ fontSize: '0.85rem', opacity: 0.92 }}>
+        {f ? `${f.homeTeam} ${f.scoreHome}–${f.scoreAway} ${f.awayTeam}` : 'Match'}
+      </div>
+      <div style={{ fontSize: '1.4rem', fontWeight: 800 }}>
+        {result.profit > 0 ? '+' : ''}{result.profit} 🪙
+      </div>
+    </div>
+  );
+}
+
+// ─── Portal prompt ──────────────────────────────────────────────────────────
+// Center-screen call to action when the player stands near a stadium
+// portal gate. Press G to leave this game and jump to the linked one.
+// game.ts wires the actual redirect — this just paints the prompt.
+function PortalPrompt({ label }: { label: string }) {
+  return (
+    <div style={portalPromptStyle}>
+      <div style={portalPromptLabelStyle}>🎮 {label}</div>
+      <div style={portalPromptCtaStyle}>
+        <kbd style={kbdStyle}>G</kbd>
+        <span>play this game</span>
+      </div>
+    </div>
+  );
+}
+
 function ChatPanel({
   net,
   chat,
@@ -610,6 +891,147 @@ const topBadgeStyle: CSSProperties = {
 const hintStyle: CSSProperties = { opacity: 0.55, fontSize: '0.7rem', marginTop: 4 };
 const stallHintStyle: CSSProperties = { color: '#1a5a1a', fontSize: '0.78rem', marginTop: 4, fontWeight: 600 };
 
+// Social prompts cluster — bottom-center, above chat. Non-interactive
+// (pointerEvents: none) so it doesn't block clicks on stalls behind it.
+const socialPanelStyle: CSSProperties = {
+  position: 'absolute', bottom: 110, left: '50%', transform: 'translateX(-50%)',
+  display: 'flex', flexDirection: 'column', gap: 6,
+  padding: '0.5rem 0.75rem', borderRadius: 12,
+  background: 'rgba(255, 255, 255, 0.82)',
+  color: '#1a1a1d', fontFamily: 'Inter, system-ui, sans-serif',
+  fontSize: '0.78rem', lineHeight: 1.3,
+  pointerEvents: 'none', userSelect: 'none',
+  backdropFilter: 'blur(8px)',
+  border: '1px solid rgba(0,0,0,0.06)',
+  minWidth: 220,
+  alignItems: 'flex-start',
+};
+const socialHintStyle: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 8,
+};
+const kbdStyle: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  minWidth: 22, height: 22, padding: '0 6px', borderRadius: 6,
+  background: '#1a1a1d', color: '#fff',
+  fontFamily: 'ui-monospace, monospace', fontSize: '0.72rem', fontWeight: 700,
+  boxShadow: 'inset 0 -2px 0 rgba(0,0,0,0.35)',
+};
+// ─── Betting panel styles ───────────────────────────────────────────────────
+const bettingPanelStyle: CSSProperties = {
+  position: 'absolute', bottom: 12, right: 12,
+  width: 280,
+  display: 'flex', flexDirection: 'column', gap: 8,
+  padding: '0.7rem 0.85rem', borderRadius: 14,
+  background: 'rgba(255,255,255,0.92)',
+  color: '#1a1a1d', fontFamily: 'Inter, system-ui, sans-serif',
+  fontSize: '0.78rem',
+  pointerEvents: 'auto', userSelect: 'none',
+  backdropFilter: 'blur(10px)',
+  border: '1px solid rgba(0,0,0,0.06)',
+  boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
+};
+const bettingHeaderStyle: CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 2,
+  paddingBottom: 4,
+  borderBottom: '1px solid rgba(0,0,0,0.08)',
+};
+const liveScoreStyle: CSSProperties = {
+  textAlign: 'center', fontSize: '1.4rem', fontWeight: 800,
+  padding: '4px 0',
+  color: '#c14444',
+};
+const bettingCampsStyle: CSSProperties = {
+  display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6,
+};
+const bettingCampButtonStyle: CSSProperties = {
+  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+  padding: '8px 4px', borderRadius: 8,
+  background: '#f1eee5',
+  border: '1px solid rgba(0,0,0,0.1)',
+  color: '#1a1a1d',
+  fontFamily: 'inherit',
+};
+const bettingCampMineStyle: CSSProperties = {
+  background: '#3a6ea5',
+  color: '#fff',
+  borderColor: '#3a6ea5',
+};
+const bettingCampWonStyle: CSSProperties = {
+  background: '#3a8634',
+  color: '#fff',
+  borderColor: '#3a8634',
+};
+const bettingStakeRowStyle: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 5,
+};
+const bettingStakeButtonStyle: CSSProperties = {
+  flex: 1,
+  padding: '5px 0', borderRadius: 6,
+  background: '#e8e2d4',
+  border: '1px solid rgba(0,0,0,0.08)',
+  color: '#1a1a1d',
+  fontFamily: 'inherit', fontSize: '0.72rem', fontWeight: 600,
+  cursor: 'pointer',
+};
+const bettingStakeButtonActiveStyle: CSSProperties = {
+  background: '#1a1a1d',
+  color: '#fff',
+  borderColor: '#1a1a1d',
+};
+const bettingMyBetStyle: CSSProperties = {
+  textAlign: 'center', fontSize: '0.75rem', opacity: 0.85,
+  paddingTop: 4,
+  borderTop: '1px dashed rgba(0,0,0,0.15)',
+};
+const betToastStyle: CSSProperties = {
+  position: 'absolute', top: '20%', left: '50%', transform: 'translate(-50%, -50%)',
+  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+  padding: '1.1rem 1.6rem', borderRadius: 18,
+  color: '#fff', fontFamily: 'Inter, system-ui, sans-serif',
+  pointerEvents: 'none', userSelect: 'none',
+  backdropFilter: 'blur(10px)',
+  boxShadow: '0 12px 36px rgba(0,0,0,0.4)',
+  border: '1px solid rgba(255,255,255,0.2)',
+  animation: 'fadeIn 0.3s',
+};
+const betToastWonStyle: CSSProperties = {
+  background: 'rgba(58, 134, 52, 0.92)',
+};
+const betToastLostStyle: CSSProperties = {
+  background: 'rgba(193, 68, 68, 0.92)',
+};
+const betToastEvenStyle: CSSProperties = {
+  background: 'rgba(60, 60, 80, 0.92)',
+};
+
+const portalPromptStyle: CSSProperties = {
+  position: 'absolute', top: '32%', left: '50%', transform: 'translate(-50%, -50%)',
+  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+  padding: '0.9rem 1.4rem', borderRadius: 16,
+  background: 'rgba(20, 24, 36, 0.86)',
+  color: '#fff', fontFamily: 'Inter, system-ui, sans-serif',
+  pointerEvents: 'none', userSelect: 'none',
+  backdropFilter: 'blur(10px)',
+  border: '1px solid rgba(255,255,255,0.18)',
+  boxShadow: '0 10px 32px rgba(0,0,0,0.35)',
+};
+const portalPromptLabelStyle: CSSProperties = {
+  fontSize: '1.05rem', fontWeight: 700, letterSpacing: '0.01em',
+};
+const portalPromptCtaStyle: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 8,
+  fontSize: '0.82rem', opacity: 0.9,
+};
+const crowdBarOuterStyle: CSSProperties = {
+  width: 140, height: 6, borderRadius: 3,
+  background: 'rgba(0,0,0,0.12)', overflow: 'hidden',
+};
+const crowdBarFillStyle: CSSProperties = {
+  height: '100%',
+  background: 'linear-gradient(90deg, #f5b042, #e8c84a)',
+  transition: 'width 0.2s linear',
+};
+
 const stallPanelStyle: CSSProperties = {
   position: 'absolute', top: 12, right: 12, bottom: '40%',
   width: 'min(340px, 42vw)',
@@ -661,6 +1083,27 @@ const equippedDotStyle: CSSProperties = {
   width: 18, height: 18, borderRadius: 9,
   background: '#1a1a1d', color: '#fff', fontSize: '0.7rem',
   display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
+
+const priceDotStyle: CSSProperties = {
+  position: 'absolute', top: 4, right: 4,
+  padding: '2px 6px', borderRadius: 8,
+  background: '#fff7d9', color: '#7a5a00',
+  fontSize: '0.62rem', fontWeight: 600,
+  border: '1px solid #e8c84a',
+  whiteSpace: 'nowrap',
+};
+
+const itemTileLockedStyle: CSSProperties = {
+  opacity: 0.55, cursor: 'not-allowed',
+};
+
+const coinBadgeStyle: CSSProperties = {
+  padding: '2px 10px', borderRadius: 10,
+  background: '#fff7d9', color: '#7a5a00',
+  border: '1px solid #e8c84a',
+  fontSize: '0.72rem', fontWeight: 700,
+  letterSpacing: '0.02em',
 };
 
 const chatPanelStyle: CSSProperties = {

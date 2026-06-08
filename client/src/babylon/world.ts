@@ -13,11 +13,11 @@
 import {
   Color3,
   Color4,
-  DynamicTexture,
   Material,
   Mesh,
   MeshBuilder,
   StandardMaterial,
+  Texture,
   TransformNode,
   Vector3,
   type ArcRotateCamera,
@@ -26,6 +26,7 @@ import {
   type Scene,
 } from '@babylonjs/core';
 import { createBaseSceneObjects, createStandardMaterial } from './helpers';
+import { ASSETS } from '../assets';
 import { RUNTIME_CONFIG } from './config';
 
 export interface GameWorldObjects {
@@ -36,20 +37,116 @@ export interface GameWorldObjects {
   dispose(): void;
 }
 
-// Spawn point + playable park extents — unchanged so server / game.ts
-// keep working with the existing coordinates.
-export const FAIR_CENTER = new Vector3(24, 0, 24);
+// Map recenter (2026-06-08): everything shifted +86 in x so the stadium
+// sits on the midline of a 220-wide map (was on the west edge of a
+// 400-wide map, leaving the east and west fences wildly asymmetric).
+// FAIR_CENTER + STADIUM_CENTER + all build-call positions reflect the
+// new origin. The internal geometry of each prop (relative offsets,
+// pillar angles, etc.) is unchanged.
+export const FAIR_CENTER = new Vector3(110, 0, 24);
 export const FAIR_SIZE = 48;
 export const PLAZA_RADIUS = 4.5;
 
-// Stadium center is north of the park. The server clamps players to
-// z ≤ 85, and the stadium's south wall sits at z ≈ 90 — so players
-// walk right up to the wall but can't pass through it.
-const STADIUM_CENTER = new Vector3(24, 0, 140);
-const STADIUM_OUTER_DIAMETER = 100;
-const STADIUM_OVAL_RATIO = 1.5;
-const STADIUM_WALL_HEIGHT = 22;
-const STADIUM_ROOF_Y = 24;
+// ─── Portal gates — leave THIS game and enter another in the Rezona app.
+// Modelled on the player-tunnel entrances at the base of stadium stands
+// (where teams emerge before a game). 5 of them, evenly distributed
+// around the field perimeter, all facing INWARD toward the field. When
+// the player walks within PORTAL_INTERACT_RADIUS of one (see game.ts),
+// a HUD prompt appears asking them to press G to play that game.
+export interface PortalGate {
+  readonly id: string;
+  readonly label: string;
+  readonly url: string;
+  /** Cover-image asset key registered in src/assets.ts. */
+  readonly cover:
+    | 'portal-cover-adventure'
+    | 'portal-cover-puzzle'
+    | 'portal-cover-racing'
+    | 'portal-cover-defender'
+    | 'portal-cover-cards';
+  /** Ground-plane position of the portal's center (computed below). */
+  readonly x: number;
+  readonly z: number;
+  /** Direction the cover image faces (inward normal in radians). */
+  readonly facing: number;
+}
+export const PORTAL_INTERACT_RADIUS = 3.5;
+
+// Stadium center — on the map midline, north of the park. Bigger than
+// before (outer diameter 140 vs 100) to give the interior room for
+// tiered stands + crowd backdrop, and to read as a proper arena from
+// the park. The wall is taller too so it can frame the new roof.
+const STADIUM_CENTER = new Vector3(110, 0, 150);
+const STADIUM_OUTER_DIAMETER = 140;
+const STADIUM_OVAL_RATIO = 1.4;
+const STADIUM_WALL_HEIGHT = 26;
+
+// Portal placements — angles on the stadium's INNER ellipse (the field
+// edge where the bottom tier of stands begins). All 5 face inward
+// toward the field center, just like real team-emergence tunnels. The
+// south arc (angle -π/2 ± 0.5) is reserved for the main gate, so the
+// 5 portals fan out across the remaining ~260° around the field.
+//
+// Distribution (clockwise from south-east, around the back, to south-west):
+//   SE → E → N (back) → W → SW
+const _stadiumPortalSpec: Array<{
+  id: string; label: string; url: string;
+  cover: PortalGate['cover']; angle: number;
+}> = [
+  { id: 'portal-adventure', label: 'Pixel Quest',
+    url: 'https://rezona.app/pixel-quest',
+    cover: 'portal-cover-adventure', angle: -Math.PI / 4 },          // SE
+  { id: 'portal-puzzle',    label: 'Bubble Tower',
+    url: 'https://rezona.app/bubble-tower',
+    cover: 'portal-cover-puzzle',    angle: Math.PI / 6 },            // E-NE
+  { id: 'portal-racing',    label: 'Kart Rush',
+    url: 'https://rezona.app/kart-rush',
+    cover: 'portal-cover-racing',    angle: Math.PI / 2 },            // N (back)
+  { id: 'portal-defender',  label: 'Sky Defender',
+    url: 'https://rezona.app/sky-defender',
+    cover: 'portal-cover-defender',  angle: Math.PI - Math.PI / 6 },  // W-NW
+  { id: 'portal-cards',     label: 'Card Clash',
+    url: 'https://rezona.app/card-clash',
+    cover: 'portal-cover-cards',     angle: Math.PI + Math.PI / 4 },  // SW
+];
+export const STADIUM_PORTAL_GATES: PortalGate[] = _stadiumPortalSpec.map((s) => {
+  // Place portals at the inner ellipse — the field edge where the
+  // bottom tier of stands begins. Stand inner edge = (ax-10, bz-10)
+  // matching STADIUM_KEEPOUT.innerAx/innerBz.
+  const ax = (STADIUM_OUTER_DIAMETER / 2) * STADIUM_OVAL_RATIO;
+  const bz = STADIUM_OUTER_DIAMETER / 2;
+  const STAND_TIERS = 5;
+  const TIER_INSET = 2.0;
+  const standInnerAx = ax - STAND_TIERS * TIER_INSET;
+  const standInnerBz = bz - STAND_TIERS * TIER_INSET;
+  // Sit the portal mouth ~1.2 units OUT FROM the inner edge of the
+  // stand (toward the field) so the cover plane doesn't z-fight the
+  // riser mesh behind it.
+  const cosA = Math.cos(s.angle);
+  const sinA = Math.sin(s.angle);
+  const nx = cosA / standInnerAx;
+  const nz = sinA / standInnerBz;
+  const nLen = Math.hypot(nx, nz);
+  // Inward-pointing unit normal (toward field center) at this angle:
+  const ux = -(nx / nLen);
+  const uz = -(nz / nLen);
+  const x = STADIUM_CENTER.x + standInnerAx * cosA + ux * 1.2;
+  const z = STADIUM_CENTER.z + standInnerBz * sinA + uz * 1.2;
+  return {
+    id: s.id, label: s.label, url: s.url, cover: s.cover,
+    x, z,
+    facing: Math.atan2(uz, ux),  // cover faces the field center
+  };
+});
+// Roof sits directly on top of the wall — used to be at y=30, leaving
+// a 4-unit visible gap between the wall top and the roof underside.
+const STADIUM_ROOF_Y = STADIUM_WALL_HEIGHT;
+// Interior floor flush with the outside ground (y=0). Used to be
+// raised 0.4 to feel like a step up, but with the player avatar
+// staying at y=0 inside the stadium, the avatar visibly sank below
+// the floor. Keeping floor flush + a different turf texture gives
+// the "you are now inside" cue without breaking the physics.
+const STADIUM_INTERIOR_FLOOR_Y = 0;
 
 export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWorldObjects {
   // LLM-EXTENSION:WORLD — Multiplayer stadium-park: 48×48 grass park (centered at 24,0,24) just south of a large football stadium (oval cylinder + roof torus + perimeter pillars + signage at z=125). Trees and grass are rendered as CROSSED-BILLBOARD 2D sprites (two perpendicular planes per instance with canvas-painted PNG textures via DynamicTexture) for a stylized Don't-Starve look. A championship football monument sits at the plaza center. Stalls live in entities.ts at scattered/organic positions with a new design: peaked awning + back-wall banner + side panels + lanterns. Camera is ArcRotateCamera; game.ts re-targets camera.target each frame. FAIR_CENTER/FAIR_SIZE preserved so spawn + server boundaries are unchanged.
@@ -63,27 +160,75 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   base.camera.target.copyFrom(FAIR_CENTER);
   base.camera.lowerRadiusLimit = 4;
   base.camera.upperRadiusLimit = 60;
+  // ArcRotateCamera.beta is the polar angle from +Y.
+  //   beta = 0      → camera above, looking straight down
+  //   beta = π/2    → camera horizontal, looking sideways
+  //   beta > π/2    → camera BELOW horizontal — looking UP at the
+  //                   target from a lower vantage point
+  //
+  // Hard clamp lowerBetaLimit so the camera can't pin vertically
+  // straight-down (looks weird and breaks framing). upperBetaLimit
+  // is INITIALLY π/2 + 0.7 rad (~40° below horizontal) — generous so
+  // players can look up at tall objects above the avatar. The game
+  // render loop ALSO bumps camera.target.y when beta goes past
+  // horizontal, which tilts the view direction up further (see
+  // game.ts lookUpBoost). The per-frame ground guard below stops the
+  // camera physically dipping below the ground plane regardless of
+  // beta.
+  base.camera.lowerBetaLimit = 0.15;
+  base.camera.upperBetaLimit = Math.PI / 2 + 0.7;
   base.camera.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
+
+  // Per-frame ground guard: compute the maximum beta that keeps the
+  // camera position at least GROUND_CAM_MARGIN above y=0. ArcRotate
+  // camera's y position = target.y + radius * cos(beta), so the limit
+  // is beta_max = acos((minY - target.y) / radius). Reapply each
+  // render — radius + target.y both change at runtime. Margin lowered
+  // to 0.15 so the camera can dip very close to the ground, giving
+  // more upward-tilt headroom.
+  const GROUND_CAM_MARGIN = 0.15;
+  scene.onBeforeRenderObservable.add(() => {
+    const c = base.camera;
+    if (c.radius <= 0) return;
+    const cosArg = (GROUND_CAM_MARGIN - c.target.y) / c.radius;
+    if (cosArg <= -1) { c.upperBetaLimit = Math.PI - 0.05; return; }
+    if (cosArg >=  1) { c.upperBetaLimit = 0.05; return; }
+    // Subtract a small epsilon so the camera never touches the ground.
+    const lower = c.lowerBetaLimit ?? 0.15;
+    c.upperBetaLimit = Math.max(lower + 0.05, Math.acos(cosArg) - 0.02);
+    if (c.beta > c.upperBetaLimit) c.beta = c.upperBetaLimit;
+  });
 
   base.hemiLight.intensity = 0.95;
   base.hemiLight.groundColor = new Color3(0.55, 0.6, 0.45);
   base.sunLight.intensity = 0.7;
 
   const allMeshes: Mesh[] = [];
-  const allTextures: DynamicTexture[] = [];
+  const allTextures: Texture[] = [];
   const allMaterials: StandardMaterial[] = [];
 
   // ─── Ground ───────────────────────────────────────────────────────────────
-  // Wide enough to fit the expanded 200×110 playable area, the stadium
-  // to the north (z up to ~190), and a buffer past the world edges so
-  // the horizon stays uninterrupted at max camera radius. Centered on
-  // the playable midpoint rather than the original park center.
+  // Map width is now 220 (was 400) after the recenter. Ground extent is
+  // still oversized to fill the horizon past the fence at max camera
+  // radius. Centered on the playable midpoint (x=110, z=110).
   const ground = MeshBuilder.CreateGround('park-ground', {
-    width: 360, height: 320, subdivisions: 1,
+    width: 460, height: 460, subdivisions: 1,
   }, scene);
-  ground.position.set(80, 0, 90);
-  ground.material = createStandardMaterial(scene, 'park-ground-mat', Color3.FromHexString('#74a05f'));
+  ground.position.set(110, 0, 110);
+  // AI-painted top-down grass texture, tiled across the whole ground.
+  // uScale/vScale = how many tile repeats fit across the ground; bigger
+  // = smaller-looking grass tufts. ~30 = ~20-unit tile = ~7× avatar
+  // height per tile, which reads as park grass at gameplay zoom.
+  const groundMat = createStandardMaterial(scene, 'park-ground-mat', Color3.FromHexString('#74a05f'));
+  const groundTex = new Texture(ASSETS['ground-grass'], scene);
+  groundTex.uScale = 30;
+  groundTex.vScale = 30;
+  groundTex.anisotropicFilteringLevel = 8;
+  groundMat.diffuseTexture = groundTex;
+  ground.material = groundMat;
   ground.receiveShadows = true;
+  allTextures.push(groundTex);
+  allMaterials.push(groundMat);
 
   // ─── Plaza disc + soft shadow ─────────────────────────────────────────────
   const plazaMat = createStandardMaterial(scene, 'plaza-mat', Color3.FromHexString('#d8c5a4'));
@@ -112,56 +257,92 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   //     plaza and photo spot
   //   - North spine continues to the stadium gate
   //   - Branches lead to the concession-stand cluster and amphitheater
+  // Walkway material — AI-painted sandy path texture, tiled.
   const pathMat = createStandardMaterial(scene, 'walkway-mat', Color3.FromHexString('#cbb389'));
+  const pathTex = new Texture(ASSETS['ground-path'], scene);
+  // Walkway boxes vary in length; one shared material with a moderate uScale
+  // tiles the path texture along the walkway's long axis. vScale is fixed
+  // so the texture reads at a consistent grain regardless of segment length.
+  pathTex.uScale = 4;
+  pathTex.vScale = 1;
+  pathTex.anisotropicFilteringLevel = 4;
+  pathMat.diffuseTexture = pathTex;
+  allTextures.push(pathTex);
+  allMaterials.push(pathMat);
+  // All x values += 86 from the original (map recenter).
   const pathSpec: Array<[number, number, number, number, number?]> = [
     // Park interior — central cross
-    [24,  1, 24, 47, 2.0],
-    [ 1, 24, 47, 24, 2.0],
+    [110,  1, 110, 47, 2.0],
+    [ 87, 24, 133, 24, 2.0],
     // Park interior — radial branches to stalls
-    [24, 14, 22, 14, 1.2],
-    [24, 18, 12, 16, 1.2],
-    [24, 18, 35, 18, 1.2],
-    [29, 24, 39, 32, 1.2],
-    [24, 32, 28, 39, 1.2],
-    [22, 32, 14, 34, 1.2],
-    [18, 24,  8, 28, 1.2],
-    // Extension — north spine to the stadium gate
-    [24, 47, 24, 82, 2.0],
+    [110, 14, 108, 14, 1.2],
+    [110, 18,  98, 16, 1.2],
+    [110, 18, 121, 18, 1.2],
+    [115, 24, 125, 32, 1.2],
+    [110, 32, 114, 39, 1.2],
+    [108, 32, 100, 34, 1.2],
+    [104, 24,  94, 28, 1.2],
+    // Extension — north spine to the stadium gate. Stadium grew so the
+    // south wall is now at z = STADIUM_CENTER.z - bz = 150 - 70 = 80.
+    [110, 47, 110, 78, 2.0],
     // Extension — east main artery past soccer + shoes to photo spot
-    [47, 24, 100, 24, 1.8],
-    // Branch — main artery → shoes stall + soccer field's south end
-    [70, 24, 80, 20, 1.4],
+    [133, 24, 186, 24, 1.8],
+    // Branch — main artery → shoes stall (extended to reach the stall)
+    [156, 24, 170, 20, 1.4],
     // Branch — south to concession cluster
-    [60, 24, 60, 12, 1.4],
-    // Branch — north to amphitheater
-    [62, 45, 62, 65, 1.4],
-    // Branch — north to trophy plaza (NE corner)
-    [100, 24, 100, 58, 1.6],
+    [146, 24, 146, 12, 1.4],
+    // Branch — north to amphitheater (extended to reach the stage front)
+    [148, 45, 148, 70, 1.4],
+    // Branch — north to trophy plaza, reaching the central pedestal
+    [186, 24, 186, 60, 1.6],
+    // Branch — short stub north to the photo selfie spot
+    [186, 24, 186, 25, 1.4],
   ];
   for (const [x1, z1, x2, z2, w] of pathSpec) {
     allMeshes.push(buildWalkway(scene, x1, z1, x2, z2, w ?? 1.5, pathMat));
   }
 
   // ─── Soccer practice field ────────────────────────────────────────────────
-  for (const m of buildSoccerField(scene, 72, 32)) allMeshes.push(m);
+  for (const m of buildSoccerField(scene, 158, 32)) allMeshes.push(m);
 
-  // ─── Stadium entrance gate ────────────────────────────────────────────────
-  for (const m of buildStadiumGate(scene, 24, 82)) allMeshes.push(m);
+  // ─── Stadium entrance gate — at the south wall of the enlarged stadium ───
+  // STADIUM_CENTER.z (150) - bz (70) = 80, the south face of the wall.
+  for (const m of buildStadiumGate(scene, STADIUM_CENTER.x, STADIUM_CENTER.z - 70)) allMeshes.push(m);
+
+  // ─── Portal gates — leave to another Rezona game ──────────────────────────
+  // Decorative gates mounted on the stadium wall with game cover images.
+  // game.ts watches the player's distance to each portal; HUD prompts on
+  // proximity; pressing G redirects the browser. See STADIUM_PORTAL_GATES.
+  for (const portal of STADIUM_PORTAL_GATES) {
+    for (const m of buildPortalGate(scene, portal)) allMeshes.push(m);
+  }
 
   // ─── Concession stand cluster (south-east, 4 colorful food carts) ────────
-  for (const m of buildConcessionCluster(scene, 60, 12)) allMeshes.push(m);
+  for (const m of buildConcessionCluster(scene, 146, 12)) allMeshes.push(m);
 
   // ─── Trophy plaza (north-east corner) ─────────────────────────────────────
-  for (const m of buildTrophyPlaza(scene, 100, 60)) allMeshes.push(m);
+  for (const m of buildTrophyPlaza(scene, 186, 60)) allMeshes.push(m);
 
   // ─── Photo selfie spot (far east) ─────────────────────────────────────────
-  for (const m of buildPhotoSpot(scene, 100, 25)) allMeshes.push(m);
+  for (const m of buildPhotoSpot(scene, 186, 25)) allMeshes.push(m);
 
   // ─── Amphitheater (north of soccer field) ─────────────────────────────────
-  for (const m of buildAmphitheater(scene, 62, 70)) allMeshes.push(m);
+  for (const m of buildAmphitheater(scene, 148, 70)) allMeshes.push(m);
 
   // ─── Stadium ──────────────────────────────────────────────────────────────
   for (const m of buildStadium(scene, STADIUM_CENTER.x, STADIUM_CENTER.z)) {
+    allMeshes.push(m);
+  }
+
+  // NOTE: buildStadiumPitch was here — the interior soccer pitch + goal
+  // posts have been removed at the user's request so the stadium
+  // interior is empty space (the ground texture shows through).
+
+  // ─── Park fence — visible boundary matching the server clamp ─────────────
+  // Map is now 220×220 (was 400×220 with stadium on west edge → wildly
+  // asymmetric fence distances). The east + west fences sit symmetric
+  // around the stadium midline at x=110.
+  for (const m of buildParkFence(scene, 0, 0, 220, 220)) {
     allMeshes.push(m);
   }
 
@@ -174,12 +355,10 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   // ONE texture + ONE material per type, shared across all instances of
   // that type. Each tree contributes 2 perpendicular planes (so the
   // silhouette reads as 3D from any rotation angle).
-  const oakTex = makeOakTexture(scene);
-  const pineTex = makePineTexture(scene);
-  allTextures.push(oakTex, pineTex);
+  const oakTex = loadSpriteTexture(scene, 'oak-tree');
+  allTextures.push(oakTex);
   const oakMat = makeFoliageMaterial(scene, 'oak-sprite-mat', oakTex);
-  const pineMat = makeFoliageMaterial(scene, 'pine-sprite-mat', pineTex);
-  allMaterials.push(oakMat, pineMat);
+  allMaterials.push(oakMat);
 
   // Tree positions span the FULL 260×260 ground, not just the playable
   // 48×48 park. Inside the park we keep a sparse handful (so walkways
@@ -189,62 +368,62 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   // park trees rather than shrubs. Positions are hand-placed and
   // avoid: the stadium footprint (x ∈ [-51, 99] && z ∈ [75, 175]) and
   // the central walkways.
-  // Thinned tree set (~35 trees, was 55) — opens the map so the new
-  // attractions (trophy plaza, concession cluster, photo spot,
-  // amphitheater) read clearly without forest clutter around them.
-  // Stays clear of: stadium footprint, walkways, attraction footprints.
+  // ~35 oak trees, no pines (per design call: oak only for a unified
+  // canopy look). Slightly varied scale per instance so the silhouette
+  // doesn't read as identical clones.
+  // All x values += 86 from the original (map recenter).
   const treeSpec: Array<[number, number, 'oak' | 'pine', number]> = [
-    // ─── Park interior — left as borders only, center clear ─────────────────
-    [ 6, 10, 'oak',  1.9],
-    [ 5, 32, 'oak',  1.7],
-    [ 6, 42, 'pine', 1.9],
-    [18,  6, 'pine', 1.7],
-    [30,  6, 'oak',  1.9],
-    [42, 12, 'oak',  1.8],
-    [44, 22, 'pine', 1.7],
-    [43, 32, 'oak',  1.9],
-    [36, 45, 'oak',  1.7],
-    [18, 44, 'pine', 1.8],
+    // ─── Park interior — borders only, center kept clear ─────────────────
+    [ 92, 10, 'oak',  1.9],
+    [ 91, 32, 'oak',  1.7],
+    [ 92, 42, 'oak',  1.9],
+    [104,  6, 'oak',  1.7],
+    [116,  6, 'oak',  1.9],
+    [128, 12, 'oak',  1.8],
+    [130, 22, 'oak',  1.7],
+    [129, 32, 'oak',  1.9],
+    [122, 45, 'oak',  1.7],
+    [104, 44, 'oak',  1.8],
 
-    // ─── South forest fringe (z < 0) — thinned, mainly silhouette ──────────
-    [-15, -12, 'pine', 2.0],
-    [ 10, -16, 'pine', 2.2],
-    [ 40, -10, 'pine', 1.9],
-    [ 70,  -8, 'pine', 2.1],
-    [ 30, -38, 'oak',  2.4],
-    [ 90, -25, 'oak',  2.2],
+    // ─── South tree fringe (just outside the south fence) ────────────────
+    [ 71,  -4, 'oak', 2.0],
+    [ 96,  -8, 'oak', 2.2],
+    [126,  -2, 'oak', 1.9],
+    [156,  -4, 'oak', 2.1],
+    [116, -18, 'oak', 2.4],
+    [176, -12, 'oak', 2.2],
 
-    // ─── East scatter — sparse so attractions stand out ─────────────────────
-    [ 88,  10, 'oak',  2.1],
-    [113,  18, 'pine', 2.0],
-    [113,  45, 'oak',  2.2],
-    [114,  68, 'pine', 2.0],
+    // ─── East scatter (around concession + soccer + trophy) ─────────────
+    [174, 10, 'oak', 2.1],
+    [199, 18, 'oak', 2.0],
+    [199, 45, 'oak', 2.2],
+    [200, 68, 'oak', 2.0],
 
-    // ─── West side (x < 0) — minimal frame ─────────────────────────────────
-    [-22,  28, 'pine', 1.9],
-    [-14,  58, 'oak',  2.3],
-    [-30,  12, 'pine', 1.9],
+    // ─── West scatter (mirror of east now that the stadium's centered) ──
+    [ 64, 28, 'oak', 1.9],
+    [ 72, 58, 'oak', 2.3],
+    [ 56, 12, 'oak', 1.9],
 
-    // ─── North buffer — frame the stadium gate ──────────────────────────────
-    [  8,  72, 'oak',  2.1],
-    [ 42,  74, 'pine', 2.0],
-    [ -6,  60, 'pine', 1.9],
-    [ 46,  56, 'oak',  2.0],
+    // ─── North buffer (frames the stadium gate) ────────────────────────
+    [ 94, 72, 'oak', 2.1],
+    [128, 74, 'oak', 2.0],
+    [ 80, 60, 'oak', 1.9],
+    [132, 56, 'oak', 2.0],
 
-    // ─── Behind stadium (z > 175, deep background) ─────────────────────────
-    [-15, 180, 'pine', 2.5],
-    [ 50, 190, 'oak',  2.6],
-    [ 90, 185, 'pine', 2.5],
+    // No "behind stadium" trees — the enlarged stadium now reaches all
+    // the way to the north fence (z=220), so there's no room for a
+    // tree band north of it.
   ];
-  for (const [x, z, type, scale] of treeSpec) {
-    const mat = type === 'oak' ? oakMat : pineMat;
-    for (const m of buildSpriteTree(scene, x, z, scale, mat, type)) allMeshes.push(m);
+  // Pine support kept in the type signature in case it returns later, but
+  // the catalog above is oak-only — all entries map to oakMat.
+  for (const [x, z, _type, scale] of treeSpec) {
+    for (const m of buildSpriteTree(scene, x, z, scale, oakMat, 'oak')) allMeshes.push(m);
   }
 
   // ─── Grass tufts — sprite-stacked across the green areas ──────────────────
   // One shared material; many tiny instances scattered with a 2D Poisson-
   // ish distribution that AVOIDS walkways, the plaza, and the centerpiece.
-  const grassTex = makeGrassTexture(scene);
+  const grassTex = loadSpriteTexture(scene, 'grass-tuft');
   allTextures.push(grassTex);
   const grassMat = makeFoliageMaterial(scene, 'grass-sprite-mat', grassTex);
   allMaterials.push(grassMat);
@@ -253,8 +432,10 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   // planes = ~150 transparent meshes) instead of ~290 (~580). Visual
   // density is preserved by slightly larger tufts in buildGrassTuft;
   // GPU jitter on lower-end hardware drops dramatically.
+  // Park interior grass — bounds shifted +86 to match the recentered
+  // plaza (x ∈ [88, 132] now, was [2, 46]).
   let grassIdx = 0;
-  for (let gx = 2; gx < 46; gx += 4.5) {
+  for (let gx = 88; gx < 132; gx += 4.5) {
     for (let gz = 2; gz < 46; gz += 4.5) {
       const jx = (Math.sin(grassIdx * 12.9898) * 43758.5453) % 1;
       const jz = (Math.sin(grassIdx * 78.233)  * 43758.5453) % 1;
@@ -267,15 +448,16 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   }
 
   // ─── Benches ──────────────────────────────────────────────────────────────
+  // x values += 86 (map recenter).
   const benchSpec: Array<[number, number, number]> = [
-    [21,  9,  Math.PI],
-    [27,  9,  0],
-    [21, 43,  Math.PI],
-    [27, 43,  0],
-    [ 9, 21,  Math.PI / 2],
-    [ 9, 27, -Math.PI / 2],
-    [39, 21,  Math.PI / 2],
-    [39, 27, -Math.PI / 2],
+    [107,  9,  Math.PI],
+    [113,  9,  0],
+    [107, 43,  Math.PI],
+    [113, 43,  0],
+    [ 95, 21,  Math.PI / 2],
+    [ 95, 27, -Math.PI / 2],
+    [125, 21,  Math.PI / 2],
+    [125, 27, -Math.PI / 2],
   ];
   for (const [x, z, rot] of benchSpec) {
     for (const m of buildBench(scene, x, z, rot)) allMeshes.push(m);
@@ -310,19 +492,19 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
 // Open-area filter for grass: rejects positions that overlap walkways,
 // the plaza, the centerpiece base, or the bench footprints.
 function isGrassOpenArea(x: number, z: number): boolean {
-  // Plaza disc + centerpiece radius
-  const dPlaza = Math.hypot(x - 24, z - 24);
+  // Plaza disc + centerpiece radius (map recenter: plaza is now at x=110).
+  const dPlaza = Math.hypot(x - 110, z - 24);
   if (dPlaza < PLAZA_RADIUS + 0.5) return false;
 
   // Main + cross walkways (1.2 wide buffer)
-  if (Math.abs(x - 24) < 1.5) return false;
+  if (Math.abs(x - 110) < 1.5) return false;
   if (Math.abs(z - 24) < 1.5) return false;
 
   // Skip tiles very close to known stall positions (small clearing
-  // around each stall counter so grass doesn't poke through the booth).
+  // around each stall counter). x values += 86 from the original.
   const stallPts = [
-    [12, 16], [35, 18], [39, 32], [28, 39],
-    [14, 34], [8, 28], [24, 14],
+    [ 98, 16], [121, 18], [125, 32], [114, 39],
+    [100, 34], [ 94, 28], [110, 14],
   ];
   for (const [sx, sz] of stallPts) {
     if (Math.hypot(x - sx, z - sz) < 2.4) return false;
@@ -354,7 +536,7 @@ function buildWalkway(scene: Scene, x1: number, z1: number, x2: number, z2: numb
 // Foliage materials: alpha-tested (no semi-transparency to sort), two-
 // sided, slightly self-lit so the planes don't acquire harsh directional
 // shading from one side.
-function makeFoliageMaterial(scene: Scene, name: string, tex: DynamicTexture): StandardMaterial {
+function makeFoliageMaterial(scene: Scene, name: string, tex: Texture): StandardMaterial {
   const mat = new StandardMaterial(name, scene);
   mat.diffuseTexture = tex;
   mat.diffuseTexture.hasAlpha = true;
@@ -376,18 +558,32 @@ function makeFoliageMaterial(scene: Scene, name: string, tex: DynamicTexture): S
 // One faces the X axis, the other faces the Z axis; together the
 // silhouette reads as a 3D shape from any camera angle.
 function buildSpriteTree(scene: Scene, x: number, z: number, scale: number, mat: StandardMaterial, type: 'oak' | 'pine'): Mesh[] {
-  // Texture aspect is 1:1 but pine renders taller than oak by ~1.4.
-  // Base size bumped 5 → 9 so trees reach ~5-7× the avatar height for
-  // a proper "park tree looming over you" feel.
   const aspectY = type === 'oak' ? 1.1 : 1.4;
   const size = 9 * scale;
-  const planeOpts = { width: size, height: size * aspectY, sideOrientation: Mesh.DOUBLESIDE };
+  const height = size * aspectY;
+  const planeOpts = { width: size, height, sideOrientation: Mesh.DOUBLESIDE };
 
+  // BOTTOM_PADDING_FRAC: the AI-painted sprites have ~8-12% transparent
+  // alpha padding at the bottom of the PNG (the silhouette doesn't
+  // extend all the way to the bottom edge). If we put the plane's
+  // bottom at world y=0, the visible trunk floats above the ground by
+  // that padding amount. Sinking the plane by this fraction of its
+  // height pushes the empty padding below the ground so the visible
+  // tree silhouette sits flush on the grass.
+  const BOTTOM_PADDING_FRAC = 0.1;
+  const planeCenterY = height / 2 - height * BOTTOM_PADDING_FRAC;
+
+  // 3 crossed planes at 0°/60°/120° (was 2 at 0°/90°) — eliminates the
+  // "missing one face" issue where a tree appeared as a 2D card when
+  // the camera was aligned with one of its plane axes. Three planes
+  // give 6 visible silhouettes around the tree (each plane has two
+  // sides), so the tree reads as 3D from every direction at the cost
+  // of just one extra draw per tree.
   const meshes: Mesh[] = [];
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < 3; i++) {
     const plane = MeshBuilder.CreatePlane(`tree-${type}-${x}-${z}-${i}`, planeOpts, scene);
-    plane.position.set(x, (size * aspectY) / 2, z);
-    plane.rotation.y = (i * Math.PI) / 2;
+    plane.position.set(x, planeCenterY, z);
+    plane.rotation.y = (i * Math.PI) / 3;
     plane.material = mat;
     plane.isPickable = false;
     meshes.push(plane);
@@ -398,17 +594,22 @@ function buildSpriteTree(scene: Scene, x: number, z: number, scale: number, mat:
 // Sprite-stacked grass tuft — same technique, smaller. Light random
 // rotation around Y per instance so the field doesn't read as aligned.
 function buildGrassTuft(scene: Scene, x: number, z: number, mat: StandardMaterial, seed: number): Mesh[] {
-  // Pseudo-random size + rotation, deterministic from seed.
   const r1 = ((Math.sin(seed * 17.31)  * 43758.5453) % 1 + 1) % 1;
   const r2 = ((Math.sin(seed * 53.179) * 43758.5453) % 1 + 1) % 1;
   const size = 0.6 + r1 * 0.4;
   const baseRot = r2 * Math.PI;
 
+  // Same bottom-padding trick as the trees: sink the plane so the
+  // padded alpha below the grass blades goes underground and the
+  // visible blades touch the ground.
+  const BOTTOM_PADDING_FRAC = 0.1;
+  const centerY = size / 2 - size * BOTTOM_PADDING_FRAC;
+
   const planeOpts = { width: size, height: size, sideOrientation: Mesh.DOUBLESIDE };
   const meshes: Mesh[] = [];
   for (let i = 0; i < 2; i++) {
     const plane = MeshBuilder.CreatePlane(`grass-${seed}-${i}`, planeOpts, scene);
-    plane.position.set(x, size / 2, z);
+    plane.position.set(x, centerY, z);
     plane.rotation.y = baseRot + (i * Math.PI) / 2;
     plane.material = mat;
     plane.isPickable = false;
@@ -418,127 +619,22 @@ function buildGrassTuft(scene: Scene, x: number, z: number, mat: StandardMateria
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TEXTURES — canvas-painted "PNG sprites" for the foliage.
-// Each builder creates a transparent canvas at the given size, paints
-// the silhouette + a couple of shading passes, returns the texture.
-
-const TREE_TEX_SIZE = 256;
-const GRASS_TEX_SIZE = 64;
-
-function makeOakTexture(scene: Scene): DynamicTexture {
-  const tex = new DynamicTexture('oak-sprite-tex', { width: TREE_TEX_SIZE, height: TREE_TEX_SIZE }, scene, false);
+// FOLIAGE SPRITE TEXTURES — generated upstream by the
+// rezona-pgc-tools-gen-image skill (gpt-image-2) and stored in
+// src/assets/sprite/, registered in src/assets.ts.
+//
+// The previous version painted each silhouette procedurally on a
+// DynamicTexture canvas — readable but visually blocky. The PNG sprites
+// give a much cleaner stylized cartoon look with proper alpha edges.
+// To regenerate or restyle, run:
+//   node ~/.claude/skills/rezona-pgc-tools-gen-image/scripts/gen-image.mjs \
+//     --model gpt-image-2 --kind sprite --size 1024x1024 --no-compress \
+//     --key <oak-tree|pine-tree|grass-tuft> --root client --prompt "..."
+function loadSpriteTexture(scene: Scene, assetKey: 'oak-tree' | 'pine-tree' | 'grass-tuft'): Texture {
+  const url = ASSETS[assetKey];
+  const tex = new Texture(url, scene, /* noMipmapOrOptions */ false, /* invertY */ true);
   tex.hasAlpha = true;
-  const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
-  ctx.clearRect(0, 0, TREE_TEX_SIZE, TREE_TEX_SIZE);
-
-  // Trunk
-  ctx.fillStyle = '#5d3e23';
-  ctx.fillRect(116, 165, 24, 85);
-  // Trunk shadow on left side
-  ctx.fillStyle = '#3e2814';
-  ctx.fillRect(116, 165, 8, 85);
-
-  // Foliage — overlapping circles for an organic bushy silhouette.
-  const blobs: Array<[number, number, number, string]> = [
-    [128,  90, 65, '#3a7036'],
-    [ 88, 122, 50, '#3a7036'],
-    [168, 122, 50, '#3a7036'],
-    [108,  68, 45, '#3a7036'],
-    [148,  68, 45, '#3a7036'],
-  ];
-  for (const [bx, by, br, fill] of blobs) {
-    ctx.fillStyle = fill;
-    ctx.beginPath();
-    ctx.arc(bx, by, br, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  // Highlights (lighter green on the upper-left)
-  ctx.fillStyle = '#5fa050';
-  ctx.beginPath();
-  ctx.arc(95, 75, 28, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(135, 95, 22, 0, Math.PI * 2);
-  ctx.fill();
-  // Dark base shadow
-  ctx.fillStyle = '#2b5226';
-  ctx.beginPath();
-  ctx.arc(128, 155, 50, 0, Math.PI * 2);
-  ctx.fill();
-
-  tex.update();
-  return tex;
-}
-
-function makePineTexture(scene: Scene): DynamicTexture {
-  const tex = new DynamicTexture('pine-sprite-tex', { width: TREE_TEX_SIZE, height: TREE_TEX_SIZE }, scene, false);
-  tex.hasAlpha = true;
-  const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
-  ctx.clearRect(0, 0, TREE_TEX_SIZE, TREE_TEX_SIZE);
-
-  // Trunk (shorter for pines — tucked under the lowest foliage layer)
-  ctx.fillStyle = '#4a2f1a';
-  ctx.fillRect(120, 210, 16, 40);
-  ctx.fillStyle = '#33200f';
-  ctx.fillRect(120, 210, 6, 40);
-
-  // Three stacked tapered triangles for a classic conifer silhouette.
-  const layers: Array<[number, number, number]> = [
-    // [centerX, peakY, baseY]
-    [128,  10,  90],
-    [128,  60, 150],
-    [128, 110, 215],
-  ];
-  for (let i = 0; i < layers.length; i++) {
-    const [cx, peakY, baseY] = layers[i];
-    const halfWidth = 50 + i * 18;
-    ctx.fillStyle = '#2a5e30';
-    ctx.beginPath();
-    ctx.moveTo(cx, peakY);
-    ctx.lineTo(cx - halfWidth, baseY);
-    ctx.lineTo(cx + halfWidth, baseY);
-    ctx.closePath();
-    ctx.fill();
-    // Lighter highlight on the left side of each layer
-    ctx.fillStyle = '#3f7a3e';
-    ctx.beginPath();
-    ctx.moveTo(cx, peakY);
-    ctx.lineTo(cx - halfWidth * 0.5, baseY);
-    ctx.lineTo(cx, baseY);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  tex.update();
-  return tex;
-}
-
-function makeGrassTexture(scene: Scene): DynamicTexture {
-  const tex = new DynamicTexture('grass-sprite-tex', { width: GRASS_TEX_SIZE, height: GRASS_TEX_SIZE }, scene, false);
-  tex.hasAlpha = true;
-  const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
-  ctx.clearRect(0, 0, GRASS_TEX_SIZE, GRASS_TEX_SIZE);
-
-  // Tuft of vertical blades. We draw 6 narrow tapered triangles fanning
-  // up from a central root. Each gets a slight color variation.
-  const greens = ['#4d8a3e', '#3e7a36', '#5a9a4a', '#447030'];
-  const rootX = GRASS_TEX_SIZE / 2;
-  const rootY = GRASS_TEX_SIZE - 4;
-  for (let i = 0; i < 6; i++) {
-    const angle = -Math.PI / 2 + (i - 2.5) * 0.18;
-    const length = 32 + (i % 3) * 6;
-    const tipX = rootX + Math.cos(angle) * length;
-    const tipY = rootY + Math.sin(angle) * length;
-    ctx.fillStyle = greens[i % greens.length];
-    ctx.beginPath();
-    ctx.moveTo(tipX, tipY);
-    ctx.lineTo(rootX - 3, rootY);
-    ctx.lineTo(rootX + 3, rootY);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  tex.update();
+  tex.name = `${assetKey}-sprite-tex`;
   return tex;
 }
 
@@ -767,54 +863,417 @@ function buildSoccerField(scene: Scene, cx: number, cz: number): Mesh[] {
     meshes.push(backCrossbar);
   }
 
+  // ─── Soccer ball at the center spot ──────────────────────────────────
+  // Static visual for now — a small black-and-white football sitting at
+  // the kickoff circle. Players walk through it (no physics body). True
+  // multiplayer-kickable would need server-authoritative ball state and
+  // collision impulses, which is a follow-up.
+  const ballWhiteMat = createStandardMaterial(scene, 'soccer-ball-white-mat', Color3.FromHexString('#f8f8f4'));
+  const ballDarkMat = createStandardMaterial(scene, 'soccer-ball-dark-mat', Color3.FromHexString('#222020'));
+  const ballRadius = 0.28;
+  const ballY = ballRadius;
+  const ball = MeshBuilder.CreateSphere('soccer-ball', {
+    diameter: ballRadius * 2, segments: 20,
+  }, scene);
+  ball.position.set(cx, ballY, cz);
+  ball.material = ballWhiteMat;
+  meshes.push(ball);
+
+  // Six dark hex patches around the ball surface — same technique as
+  // the centerpiece monument football.
+  const patchPositions: Array<[number, number]> = [
+    [0,                  0],
+    [Math.PI / 3,        Math.PI / 4],
+    [-Math.PI / 3,      -Math.PI / 4],
+    [2 * Math.PI / 3,    Math.PI / 4],
+    [-2 * Math.PI / 3,  -Math.PI / 4],
+    [Math.PI,            0],
+  ];
+  const patchOffset = ballRadius + 0.005;
+  for (let i = 0; i < patchPositions.length; i++) {
+    const [lon, lat] = patchPositions[i];
+    const px = cx + Math.cos(lat) * Math.cos(lon) * patchOffset;
+    const py = ballY + Math.sin(lat) * patchOffset;
+    const pz = cz + Math.cos(lat) * Math.sin(lon) * patchOffset;
+    const patch = MeshBuilder.CreateDisc(`soccer-ball-patch-${i}`, { radius: 0.07, tessellation: 6 }, scene);
+    patch.position.set(px, py, pz);
+    patch.lookAt(new Vector3(cx + (px - cx) * 100, ballY + (py - ballY) * 100, cz + (pz - cz) * 100));
+    patch.material = ballDarkMat;
+    meshes.push(patch);
+  }
+
   return meshes;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stadium entrance gate — a pair of tall pylons with a connecting arch
-// banner. Sits just inside the world's north boundary (z ≈ 82, server
-// clamps at z=85), so players walking up the spine path arrive AT the
-// gate but bump against the boundary before walking through the stadium.
+// Stadium entrance gate — a substantial arched gateway built INTO the
+// stadium's south wall. Two tall pylons flank a wide arched lintel + a
+// gold-trimmed banner. Sits at z = stadium_center_z - stadium_bz (right
+// at the outer wall surface), centered east-west on the stadium midline.
+// Players walking up the north spine path arrive AT the gate, then pass
+// through it — the angular keep-out gap in the wall band lets them
+// transit invisibly. Visually telegraphs "this is the way in".
 function buildStadiumGate(scene: Scene, cx: number, cz: number): Mesh[] {
   const meshes: Mesh[] = [];
   const pylonMat = createStandardMaterial(scene, 'gate-pylon-mat', Color3.FromHexString('#ededea'));
   const accentMat = createStandardMaterial(scene, 'gate-accent-mat', Color3.FromHexString('#3a6ea5'));
   const goldMat = createStandardMaterial(scene, 'gate-gold-mat', Color3.FromHexString('#e6c34a'));
+  const stoneMat = createStandardMaterial(scene, 'gate-stone-mat', Color3.FromHexString('#c2b294'));
 
-  // Left + right pylons (square columns flanking the path)
+  // Pylons sized to FULLY COVER the wall opening (no visible sky gap
+  // between pylon and wall edge). Wall opening half-chord at the
+  // south face = ax * sin(GATE_HALF_ANGLE) = 98 * sin(0.063) ≈ 6.16.
+  // Pylon outer edge = pylonHalfSpan + pylonWidth/2 = 4.9 + 1.3 = 6.2.
+  // Very slight overlap so adjacency reads as continuous.
   const pylonHeight = 7;
+  const pylonHalfSpan = 4.9;
+  const pylonWidth = 2.6;
   for (const sign of [-1, 1] as const) {
     const pylon = MeshBuilder.CreateBox(`gate-pylon-${sign}`, {
-      width: 1.4, height: pylonHeight, depth: 1.4,
+      width: pylonWidth, height: pylonHeight, depth: 2.0,
     }, scene);
-    pylon.position.set(cx + sign * 3.5, pylonHeight / 2, cz);
+    pylon.position.set(cx + sign * pylonHalfSpan, pylonHeight / 2, cz);
     pylon.material = pylonMat;
     meshes.push(pylon);
 
+    // Stone base ring at the bottom of each pylon
+    const baseRing = MeshBuilder.CreateBox(`gate-base-${sign}`, {
+      width: pylonWidth + 0.5, height: 0.4, depth: 2.5,
+    }, scene);
+    baseRing.position.set(cx + sign * pylonHalfSpan, 0.2, cz);
+    baseRing.material = stoneMat;
+    meshes.push(baseRing);
+
     // Gold cap on each pylon
     const cap = MeshBuilder.CreateCylinder(`gate-cap-${sign}`, {
-      height: 0.4, diameterTop: 0.9, diameterBottom: 1.5, tessellation: 12,
+      height: 0.35, diameterTop: 1.2, diameterBottom: 2.4, tessellation: 12,
     }, scene);
-    cap.position.set(cx + sign * 3.5, pylonHeight + 0.2, cz);
+    cap.position.set(cx + sign * pylonHalfSpan, pylonHeight + 0.18, cz);
     cap.material = goldMat;
     meshes.push(cap);
   }
 
-  // Arch banner connecting the two pylons
-  const arch = MeshBuilder.CreateBox('gate-arch', {
-    width: 8, height: 1.8, depth: 0.6,
+  // Lintel spans both pylons including their widths.
+  const lintelW = (pylonHalfSpan * 2) + pylonWidth;  // 12.4
+  const lintel = MeshBuilder.CreateBox('gate-lintel', {
+    width: lintelW, height: 1.6, depth: 0.9,
   }, scene);
-  arch.position.set(cx, pylonHeight - 0.4, cz);
-  arch.material = accentMat;
-  meshes.push(arch);
+  lintel.position.set(cx, pylonHeight - 0.3, cz);
+  lintel.material = accentMat;
+  meshes.push(lintel);
 
-  // Top trim on the arch
-  const trim = MeshBuilder.CreateBox('gate-trim', {
-    width: 8.4, height: 0.3, depth: 0.7,
+  // Gold trim across the top of the lintel
+  const lintelTrim = MeshBuilder.CreateBox('gate-lintel-trim', {
+    width: lintelW + 0.3, height: 0.3, depth: 1.05,
   }, scene);
-  trim.position.set(cx, pylonHeight + 0.65, cz);
-  trim.material = goldMat;
+  lintelTrim.position.set(cx, pylonHeight + 0.65, cz);
+  lintelTrim.material = goldMat;
+  meshes.push(lintelTrim);
+
+  return meshes;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Portal gate — modelled on a team-emergence tunnel at the base of
+// stadium stands. Two stout pillars frame a deep recessed dark opening
+// (the "tunnel mouth"), with the game's cover image hung inside the
+// recess. Players walk up to the front of the field-facing tunnel
+// mouth; HUD prompts on proximity; G key redirects to portal.url.
+function buildPortalGate(scene: Scene, portal: PortalGate): Mesh[] {
+  const meshes: Mesh[] = [];
+  const stoneMat = createStandardMaterial(scene, `portal-stone-${portal.id}`, Color3.FromHexString('#b8aa90'));
+  const trimMat = createStandardMaterial(scene, `portal-trim-${portal.id}`, Color3.FromHexString('#e6c34a'));
+  const tunnelMat = createStandardMaterial(scene, `portal-tunnel-${portal.id}`, Color3.FromHexString('#181410'));
+  tunnelMat.specularColor = new Color3(0, 0, 0);
+
+  // Build locally with the tunnel facing +Z (cover visible from +Z),
+  // then rotate so it faces `portal.facing` in world coords.
+  const root = new TransformNode(`portal-root-${portal.id}`, scene);
+  root.position.set(portal.x, 0, portal.z);
+  // facing=0 means the cover faces world +X. Local geometry faces +Z,
+  // so we rotate by (facing - π/2) around Y.
+  root.rotation.y = -portal.facing + Math.PI / 2;
+
+  // ── Dimensions — tunnel mouth: 5 wide, 4.5 tall, 1.4 deep.
+  const mouthW = 5.0;
+  const mouthH = 4.5;
+  const mouthD = 1.4;
+  const pillarW = 1.0;
+  const pillarD = mouthD + 0.2;
+
+  // Two stone pillars flanking the mouth
+  for (const sign of [-1, 1] as const) {
+    const pillar = MeshBuilder.CreateBox(`portal-pillar-${portal.id}-${sign}`, {
+      width: pillarW, height: mouthH, depth: pillarD,
+    }, scene);
+    pillar.position.set(sign * (mouthW / 2 + pillarW / 2), mouthH / 2, 0);
+    pillar.material = stoneMat;
+    pillar.parent = root;
+    meshes.push(pillar);
+  }
+
+  // Lintel across the top — stone, with a thin gold accent line
+  const lintelW = mouthW + 2 * pillarW + 0.4;
+  const lintel = MeshBuilder.CreateBox(`portal-lintel-${portal.id}`, {
+    width: lintelW, height: 0.9, depth: pillarD,
+  }, scene);
+  lintel.position.set(0, mouthH + 0.45, 0);
+  lintel.material = stoneMat;
+  lintel.parent = root;
+  meshes.push(lintel);
+
+  // Gold trim band under the lintel
+  const trim = MeshBuilder.CreateBox(`portal-trim-${portal.id}`, {
+    width: lintelW + 0.2, height: 0.18, depth: pillarD + 0.1,
+  }, scene);
+  trim.position.set(0, mouthH - 0.05, 0);
+  trim.material = trimMat;
+  trim.parent = root;
   meshes.push(trim);
+
+  // Tunnel recess — dark interior. Built as 3 boxes: back wall (deep
+  // inside) + roof underside + floor strip. Side walls are the inner
+  // faces of the pillars (already dark in shadow). The cover image
+  // hangs on the back wall, lit by emissive so it pops out of the dark.
+  const backWall = MeshBuilder.CreateBox(`portal-back-${portal.id}`, {
+    width: mouthW, height: mouthH, depth: 0.2,
+  }, scene);
+  backWall.position.set(0, mouthH / 2, -mouthD + 0.1);
+  backWall.material = tunnelMat;
+  backWall.parent = root;
+  meshes.push(backWall);
+
+  const tunnelRoof = MeshBuilder.CreateBox(`portal-roof-${portal.id}`, {
+    width: mouthW, height: 0.15, depth: mouthD,
+  }, scene);
+  tunnelRoof.position.set(0, mouthH - 0.075, -mouthD / 2);
+  tunnelRoof.material = tunnelMat;
+  tunnelRoof.parent = root;
+  meshes.push(tunnelRoof);
+
+  // ── Cover image — hung on the back wall of the tunnel recess.
+  // Slightly inset so the dark frame is visible around it. Emissive
+  // so the cover glows in the dark tunnel, drawing the eye to it.
+  const coverMat = new StandardMaterial(`portal-cover-mat-${portal.id}`, scene);
+  const coverTex = new Texture(ASSETS[portal.cover], scene, /* noMipmap */ false, /* invertY */ true);
+  coverTex.anisotropicFilteringLevel = 8;
+  coverMat.diffuseTexture = coverTex;
+  coverMat.emissiveTexture = coverTex;
+  coverMat.emissiveColor = new Color3(0.65, 0.65, 0.65);
+  coverMat.specularColor = new Color3(0, 0, 0);
+  coverMat.backFaceCulling = false;
+  const coverW = mouthW - 1.0;
+  const coverH = mouthH - 1.2;
+  const cover = MeshBuilder.CreatePlane(`portal-cover-${portal.id}`, {
+    width: coverW, height: coverH, sideOrientation: Mesh.DOUBLESIDE,
+  }, scene);
+  cover.position.set(0, mouthH / 2, -mouthD + 0.25);
+  cover.material = coverMat;
+  cover.parent = root;
+  meshes.push(cover);
+
+  return meshes;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REMOVED: buildStadiumPitch — the interior soccer pitch was removed
+// at the user's request so the stadium interior is now empty space
+// (just the ground texture showing through, double-sided wall enclosing
+// it). Players still walk in through the south gate but the inside is
+// a blank arena that future events / mini-games can fill.
+// The function definition below is kept commented-out as a reference
+// in case the pitch needs to come back later.
+/* function _DELETED_buildStadiumPitch(scene: Scene, cx: number, cz: number): Mesh[] {
+  const meshes: Mesh[] = [];
+  const turfMat = createStandardMaterial(scene, 'stadium-pitch-turf-mat', Color3.FromHexString('#3a8634'));
+  const lineMat = createStandardMaterial(scene, 'stadium-pitch-line-mat', Color3.FromHexString('#f4f4ee'));
+  const goalMat = createStandardMaterial(scene, 'stadium-pitch-goal-mat', Color3.FromHexString('#f4f4ee'));
+
+  const pitchW = 100;
+  const pitchD = 60;
+
+  const pitch = MeshBuilder.CreateBox('stadium-pitch', {
+    width: pitchW, height: 0.06, depth: pitchD,
+  }, scene);
+  pitch.position.set(cx, 0.04, cz);
+  pitch.material = turfMat;
+  pitch.isPickable = false;
+  meshes.push(pitch);
+
+  // Field lines — long edges, short edges, halfway line
+  const halfW = pitchW / 2;
+  const halfD = pitchD / 2;
+  const lineY = 0.075;
+  const lineWidth = 0.4;
+  const borderSpec: Array<[number, number, number, number]> = [
+    // [w, d, dx, dz] relative to pitch center
+    [pitchW, lineWidth,  0,  halfD],
+    [pitchW, lineWidth,  0, -halfD],
+    [lineWidth, pitchD,  halfW,  0],
+    [lineWidth, pitchD, -halfW,  0],
+    [pitchW, lineWidth,  0,  0],  // halfway line
+  ];
+  for (let i = 0; i < borderSpec.length; i++) {
+    const [w, d, dx, dz] = borderSpec[i];
+    const line = MeshBuilder.CreateBox(`stadium-pitch-line-${i}`, {
+      width: w, height: 0.05, depth: d,
+    }, scene);
+    line.position.set(cx + dx, lineY, cz + dz);
+    line.material = lineMat;
+    line.isPickable = false;
+    meshes.push(line);
+  }
+
+  // Center circle (torus)
+  const centerCircle = MeshBuilder.CreateTorus('stadium-pitch-center-circle', {
+    diameter: 12, thickness: 0.35, tessellation: 40,
+  }, scene);
+  centerCircle.position.set(cx, lineY, cz);
+  centerCircle.material = lineMat;
+  centerCircle.isPickable = false;
+  meshes.push(centerCircle);
+
+  // Two goals — one at each short end
+  for (const sign of [1, -1] as const) {
+    const goalZ = cz + sign * (halfD - 0.5);
+    // Crossbar
+    const crossbar = MeshBuilder.CreateBox(`stadium-pitch-goal-${sign}-crossbar`, {
+      width: 9, height: 0.25, depth: 0.25,
+    }, scene);
+    crossbar.position.set(cx, 4.0, goalZ);
+    crossbar.material = goalMat;
+    meshes.push(crossbar);
+    // Posts (L + R, front + back)
+    for (const px of [-4.4, 4.4]) {
+      const post = MeshBuilder.CreateCylinder(`stadium-pitch-goal-${sign}-post-${px}`, {
+        height: 4.0, diameter: 0.3, tessellation: 10,
+      }, scene);
+      post.position.set(cx + px, 2.0, goalZ);
+      post.material = goalMat;
+      meshes.push(post);
+    }
+    // Back depth posts
+    for (const px of [-4.4, 4.4]) {
+      const back = MeshBuilder.CreateCylinder(`stadium-pitch-goal-${sign}-back-${px}`, {
+        height: 4.0, diameter: 0.25, tessellation: 10,
+      }, scene);
+      back.position.set(cx + px, 2.0, goalZ + sign * 1.8);
+      back.material = goalMat;
+      meshes.push(back);
+    }
+    // Back crossbar
+    const backBar = MeshBuilder.CreateBox(`stadium-pitch-goal-${sign}-back-crossbar`, {
+      width: 9, height: 0.2, depth: 0.2,
+    }, scene);
+    backBar.position.set(cx, 4.0, goalZ + sign * 1.8);
+    backBar.material = goalMat;
+    meshes.push(backBar);
+  }
+
+  // Center spot ball
+  const ballWhite = createStandardMaterial(scene, 'stadium-pitch-ball-white', Color3.FromHexString('#f8f8f4'));
+  const ballDark = createStandardMaterial(scene, 'stadium-pitch-ball-dark', Color3.FromHexString('#222020'));
+  const ballR = 0.45;
+  const ball = MeshBuilder.CreateSphere('stadium-pitch-ball', { diameter: ballR * 2, segments: 22 }, scene);
+  ball.position.set(cx, ballR, cz);
+  ball.material = ballWhite;
+  meshes.push(ball);
+  const patchPos: Array<[number, number]> = [
+    [0, 0], [Math.PI / 3, Math.PI / 4], [-Math.PI / 3, -Math.PI / 4],
+    [2 * Math.PI / 3, Math.PI / 4], [-2 * Math.PI / 3, -Math.PI / 4], [Math.PI, 0],
+  ];
+  for (let i = 0; i < patchPos.length; i++) {
+    const [lon, lat] = patchPos[i];
+    const px = cx + Math.cos(lat) * Math.cos(lon) * (ballR + 0.005);
+    const py = ballR + Math.sin(lat) * (ballR + 0.005);
+    const pz = cz + Math.cos(lat) * Math.sin(lon) * (ballR + 0.005);
+    const patch = MeshBuilder.CreateDisc(`stadium-pitch-ball-patch-${i}`, { radius: 0.11, tessellation: 6 }, scene);
+    patch.position.set(px, py, pz);
+    patch.lookAt(new Vector3(cx + (px - cx) * 100, ballR + (py - ballR) * 100, cz + (pz - cz) * 100));
+    patch.material = ballDark;
+    meshes.push(patch);
+  }
+
+  return meshes;
+} */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Park fence: a low wooden boundary that traces the playable-area
+// rectangle. Each side is ONE long thin box (cheap to render) with
+// regularly-spaced posts on top for shape. The fence is purely visual —
+// the actual clamp happens server-side via gameConfig.world bounds and
+// the movePlayer wall logic. Placed JUST INSIDE the world boundary so
+// the player never sees a fence beyond their walkable area.
+function buildParkFence(scene: Scene, x0: number, z0: number, x1: number, z1: number): Mesh[] {
+  const meshes: Mesh[] = [];
+  const railMat = createStandardMaterial(scene, 'fence-rail-mat', Color3.FromHexString('#8a6435'));
+  const postMat = createStandardMaterial(scene, 'fence-post-mat', Color3.FromHexString('#6b4e26'));
+
+  const RAIL_HEIGHT = 1.1;
+  const RAIL_THICK = 0.18;
+  const POST_SIZE = 0.32;
+  const POST_HEIGHT = 1.4;
+  const POST_SPACING = 8;
+
+  // 4 long rail boxes — one per edge. Width/depth swap depending on the
+  // axis the edge runs along. Centered on each edge, raised so the
+  // bottom of the rail sits on the ground.
+  const cx = (x0 + x1) / 2;
+  const cz = (z0 + z1) / 2;
+  const xLen = x1 - x0;
+  const zLen = z1 - z0;
+  const railY = RAIL_HEIGHT / 2;
+
+  // South rail (z = z0)
+  const sRail = MeshBuilder.CreateBox('fence-rail-s', { width: xLen, height: RAIL_HEIGHT, depth: RAIL_THICK }, scene);
+  sRail.position.set(cx, railY, z0);
+  sRail.material = railMat;
+  meshes.push(sRail);
+
+  // North rail (z = z1)
+  const nRail = MeshBuilder.CreateBox('fence-rail-n', { width: xLen, height: RAIL_HEIGHT, depth: RAIL_THICK }, scene);
+  nRail.position.set(cx, railY, z1);
+  nRail.material = railMat;
+  meshes.push(nRail);
+
+  // West rail (x = x0)
+  const wRail = MeshBuilder.CreateBox('fence-rail-w', { width: RAIL_THICK, height: RAIL_HEIGHT, depth: zLen }, scene);
+  wRail.position.set(x0, railY, cz);
+  wRail.material = railMat;
+  meshes.push(wRail);
+
+  // East rail (x = x1)
+  const eRail = MeshBuilder.CreateBox('fence-rail-e', { width: RAIL_THICK, height: RAIL_HEIGHT, depth: zLen }, scene);
+  eRail.position.set(x1, railY, cz);
+  eRail.material = railMat;
+  meshes.push(eRail);
+
+  // Posts every POST_SPACING along each edge — square caps on top of
+  // the rail, so the boundary reads as a built fence, not a flat panel.
+  const postY = POST_HEIGHT / 2;
+  // South + North posts (vary x, fix z to z0 / z1)
+  for (let x = x0; x <= x1; x += POST_SPACING) {
+    for (const z of [z0, z1]) {
+      const post = MeshBuilder.CreateBox(`fence-post-x${x}-z${z}`, {
+        width: POST_SIZE, height: POST_HEIGHT, depth: POST_SIZE,
+      }, scene);
+      post.position.set(x, postY, z);
+      post.material = postMat;
+      meshes.push(post);
+    }
+  }
+  // West + East posts (vary z, fix x to x0 / x1), skip the corners
+  // already covered by the south/north loops above.
+  for (let z = z0 + POST_SPACING; z < z1; z += POST_SPACING) {
+    for (const x of [x0, x1]) {
+      const post = MeshBuilder.CreateBox(`fence-post-x${x}-z${z}`, {
+        width: POST_SIZE, height: POST_HEIGHT, depth: POST_SIZE,
+      }, scene);
+      post.position.set(x, postY, z);
+      post.material = postMat;
+      meshes.push(post);
+    }
+  }
 
   return meshes;
 }
@@ -1136,26 +1595,39 @@ function buildAmphitheater(scene: Scene, cx: number, cz: number): Mesh[] {
   stage.material = stageMat;
   meshes.push(stage);
 
-  // Three tiered seating rows curving around the back of the stage.
-  // Each row is a partial torus segment approximated by a wider, flatter
-  // torus with most of it hidden by the next-larger row in front.
-  const tierSpecs: Array<[number, number, number]> = [
-    // [innerRadius, height, y]
-    [5.5, 0.5, 0.25],
-    [7.5, 0.9, 0.65],
-    [9.5, 1.4, 1.05],
-  ];
-  for (let i = 0; i < tierSpecs.length; i++) {
-    const [r, h, y] = tierSpecs[i];
-    const tier = MeshBuilder.CreateCylinder(`amp-tier-${i}`, {
-      height: h, diameter: r * 2 + 1.2, tessellation: 24,
-      cap: Mesh.NO_CAP,
+  // Backdrop — a flat rectangular wall behind the stage. Two prior
+  // attempts (hollow cylinder bands, then a solid half-cylinder bowl)
+  // both rendered as floating discs when the camera dropped low: the
+  // half-cylinder's CAP_ALL top dominated top-down views, the hollow
+  // tube's open ends caused the original "flying ribbon" bug. A plain
+  // box reads correctly from every angle.
+  const backdrop = MeshBuilder.CreateBox('amp-backdrop', {
+    width: 12, height: 3.2, depth: 0.5,
+  }, scene);
+  backdrop.position.set(cx, 1.6, cz + 1.5);
+  backdrop.material = tierMat;
+  meshes.push(backdrop);
+
+  // Two side wings angled inward — gives the backdrop a "shell stage"
+  // silhouette without resorting to curves. Each side panel is rotated
+  // around Y so its inner face angles toward the stage.
+  for (const sign of [-1, 1] as const) {
+    const wing = MeshBuilder.CreateBox(`amp-backdrop-wing-${sign}`, {
+      width: 3.5, height: 2.6, depth: 0.45,
     }, scene);
-    tier.position.set(cx, y, cz + 0.5);
-    tier.scaling.set(1.2, 1, 0.6);
-    tier.material = i === tierSpecs.length - 1 ? tierAccentMat : tierMat;
-    meshes.push(tier);
+    wing.position.set(cx + sign * 5.5, 1.3, cz + 0.4);
+    wing.rotation.y = sign * 0.45;  // ~26° toward the stage
+    wing.material = tierMat;
+    meshes.push(wing);
   }
+
+  // Top trim — runs along the top of the backdrop in the accent color.
+  const trim = MeshBuilder.CreateBox('amp-backdrop-trim', {
+    width: 12.4, height: 0.28, depth: 0.6,
+  }, scene);
+  trim.position.set(cx, 3.34, cz + 1.5);
+  trim.material = tierAccentMat;
+  meshes.push(trim);
 
   // Flagpole + flag on the stage
   const pole = MeshBuilder.CreateCylinder('amp-flagpole', {
@@ -1183,35 +1655,291 @@ function buildStadium(scene: Scene, cx: number, cz: number): Mesh[] {
   const grayMat = createStandardMaterial(scene, 'stadium-gray', Color3.FromHexString('#8a8a86'));
   const whiteMat = createStandardMaterial(scene, 'stadium-white', Color3.FromHexString('#ededea'));
   const accentMat = createStandardMaterial(scene, 'stadium-accent', Color3.FromHexString('#3a6ea5'));
+  const seatMat = createStandardMaterial(scene, 'stadium-seat', Color3.FromHexString('#5a4030'));
+  const roofMat = createStandardMaterial(scene, 'stadium-roof-mat', Color3.FromHexString('#aeb1b4'));
 
-  const outerWall = MeshBuilder.CreateCylinder('stadium-outer-wall', {
-    height: STADIUM_WALL_HEIGHT,
-    diameter: STADIUM_OUTER_DIAMETER,
-    tessellation: 32,
-    cap: Mesh.NO_CAP,
+  // ── Interior turf floor — flush with outside ground, painted with the
+  // AI-generated stadium-turf texture. Built as a flat oval disc that
+  // fills the inner ellipse. Sits a hair above y=0 to avoid z-fighting
+  // with the park ground beneath.
+  const turfMat = createStandardMaterial(scene, 'stadium-turf-mat', Color3.FromHexString('#3a8634'));
+  const turfTex = new Texture(ASSETS['stadium-turf'], scene);
+  turfTex.uScale = 8;
+  turfTex.vScale = 8;
+  turfTex.anisotropicFilteringLevel = 8;
+  turfMat.diffuseTexture = turfTex;
+  const innerAxFloor = (STADIUM_OUTER_DIAMETER / 2) * STADIUM_OVAL_RATIO - 12;
+  const innerBzFloor = STADIUM_OUTER_DIAMETER / 2 - 12;
+  const floor = MeshBuilder.CreateDisc('stadium-floor', {
+    radius: 1, tessellation: 64,
   }, scene);
-  outerWall.position.set(cx, STADIUM_WALL_HEIGHT / 2, cz);
-  outerWall.scaling.set(STADIUM_OVAL_RATIO, 1, 1);
-  outerWall.material = beigeMat;
-  meshes.push(outerWall);
+  floor.rotation.x = Math.PI / 2;
+  floor.scaling.set(innerAxFloor, innerBzFloor, 1);
+  floor.position.set(cx, 0.02, cz);
+  floor.material = turfMat;
+  floor.isPickable = false;
+  meshes.push(floor);
 
-  const roofRing = MeshBuilder.CreateTorus('stadium-roof', {
-    diameter: STADIUM_OUTER_DIAMETER + 4,
-    thickness: 6,
-    tessellation: 32,
+  // Wall is built in TWO ribbons so the gate cut-out is only at the
+  // bottom (doorway height) — the wall closes off above the lintel.
+  // Old version had a full-height gap that looked like a "sky window"
+  // above the gate.
+  //
+  //   ┌───────────────────────┐
+  //   │      UPPER (no gap)   │   y ∈ [GATE_OPENING_HEIGHT, wallTop]
+  //   ├───┐               ┌───┤
+  //   │   │               │   │   y ∈ [0, GATE_OPENING_HEIGHT]
+  //   │   │               │   │   LOWER (gap at south)
+  //   └───┘               └───┘
+  //         ←─ gate gap ─→
+  const ax = (STADIUM_OUTER_DIAMETER / 2) * STADIUM_OVAL_RATIO;
+  const bz = STADIUM_OUTER_DIAMETER / 2;
+  const wallTopY = STADIUM_WALL_HEIGHT;
+  // Doorway height = just above the gate's lintel-trim top
+  // (pylonHeight 7 + lintelTrim center 0.65 + half-trim 0.15 ≈ 7.8).
+  const GATE_OPENING_HEIGHT = 8.2;
+  // Gap angular half-width on the south side. Sized so the wall opening
+  // exactly frames the gate's pylons (outer pylon edges at cx ± 5.9,
+  // so chord_half ≈ 5.9, angle_half = asin(5.9/ax) ≈ 0.060 rad at the
+  // enlarged ax=98). The collision keep-out angle is updated to match
+  // — see obstacles.ts STADIUM_KEEPOUT.entranceHalfAngle.
+  const GATE_HALF_ANGLE = 0.063;
+  const segments = 64;
+
+  // LOWER wall: ribbon following the ellipse from east edge of gap → CCW
+  // around → west edge of gap. y range [0, GATE_OPENING_HEIGHT].
+  const lowerBottom: Vector3[] = [];
+  const lowerTop: Vector3[] = [];
+  const angleStart = -Math.PI / 2 + GATE_HALF_ANGLE;
+  const angleEnd = -Math.PI / 2 + 2 * Math.PI - GATE_HALF_ANGLE;
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const a = angleStart + (angleEnd - angleStart) * t;
+    const x = cx + ax * Math.cos(a);
+    const z = cz + bz * Math.sin(a);
+    lowerBottom.push(new Vector3(x, 0, z));
+    lowerTop.push(new Vector3(x, GATE_OPENING_HEIGHT, z));
+  }
+  const lowerWall = MeshBuilder.CreateRibbon('stadium-outer-wall-lower', {
+    pathArray: [lowerBottom, lowerTop],
+    sideOrientation: Mesh.DOUBLESIDE,
+    closeArray: false,
+    closePath: false,
   }, scene);
-  roofRing.position.set(cx, STADIUM_ROOF_Y, cz);
-  roofRing.scaling.set(STADIUM_OVAL_RATIO, 0.45, 1);
-  roofRing.material = grayMat;
-  meshes.push(roofRing);
+  lowerWall.material = beigeMat;
+  meshes.push(lowerWall);
 
-  const a = (STADIUM_OUTER_DIAMETER / 2) * STADIUM_OVAL_RATIO;
-  const b = STADIUM_OUTER_DIAMETER / 2;
-  const numPillars = 24;
+  // UPPER wall: ribbon going ALL THE WAY around the ellipse (closed
+  // path — no gap), from y = GATE_OPENING_HEIGHT up to the wall top.
+  // Closes off the sky window that used to sit above the gate.
+  const upperBottom: Vector3[] = [];
+  const upperTop: Vector3[] = [];
+  const upperSegments = 64;
+  for (let i = 0; i <= upperSegments; i++) {
+    const t = i / upperSegments;
+    const a = t * Math.PI * 2;
+    const x = cx + ax * Math.cos(a);
+    const z = cz + bz * Math.sin(a);
+    upperBottom.push(new Vector3(x, GATE_OPENING_HEIGHT, z));
+    upperTop.push(new Vector3(x, wallTopY, z));
+  }
+  const upperWall = MeshBuilder.CreateRibbon('stadium-outer-wall-upper', {
+    pathArray: [upperBottom, upperTop],
+    sideOrientation: Mesh.DOUBLESIDE,
+    closeArray: false,
+    closePath: true,
+  }, scene);
+  upperWall.material = beigeMat;
+  meshes.push(upperWall);
+
+  // ── Tiered stands — N concentric rings that step UP and OUTWARD as
+  // you move away from the field. Tier 0 is the lowest (closest to the
+  // field, smallest radius), tier N-1 is the highest (closest to the
+  // wall, largest radius). The riser of each tier faces INWARD (toward
+  // the field) so spectators "sit" on the shelf facing the action.
+  //
+  //                                            ┌─── wall (radius ax)
+  //                                       ┌────┘
+  //                                ┌──────┘            tier N-1 (top)
+  //                          ┌────┘
+  //                    ┌────┘                          ...
+  //              ┌────┘
+  //        ┌────┘                                      tier 0 (bottom)
+  //  field ┘──────────────────                         (radius ax_in)
+  //
+  // Stand depth (on each axis) = STAND_TIERS * TIER_INSET = 10, so the
+  // inner edge of the bottom tier lands at (ax-10, bz-10) = (88, 60),
+  // matching STADIUM_KEEPOUT.innerAx/innerBz — keep-out stays accurate.
+  const STAND_TIERS = 5;
+  const TIER_RISE = 2.0;
+  const TIER_INSET = 2.0;
+  const standInnerAx = ax - STAND_TIERS * TIER_INSET;  // 88
+  const standInnerBz = bz - STAND_TIERS * TIER_INSET;  // 60
+  for (let tier = 0; tier < STAND_TIERS; tier++) {
+    const yBottom = STADIUM_INTERIOR_FLOOR_Y + tier * TIER_RISE;
+    const yTop = yBottom + TIER_RISE;
+    // Linear interpolation from standInner (at tier=0) to wall ax (at tier=N)
+    const tIn = tier / STAND_TIERS;
+    const tOut = (tier + 1) / STAND_TIERS;
+    const innerA = standInnerAx + (ax - standInnerAx) * tIn;
+    const innerB = standInnerBz + (bz - standInnerBz) * tIn;
+    const outerA = standInnerAx + (ax - standInnerAx) * tOut;
+    const outerB = standInnerBz + (bz - standInnerBz) * tOut;
+    // Riser ribbon — VERTICAL face at the INNER edge of this tier,
+    // facing the field. Spans from yBottom (top of previous shelf, or
+    // floor for tier 0) up to yTop (this tier's shelf level).
+    const riserLow: Vector3[] = [];
+    const riserHigh: Vector3[] = [];
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      const a = angleStart + (angleEnd - angleStart) * t;
+      const x = cx + innerA * Math.cos(a);
+      const z = cz + innerB * Math.sin(a);
+      riserLow.push(new Vector3(x, yBottom, z));
+      riserHigh.push(new Vector3(x, yTop, z));
+    }
+    const riser = MeshBuilder.CreateRibbon(`stadium-stand-riser-${tier}`, {
+      pathArray: [riserLow, riserHigh],
+      sideOrientation: Mesh.DOUBLESIDE,
+      closeArray: false,
+      closePath: false,
+    }, scene);
+    riser.material = seatMat;
+    meshes.push(riser);
+    // Shelf ribbon — HORIZONTAL at yTop, spans from inner radius to
+    // outer radius (so each shelf butts against the next tier's riser).
+    const shelfInner: Vector3[] = [];
+    const shelfOuter: Vector3[] = [];
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      const a = angleStart + (angleEnd - angleStart) * t;
+      const ix = cx + innerA * Math.cos(a);
+      const iz = cz + innerB * Math.sin(a);
+      const ox = cx + outerA * Math.cos(a);
+      const oz = cz + outerB * Math.sin(a);
+      shelfInner.push(new Vector3(ix, yTop, iz));
+      shelfOuter.push(new Vector3(ox, yTop, oz));
+    }
+    const shelf = MeshBuilder.CreateRibbon(`stadium-stand-shelf-${tier}`, {
+      pathArray: [shelfInner, shelfOuter],
+      sideOrientation: Mesh.DOUBLESIDE,
+      closeArray: false,
+      closePath: false,
+    }, scene);
+    shelf.material = grayMat;
+    meshes.push(shelf);
+  }
+
+  // ── Crowd backdrop — a tall ribbon ON the inside face of the upper
+  // wall (at radius slightly inside ax), starting at the top of the
+  // highest stand tier and going up to just below the roof. Looks
+  // like the stadium has many more rows of spectators continuing up
+  // the back of the bowl. The tileable AI-generated crowd image is
+  // sampled densely (uScale 16) so each "person" is tiny — sells the
+  // huge-arena / tiny-me scale.
+  const crowdTex = new Texture(ASSETS['stadium-crowd'], scene);
+  crowdTex.hasAlpha = false;
+  crowdTex.uScale = 16;
+  crowdTex.vScale = 1;
+  crowdTex.anisotropicFilteringLevel = 8;
+  const crowdMat = new StandardMaterial('stadium-crowd-mat', scene);
+  crowdMat.diffuseTexture = crowdTex;
+  crowdMat.emissiveTexture = crowdTex;
+  crowdMat.emissiveColor = new Color3(0.35, 0.35, 0.35);
+  crowdMat.specularColor = new Color3(0, 0, 0);
+  crowdMat.backFaceCulling = false;
+  const crowdBottomY = STADIUM_INTERIOR_FLOOR_Y + STAND_TIERS * TIER_RISE;  // top of stands = 10
+  const crowdTopY = STADIUM_WALL_HEIGHT - 1;  // just below roof
+  // Sit the crowd 0.4 units inside the wall — close enough that the
+  // wall behind it isn't visible through any gap, far enough that it
+  // doesn't z-fight with the wall mesh.
+  const crowdAx = ax - 0.4;
+  const crowdBz = bz - 0.4;
+  const crowdBottom: Vector3[] = [];
+  const crowdTop: Vector3[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const a = angleStart + (angleEnd - angleStart) * t;
+    const x = cx + crowdAx * Math.cos(a);
+    const z = cz + crowdBz * Math.sin(a);
+    crowdBottom.push(new Vector3(x, crowdBottomY, z));
+    crowdTop.push(new Vector3(x, crowdTopY, z));
+  }
+  const crowdRing = MeshBuilder.CreateRibbon('stadium-crowd-ring', {
+    pathArray: [crowdBottom, crowdTop],
+    sideOrientation: Mesh.DOUBLESIDE,
+    closeArray: false,
+    closePath: false,
+  }, scene);
+  crowdRing.material = crowdMat;
+  meshes.push(crowdRing);
+
+  // ── Roof — a flat oval cap covering the stadium. Built as a thin
+  // ring extruded from the outer wall down to inside the stands,
+  // giving a partial cover over the crowd. Centered just above the
+  // wall top.
+  const roofInnerA = ax - 4;
+  const roofInnerB = bz - 4;
+  const roofOuterA = ax + 2;
+  const roofOuterB = bz + 2;
+  const roofTopPaths: Vector3[][] = [];
+  const roofSegments = 64;
+  // Top surface of the roof (single flat ring)
+  const roofInner: Vector3[] = [];
+  const roofOuter: Vector3[] = [];
+  for (let i = 0; i <= roofSegments; i++) {
+    const t = i / roofSegments;
+    const a = t * Math.PI * 2;
+    const oox = cx + roofOuterA * Math.cos(a);
+    const ooz = cz + roofOuterB * Math.sin(a);
+    const iix = cx + roofInnerA * Math.cos(a);
+    const iiz = cz + roofInnerB * Math.sin(a);
+    roofOuter.push(new Vector3(oox, STADIUM_ROOF_Y, ooz));
+    roofInner.push(new Vector3(iix, STADIUM_ROOF_Y, iiz));
+  }
+  roofTopPaths.push(roofInner, roofOuter);
+  const roof = MeshBuilder.CreateRibbon('stadium-roof', {
+    pathArray: roofTopPaths,
+    sideOrientation: Mesh.DOUBLESIDE,
+    closeArray: false,
+    closePath: true,
+  }, scene);
+  roof.material = roofMat;
+  meshes.push(roof);
+
+  // Roof outer rim — a thin gold trim around the very edge so the
+  // silhouette reads as a real roof, not a flat disk.
+  const goldMat = createStandardMaterial(scene, 'stadium-roof-trim-mat', Color3.FromHexString('#e6c34a'));
+  const rimBottom: Vector3[] = [];
+  const rimTop: Vector3[] = [];
+  for (let i = 0; i <= roofSegments; i++) {
+    const t = i / roofSegments;
+    const a = t * Math.PI * 2;
+    const x = cx + (roofOuterA + 0.3) * Math.cos(a);
+    const z = cz + (roofOuterB + 0.3) * Math.sin(a);
+    rimBottom.push(new Vector3(x, STADIUM_ROOF_Y - 0.3, z));
+    rimTop.push(new Vector3(x, STADIUM_ROOF_Y + 0.4, z));
+  }
+  const rim = MeshBuilder.CreateRibbon('stadium-roof-rim', {
+    pathArray: [rimBottom, rimTop],
+    sideOrientation: Mesh.DOUBLESIDE,
+    closeArray: false,
+    closePath: true,
+  }, scene);
+  rim.material = goldMat;
+  meshes.push(rim);
+
+  // Decorative perimeter pillars — `ax` and `bz` already in scope from
+  // the wall-ribbon block. Skip pillars in the south entrance arc.
+  const numPillars = 28;  // more pillars for the bigger stadium
   for (let i = 0; i < numPillars; i++) {
     const angle = (i / numPillars) * Math.PI * 2;
-    const px = cx + Math.cos(angle) * a;
-    const pz = cz + Math.sin(angle) * b;
+    let normAngle = angle;
+    while (normAngle > Math.PI) normAngle -= 2 * Math.PI;
+    while (normAngle < -Math.PI) normAngle += 2 * Math.PI;
+    if (Math.abs(normAngle - (-Math.PI / 2)) < GATE_HALF_ANGLE + 0.05) continue;
+    const px = cx + Math.cos(angle) * ax;
+    const pz = cz + Math.sin(angle) * bz;
     const pillar = MeshBuilder.CreateBox(`stadium-pillar-${i}`, {
       width: 1.2, height: STADIUM_WALL_HEIGHT + 2, depth: 1.2,
     }, scene);
@@ -1220,7 +1948,7 @@ function buildStadium(scene: Scene, cx: number, cz: number): Mesh[] {
     meshes.push(pillar);
   }
 
-  const signZ = cz - b - 8;
+  const signZ = cz - bz - 8;
   const sign = MeshBuilder.CreateBox('stadium-sign', {
     width: 26, height: 5, depth: 0.9,
   }, scene);
@@ -1239,18 +1967,31 @@ function buildStadium(scene: Scene, cx: number, cz: number): Mesh[] {
     meshes.push(pole);
   }
 
-  for (const fx of [-26, -13, 0, 13, 26]) {
-    const flagpole = MeshBuilder.CreateCylinder(`stadium-flagpole-${fx}`, {
-      height: 8, diameter: 0.35, tessellation: 6,
+  // Flagpoles distributed around the roof rim, equally spaced — skip
+  // the south entrance arc to keep the gate sightline clean.
+  const numFlags = 16;
+  for (let i = 0; i < numFlags; i++) {
+    const a = (i / numFlags) * Math.PI * 2;
+    let normA = a;
+    while (normA > Math.PI) normA -= 2 * Math.PI;
+    while (normA < -Math.PI) normA += 2 * Math.PI;
+    if (Math.abs(normA - (-Math.PI / 2)) < 0.3) continue;
+    const fpx = cx + (ax + 1.5) * Math.cos(a);
+    const fpz = cz + (bz + 1.5) * Math.sin(a);
+    const flagpole = MeshBuilder.CreateCylinder(`stadium-flagpole-${i}`, {
+      height: 6, diameter: 0.3, tessellation: 6,
     }, scene);
-    flagpole.position.set(cx + fx, STADIUM_ROOF_Y + 4, cz - b * 0.7);
+    flagpole.position.set(fpx, STADIUM_ROOF_Y + 3, fpz);
     flagpole.material = whiteMat;
     meshes.push(flagpole);
 
-    const flag = MeshBuilder.CreateBox(`stadium-flag-${fx}`, {
-      width: 1.7, height: 1.1, depth: 0.06,
+    const flag = MeshBuilder.CreateBox(`stadium-flag-${i}`, {
+      width: 1.4, height: 0.9, depth: 0.05,
     }, scene);
-    flag.position.set(cx + fx + 0.85, STADIUM_ROOF_Y + 7, cz - b * 0.7);
+    // Place the flag outward from the pole
+    const outX = Math.cos(a);
+    const outZ = Math.sin(a);
+    flag.position.set(fpx + outX * 0.75, STADIUM_ROOF_Y + 5, fpz + outZ * 0.75);
     flag.material = accentMat;
     meshes.push(flag);
   }

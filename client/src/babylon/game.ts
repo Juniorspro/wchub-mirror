@@ -29,20 +29,30 @@ import { RUNTIME_CONFIG } from './config';
 import { createSceneEntities, type SceneEntities, type StallDef } from './entities';
 import { createItemField, type ItemField } from './items';
 import {
+  awardCoins,
   getGameSnapshot,
+  hydrateEconomyFromStorage,
   hydratePresetsFromStorage,
   resetGameStore,
+  setBettingFixtures,
   setChatMessages,
   setGameSnapshot,
   setNearbyStall,
   setOutfit,
   setRoomCode,
   setSelfId,
+  settleBet,
   subscribeGameStore,
   type ChatEntry,
   type GameStoreSnapshot,
 } from './store';
-import { createGameWorld, FAIR_CENTER, type GameWorldObjects } from './world';
+import {
+  createGameWorld,
+  FAIR_CENTER,
+  PORTAL_INTERACT_RADIUS,
+  STADIUM_PORTAL_GATES,
+  type GameWorldObjects,
+} from './world';
 import { advanceSelfPrediction, getInterpolatedPlayers, type NetClient } from '../net';
 import { normalizeInput } from '@shared';
 
@@ -87,9 +97,59 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
   // walking when they last let go of the keys. While idle, the camera can
   // orbit freely without the avatar following it.
   let lastAim = 0;
+  // ─── Betting state ────────────────────────────────────────────────────────
+  // Reference to the last bettingFixtures array we pushed to the store.
+  // The NetClient swaps the array reference whenever it receives a new
+  // `event:fixtures` snapshot — so an `!==` comparison is enough to
+  // detect "is there fresh data?" without a deep equality check each frame.
+  let lastBettingFixturesRef: unknown = null;
+
+  // ─── Portal-gate state ────────────────────────────────────────────────────
+  // G key triggers redirect to the nearby portal's URL. Edge-detect so
+  // holding G doesn't fire repeatedly, plus a guard so we never redirect
+  // twice in one session (the page is leaving anyway, but the guard
+  // protects against any quick double-tap before navigation kicks in).
+  let gHeldLastFrame = false;
+  let portalRedirectFired = false;
+
+  // ─── Community / social state ─────────────────────────────────────────────
+  // Compliments + wave use the same edge+cooldown trigger pattern as jump.
+  let eHeldLastFrame = false;     // 'E' = compliment nearest player
+  let fHeldLastFrame = false;     // 'F' = wave emote
+  let lastComplimentSentAt = 0;
+  let lastWaveSentAt = 0;
+  const COMPLIMENT_RETRIGGER_MS = 3100;  // slightly above server's 3000
+  const WAVE_RETRIGGER_MS = 1600;
+  // Crowd bonus accumulator. Tick up while ≥2 other players are within
+  // CROWD_RADIUS. At CROWD_BONUS_THRESHOLD seconds, award coins + reset.
+  // Recipients are credited locally (cosmetic economy → no server state).
+  const CROWD_RADIUS = 8;
+  const CROWD_BONUS_THRESHOLD = 30;
+  const CROWD_BONUS_AMOUNT = 50;
+  let crowdTimer = 0;
+  // Last computed "nearest other player" for the HUD compliment hint.
+  // Updated each frame so the HUD knows whom the E key would target.
+  let nearestOtherId: string | null = null;
+  let nearestOtherDist = Infinity;
+  const COMPLIMENT_RANGE = 5;
+
+  // Spacebar jump trigger state. Two parallel paths fire a jump:
+  //   1. Edge-detect (clean press): not-held last frame, held this frame
+  //      → fire immediately. Snappy feel for clean taps.
+  //   2. Cooldown fallback: if space is held for longer than the cooldown
+  //      since the last fire, re-fire. Covers the case where the browser
+  //      misses a keyup event (window loses focus, Alt-Tab during a key
+  //      hold, etc.) — without this, `keys.has(' ')` stayed true forever
+  //      and the player could never jump again.
+  let spaceHeldLastFrame = false;
+  let lastJumpSentAt = 0;
+  // Slightly above the server's 900ms rate limit so a held key bounces
+  // the player at roughly stride pace without the server dropping any.
+  const JUMP_RETRIGGER_MS = 950;
 
   resetGameStore();
   hydratePresetsFromStorage();
+  hydrateEconomyFromStorage();
 
   const net = runtimeContext?.net as NetClient | undefined;
   const audio = createGameAudio();
@@ -196,6 +256,12 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
           chatHistory.push(msg);
           while (chatHistory.length > CHAT_HISTORY_CAP) chatHistory.shift();
           setChatMessages([...chatHistory]);
+          // Trigger a floating speech bubble above the sender's avatar.
+          // Avatar might not exist yet on the very first chat (race), in
+          // which case the bubble is just skipped — chat history still
+          // captures it in the bottom-left panel either way.
+          const a = avatars.get(msg.from);
+          if (a) a.triggerChat(msg.text);
         });
       }
     }, 250);
@@ -266,6 +332,204 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
     }
 
     if (input?.consumeTap()) audio.unlock();
+
+    // ── Jump: spacebar edge OR cooldown trigger. The server validates +
+    //    rate-limits + broadcasts back to all clients; the broadcast
+    //    (drained below) is what plays the visual hop on every client
+    //    including the sender. No optimistic local trigger — keeps the
+    //    server as the single source of truth and avoids double-fire.
+    const spaceHeld = !!input?.keys.has(' ');
+    if (spaceHeld && net) {
+      const nowMs = performance.now();
+      const justPressed = !spaceHeldLastFrame;
+      const cooledDown = nowMs - lastJumpSentAt >= JUMP_RETRIGGER_MS;
+      if (justPressed || cooledDown) {
+        net.send('jump');
+        lastJumpSentAt = nowMs;
+      }
+    }
+    spaceHeldLastFrame = spaceHeld;
+
+    // Drain server-confirmed jump events from the NetClient queue and
+    // trigger the visual hop on the matching avatar. Multiple jumps in
+    // one frame (unlikely with rate-limit) all process in order.
+    if (net) {
+      while (net.pendingJumps.length > 0) {
+        const sid = net.pendingJumps.shift();
+        if (!sid) continue;
+        const a = avatars.get(sid);
+        if (a) a.triggerJump();
+      }
+    }
+
+    // ── Community / social: input + queue drain + crowd bonus
+    if (net) {
+      const selfId = net.meta?.selfId ?? '';
+
+      // E = compliment nearest player. Edge + cooldown fallback (same
+      // pattern as the jump trigger).
+      const eHeld = !!input?.keys.has('e') || !!input?.keys.has('E');
+      if (eHeld && nearestOtherId) {
+        const nowMs = performance.now();
+        const justPressed = !eHeldLastFrame;
+        const cooledDown = nowMs - lastComplimentSentAt >= COMPLIMENT_RETRIGGER_MS;
+        if (justPressed || cooledDown) {
+          net.send('compliment', { to: nearestOtherId });
+          lastComplimentSentAt = nowMs;
+        }
+      }
+      eHeldLastFrame = eHeld;
+
+      // F = wave emote. Edge + cooldown fallback.
+      const fHeld = !!input?.keys.has('f') || !!input?.keys.has('F');
+      if (fHeld) {
+        const nowMs = performance.now();
+        const justPressed = !fHeldLastFrame;
+        const cooledDown = nowMs - lastWaveSentAt >= WAVE_RETRIGGER_MS;
+        if (justPressed || cooledDown) {
+          net.send('wave');
+          lastWaveSentAt = nowMs;
+        }
+      }
+      fHeldLastFrame = fHeld;
+
+      // Drain compliment broadcasts: visual on the recipient + coin
+      // award if THIS client is the recipient (cosmetic economy).
+      while (net.pendingCompliments.length > 0) {
+        const ev = net.pendingCompliments.shift();
+        if (!ev) continue;
+        const a = avatars.get(ev.to);
+        if (a) a.triggerCompliment();
+        if (selfId && ev.to === selfId) {
+          awardCoins(5);
+        }
+      }
+
+      // Drain wave broadcasts: visual on the sender's avatar.
+      while (net.pendingWaves.length > 0) {
+        const sid = net.pendingWaves.shift();
+        if (!sid) continue;
+        const a = avatars.get(sid);
+        if (a) a.triggerWave();
+      }
+
+      // ── Betting: push the server-pushed fixture snapshot to the store
+      //    so the HUD can render the match ticker + bet popup. We can
+      //    diff cheaply by reference: NetClient replaces the array
+      //    object whenever fresh data lands, so a !== comparison is enough.
+      if (net.bettingFixtures !== lastBettingFixturesRef) {
+        lastBettingFixturesRef = net.bettingFixtures;
+        setBettingFixtures(net.bettingFixtures);
+      }
+      // Drain bet confirmations — coins were already deducted locally
+      // by placeLocalBet on click; this just ack's that the server
+      // recorded it. (Soft-confirm slot; could trigger a toast later.)
+      while (net.pendingBetConfirms.length > 0) {
+        net.pendingBetConfirms.shift();
+      }
+      // Drain resolve payouts — credit coins + show result toast.
+      while (net.pendingBetResults.length > 0) {
+        const r = net.pendingBetResults.shift();
+        if (!r) continue;
+        settleBet(r.matchId, r.payout, r.profit);
+      }
+
+      // Compute nearest other player + count nearby for the crowd bonus
+      // (in the same loop pass, since they both need positions). Uses
+      // the LATEST snapshot, not predicted — close enough for distance
+      // checks at this tick rate.
+      const latestSnapForSocial = net.snapshots[net.snapshots.length - 1];
+      let nearestId: string | null = null;
+      let nearestName = '';
+      let nearestDist = Infinity;
+      let crowdCount = 0;
+      if (latestSnapForSocial && selfId) {
+        const self = latestSnapForSocial.players.find((p) => p.id === selfId);
+        const myX = net.predictedSelf?.x ?? self?.x ?? 0;
+        const myZ = net.predictedSelf?.y ?? self?.y ?? 0;
+        for (const p of latestSnapForSocial.players) {
+          if (p.id === selfId) continue;
+          const d = Math.hypot(p.x - myX, p.y - myZ);
+          if (d < COMPLIMENT_RANGE && d < nearestDist) {
+            nearestDist = d;
+            nearestId = p.id;
+            nearestName = p.username || 'player';
+          }
+          if (d < CROWD_RADIUS) crowdCount += 1;
+        }
+      }
+      nearestOtherId = nearestId;
+      nearestOtherDist = nearestDist;
+
+      // Crowd bonus: tick while ≥2 OTHER players are within range.
+      // Award + reset on threshold hit.
+      if (crowdCount >= 2) {
+        crowdTimer += dt;
+        if (crowdTimer >= CROWD_BONUS_THRESHOLD) {
+          awardCoins(CROWD_BONUS_AMOUNT);
+          crowdTimer = 0;
+        }
+      } else {
+        // Decay slowly when out of crowd so brief disconnections don't
+        // wipe progress, but it doesn't accrue while alone.
+        crowdTimer = Math.max(0, crowdTimer - dt * 0.5);
+      }
+      // ── Portal-gate proximity scan + redirect on G
+      // Scan all stadium portals each frame; pick the closest one within
+      // PORTAL_INTERACT_RADIUS of the player. If G was just pressed and a
+      // portal is nearby, navigate to that game.
+      let nearbyPortalId: string | null = null;
+      let nearbyPortalLabel = '';
+      let nearbyPortalUrl = '';
+      let nearbyPortalDist = Infinity;
+      const myX = net.predictedSelf?.x ?? 0;
+      const myZ = net.predictedSelf?.y ?? 0;
+      for (const portal of STADIUM_PORTAL_GATES) {
+        const d = Math.hypot(portal.x - myX, portal.z - myZ);
+        if (d < PORTAL_INTERACT_RADIUS && d < nearbyPortalDist) {
+          nearbyPortalDist = d;
+          nearbyPortalId = portal.id;
+          nearbyPortalLabel = portal.label;
+          nearbyPortalUrl = portal.url;
+        }
+      }
+      const gHeld = !!input?.keys.has('g') || !!input?.keys.has('G');
+      if (gHeld && !gHeldLastFrame && nearbyPortalUrl && !portalRedirectFired) {
+        portalRedirectFired = true;
+        try { window.location.href = nearbyPortalUrl; } catch { /* ignore */ }
+      }
+      gHeldLastFrame = gHeld;
+
+      // Only push to the store when one of the HUD-visible fields
+      // actually changes — this runs 60Hz inside the render loop so a
+      // naive setGameSnapshot would trigger React re-renders every frame.
+      // crowdTimer is animated continuously but the HUD only shows
+      // whole-second resolution, so we diff on floor(timer).
+      const curSnap = getGameSnapshot();
+      const timerSec = Math.floor(crowdTimer);
+      const shownDist = Number.isFinite(nearestDist) ? Math.round(nearestDist * 10) / 10 : Infinity;
+      const distChanged = shownDist !== (Number.isFinite(curSnap.nearestOtherDist) ? Math.round(curSnap.nearestOtherDist * 10) / 10 : Infinity);
+      const changed = curSnap.nearestOtherId !== nearestId
+        || curSnap.nearestOtherName !== nearestName
+        || distChanged
+        || curSnap.crowdCount !== crowdCount
+        || Math.floor(curSnap.crowdTimer) !== timerSec
+        || curSnap.nearbyPortalId !== nearbyPortalId
+        || curSnap.nearbyPortalLabel !== nearbyPortalLabel
+        || curSnap.nearbyPortalUrl !== nearbyPortalUrl;
+      if (changed) {
+        setGameSnapshot({
+          nearestOtherId: nearestId,
+          nearestOtherName: nearestName,
+          nearestOtherDist: nearestDist,
+          crowdTimer,
+          crowdCount,
+          nearbyPortalId,
+          nearbyPortalLabel,
+          nearbyPortalUrl,
+        });
+      }
+    }
 
     // ── Once meta is available, expose selfId + roomCode to store (one-time)
     if (net?.meta && !getStoreFlag('selfId-set')) {
@@ -339,12 +603,22 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
             const cam = objects.world.camera;
             const dirInput = runtimeContext?.input?.dir;
             const isMovingInput = !!dirInput && (Math.abs(dirInput.x) + Math.abs(dirInput.y)) > 0.05;
+            // Look-up boost: raise the camera target as the user tilts
+            // the camera past horizontal (beta > π/2). Since
+            // ArcRotateCamera always looks AT the target, lifting the
+            // target lifts the view direction — letting the user
+            // actually see the sky, the gate top, and tall objects
+            // above the avatar without hitting the ground-clamp limit.
+            // Capped so it can't run away into orbit.
+            const baseTargetY = 1.2;
+            const lookUpBoost = Math.min(8, Math.max(0, cam.beta - Math.PI / 2) * 8);
+            const targetY = baseTargetY + lookUpBoost;
             if (isMovingInput) {
-              cam.target.set(px, 1.2, py);
+              cam.target.set(px, targetY, py);
             } else {
               const camAlpha = 1 - Math.exp(-dt / 0.05);
               cam.target.x += (px - cam.target.x) * camAlpha;
-              cam.target.y += (1.2 - cam.target.y) * camAlpha;
+              cam.target.y += (targetY - cam.target.y) * camAlpha;
               cam.target.z += (py - cam.target.z) * camAlpha;
             }
             const nearest = objects.entities.findNearestStall(px, py);

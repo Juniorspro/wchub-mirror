@@ -25,20 +25,19 @@ export const gameConfig = {
 
   /** World footprint in Babylon ground-plane units (XZ).
    *  width → X axis, height → Z axis. Y (up) is constant.
-   *  Players are clamped to (0, 0) → (width, height). Big — the original
-   *  48×48 park is now the SW quadrant of a wide playable expanse. The
-   *  stadium ellipse keep-out in shared/math.ts prevents the player
-   *  from walking through stadium walls when z > 90, so we can let
-   *  height extend past the stadium's south face without breaking
-   *  anything. */
-  world: { width: 200, height: 110 },
+   *  Players are clamped to (0, 0) → (width, height). The map is now
+   *  recentered horizontally: stadium center sits at x=110 (the map
+   *  midline), so the east and west fences are equidistant from it.
+   *  Old layout had x=400 east boundary with stadium at x=24 — wildly
+   *  asymmetric, with empty grass east of the content. */
+  world: { width: 220, height: 220 },
 
   /** Where new players spawn — a few units south of the plaza
-   *  centerpiece monument (which is at (24, 24) with a 1.6-unit hitbox).
-   *  Spawning AT the centerpiece would put new players inside the
-   *  collision circle. Spawn at (24, 19) sits on the plaza disc just
-   *  south of the monument, facing the centerpiece + park naturally. */
-  spawn: { x: 24, y: 19 },
+   *  centerpiece monument (which is at (110, 24) with a 1.6-unit
+   *  hitbox). Spawning AT the centerpiece would put new players
+   *  inside the collision circle. Spawn at (110, 19) sits on the
+   *  plaza disc just south of the monument. */
+  spawn: { x: 110, y: 19 },
 
   /** Player walking speed in world units per second */
   player: { speed: 6 },

@@ -59,7 +59,120 @@ export interface GameStoreSnapshot {
   readonly chat: readonly ChatEntry[];
   /** Local saved per-panel designs the player has named. localStorage-backed. */
   readonly savedLooks: readonly SavedLook[];
+  /** Coin balance. Per-player, localStorage-backed. */
+  readonly balance: number;
+  /** Item ids the player has unlocked. Free items (price=0) are NOT stored
+   *  here — the priceFor() check returns 0 so they're always considered owned. */
+  readonly ownedItems: readonly string[];
+  /** sessionId of the nearest OTHER player within compliment range, or
+   *  null if no one is close enough. Updated by the render loop so the
+   *  HUD can show a "Press E to compliment" hint. */
+  readonly nearestOtherId: string | null;
+  /** Display name of the nearest other player (snapshot.username),
+   *  cached alongside nearestOtherId so the HUD doesn't need to scan
+   *  the snapshot itself. Empty string when no nearby player. */
+  readonly nearestOtherName: string;
+  /** Distance to the nearest other player in world units (Infinity if
+   *  none). */
+  readonly nearestOtherDist: number;
+  /** Seconds of contiguous crowd-bonus accumulation. The render loop
+   *  ticks this up while ≥2 other players are within CROWD_RADIUS and
+   *  resets it to 0 when the threshold awards coins. */
+  readonly crowdTimer: number;
+  /** Live count of OTHER players within CROWD_RADIUS — used by the HUD
+   *  to surface a progress indicator. */
+  readonly crowdCount: number;
+  /** Id of the nearest stadium portal the player is standing within
+   *  PORTAL_INTERACT_RADIUS of, or null if none. The HUD shows a
+   *  "press G to play <label>" prompt when this is set; game.ts wires
+   *  the G key to redirect to that portal's URL. */
+  readonly nearbyPortalId: string | null;
+  /** Display label of the nearby portal (kept in the snapshot so the
+   *  HUD doesn't have to look it up). Empty when no portal nearby. */
+  readonly nearbyPortalLabel: string;
+  /** Redirect URL for the nearby portal. Empty when no portal nearby. */
+  readonly nearbyPortalUrl: string;
+  /** Server-pushed match fixtures + live scores + pool sizes. Fed by
+   *  NetClient on every `event:fixtures` / `event:bet-update` broadcast.
+   *  HUD's MatchTicker + BettingPopup render from this. */
+  readonly bettingFixtures: ReadonlyArray<BettingFixtureSnapshot>;
+  /** Bets the local player has placed this room session, keyed by
+   *  matchId. Persists in memory only — coins deduct on confirm, so the
+   *  bet record is more for the UI's "you bet X on Y" badge than for
+   *  the payout pipeline (server tracks bets authoritatively). */
+  readonly myBets: ReadonlyMap<string, { camp: 'HOME' | 'DRAW' | 'AWAY'; amount: number }>;
+  /** Latest bet result toast — set briefly when a match resolves with a
+   *  payout for the player. Cleared by the toast UI after ~6s. */
+  readonly lastBetResult: { matchId: string; profit: number; payout: number } | null;
 }
+
+/** Mirrors the server's broadcasted fixture shape (see event.ts). */
+export interface BettingFixtureSnapshot {
+  readonly id: string;
+  readonly homeTeam: string;
+  readonly awayTeam: string;
+  readonly homeCode: string;
+  readonly awayCode: string;
+  readonly kickoffMs: number;
+  readonly status: string;
+  readonly scoreHome: number;
+  readonly scoreAway: number;
+  readonly minute: number;
+  readonly result: 'HOME' | 'DRAW' | 'AWAY' | null;
+  readonly poolHome: number;
+  readonly poolDraw: number;
+  readonly poolAway: number;
+  readonly countHome: number;
+  readonly countDraw: number;
+  readonly countAway: number;
+  readonly phase: 'AWAIT_BET' | 'BET_WINDOW' | 'LIVE' | 'RESOLVED';
+}
+
+// ─── Economy: prices + starter pack ─────────────────────────────────────────
+
+/** Catalog items the player owns from the start — the default outfit + a
+ *  couple of variants — so the stalls aren't all locked at first login.
+ *  Anything NOT in this list and NOT free (per priceFor) costs coins. */
+const STARTER_FREE_IDS = new Set<string>([
+  // Skins — all four free
+  'skin-light', 'skin-tan', 'skin-deep', 'skin-mint',
+  // One basic of each garment slot
+  'shirt-white-tee', 'pants-blue-jeans', 'shoes-white-sneakers',
+]);
+
+/** Look up the coin price for a catalog item. Patterns by id prefix so new
+ *  items inherit a sensible default without manually editing the price map.
+ *  Returns 0 for free / starter items. */
+export function priceFor(itemId: string): number {
+  if (STARTER_FREE_IDS.has(itemId)) return 0;
+  // Jerseys — premium tier (World Cup roster)
+  if (itemId.startsWith('jersey-')) return 200;
+  // AI-generated shirts — featured tier
+  if (itemId.startsWith('shirt-ai-')) return 150;
+  // Other shirts (showcase + basics not in starter pack)
+  if (itemId.startsWith('shirt-')) return 100;
+  // Pants
+  if (itemId.startsWith('pants-')) return 80;
+  // Shoes
+  if (itemId.startsWith('shoes-')) return 80;
+  // Accessories
+  if (
+    itemId.startsWith('hat-') ||
+    itemId.startsWith('glasses-') ||
+    itemId.startsWith('scarf-') ||
+    itemId.startsWith('backpack-')
+  ) return 75;
+  return 0;
+}
+
+export const STARTING_BALANCE = 1000;
+const DAILY_BONUS = 200;
+const DAILY_BONUS_MS = 24 * 60 * 60 * 1000;
+
+// ─── localStorage persistence keys ──────────────────────────────────────────
+const LS_BALANCE = 'dressup-balance';
+const LS_OWNED   = 'dressup-owned';
+const LS_LAST_BONUS = 'dressup-last-bonus';
 
 type GameStoreListener = (snapshot: GameStoreSnapshot) => void;
 
@@ -86,6 +199,19 @@ const initialSnapshot: GameStoreSnapshot = {
   nearbyStallId: null,
   chat: [],
   savedLooks: [],
+  balance: STARTING_BALANCE,
+  ownedItems: [],
+  nearestOtherId: null,
+  nearestOtherName: '',
+  nearestOtherDist: Infinity,
+  crowdTimer: 0,
+  crowdCount: 0,
+  nearbyPortalId: null,
+  nearbyPortalLabel: '',
+  nearbyPortalUrl: '',
+  bettingFixtures: [],
+  myBets: new Map(),
+  lastBetResult: null,
 };
 
 let snapshot: GameStoreSnapshot = initialSnapshot;
@@ -316,4 +442,118 @@ export function deleteLook(name: string, slot: CustomSlot): void {
   const next = snapshot.savedLooks.filter((l) => !(l.name === name && l.slot === slot));
   setGameSnapshot({ savedLooks: next });
   persistSavedLooks(next);
+}
+
+// ─── Economy mutators ───────────────────────────────────────────────────────
+
+/** True if the item is owned by the player — either it's free (price 0)
+ *  or it's been purchased. The HUD uses this to gate the equip action. */
+export function isItemOwned(itemId: string): boolean {
+  if (priceFor(itemId) === 0) return true;
+  return snapshot.ownedItems.includes(itemId);
+}
+
+/** Try to buy an item. Returns true if the purchase succeeded (or was a
+ *  no-op because the item was already owned). Free items are no-ops too. */
+export function purchaseItem(itemId: string): boolean {
+  if (isItemOwned(itemId)) return true;
+  const cost = priceFor(itemId);
+  if (snapshot.balance < cost) return false;
+  const nextOwned = [...snapshot.ownedItems, itemId];
+  const nextBalance = snapshot.balance - cost;
+  setGameSnapshot({ balance: nextBalance, ownedItems: nextOwned });
+  persistEconomy(nextBalance, nextOwned);
+  return true;
+}
+
+/** Update the cached match-fixture snapshot (server-pushed). Called by
+ *  game.ts when the NetClient receives an `event:fixtures` broadcast. */
+export function setBettingFixtures(fixtures: ReadonlyArray<BettingFixtureSnapshot>): void {
+  setGameSnapshot({ bettingFixtures: fixtures });
+}
+
+/** Spend coins to place a bet (local-only; server tracks the bet
+ *  authoritatively for payout). Returns false if balance is too low. */
+export function placeLocalBet(matchId: string, camp: 'HOME' | 'DRAW' | 'AWAY', amount: number): boolean {
+  if (snapshot.balance < amount) return false;
+  const nextBalance = snapshot.balance - amount;
+  const nextBets = new Map(snapshot.myBets);
+  nextBets.set(matchId, { camp, amount });
+  setGameSnapshot({ balance: nextBalance, myBets: nextBets });
+  persistEconomy(nextBalance, snapshot.ownedItems);
+  return true;
+}
+
+/** Record a bet payout from the server resolve message. Credits coins
+ *  (the player got their bet back + winnings, or zero if they lost). */
+export function settleBet(matchId: string, payout: number, profit: number): void {
+  const nextBalance = snapshot.balance + payout;
+  const nextBets = new Map(snapshot.myBets);
+  nextBets.delete(matchId);
+  setGameSnapshot({
+    balance: nextBalance,
+    myBets: nextBets,
+    lastBetResult: { matchId, profit, payout },
+  });
+  persistEconomy(nextBalance, snapshot.ownedItems);
+}
+
+/** Clear the lastBetResult toast (called by the toast UI after fading). */
+export function clearBetResult(): void {
+  setGameSnapshot({ lastBetResult: null });
+}
+
+/** Award a flat number of coins. Used for the daily login bonus. */
+export function awardCoins(amount: number): void {
+  const nextBalance = snapshot.balance + amount;
+  setGameSnapshot({ balance: nextBalance });
+  persistEconomy(nextBalance, snapshot.ownedItems);
+}
+
+function persistEconomy(balance: number, ownedItems: readonly string[]): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(LS_BALANCE, String(balance));
+    localStorage.setItem(LS_OWNED, ownedItems.join(','));
+  } catch {
+    // localStorage full / disabled — silently ignore.
+  }
+}
+
+/** Run on app boot. Loads balance + owned-items from localStorage, then
+ *  checks if the daily bonus is due and awards it. New players (no prior
+ *  storage) get STARTING_BALANCE + the first daily bonus. Returns the
+ *  number of bonus coins just awarded so the HUD can show a toast. */
+export function hydrateEconomyFromStorage(): number {
+  let bonus = 0;
+  let balance = STARTING_BALANCE;
+  let owned: string[] = [];
+  try {
+    if (typeof localStorage === 'undefined') {
+      setGameSnapshot({ balance, ownedItems: owned });
+      return 0;
+    }
+    const rawBal = localStorage.getItem(LS_BALANCE);
+    if (rawBal !== null) {
+      const n = Number(rawBal);
+      if (Number.isFinite(n) && n >= 0) balance = Math.floor(n);
+    }
+    const rawOwn = localStorage.getItem(LS_OWNED);
+    if (rawOwn) owned = rawOwn.split(',').map((s) => s.trim()).filter(Boolean);
+    // Daily bonus: award if last bonus was > 24h ago, OR if there's no
+    // record at all (first-time player gets the first bonus immediately).
+    const rawLast = localStorage.getItem(LS_LAST_BONUS);
+    const now = Date.now();
+    const last = rawLast !== null ? Number(rawLast) : 0;
+    if (!Number.isFinite(last) || now - last >= DAILY_BONUS_MS) {
+      balance += DAILY_BONUS;
+      bonus = DAILY_BONUS;
+      localStorage.setItem(LS_LAST_BONUS, String(now));
+    }
+  } catch {
+    // Anything broken — fall through to defaults.
+  }
+  setGameSnapshot({ balance, ownedItems: owned });
+  persistEconomy(balance, owned);
+  return bonus;
 }

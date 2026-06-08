@@ -82,21 +82,53 @@ export function movePlayer(
     }
   }
 
-  // Stadium ellipse keep-out. Expand the semi-axes by PLAYER_RADIUS so
-  // the player center stops short of the actual wall by their radius.
-  // If the (normalized) point is inside the unit ellipse, scale it back
-  // onto the surface — this is the ellipse-equivalent of "push out
-  // radially to the boundary."
+  // Stadium WALL BAND keep-out — open stadium with a south entrance.
+  // The wall is the annular region between two ellipses; the interior
+  // (inside innerAx/innerBz) is the field, walkable; the exterior
+  // (outside ax/bz) is the park, walkable. A small angular sector on
+  // the south side is the "entrance" — no wall there, so players can
+  // pass between park and field freely.
+  //
+  // Push logic when in the wall band:
+  //   - Compute distance to outer surface and to inner surface.
+  //   - Push to whichever is closer (so a player approaching from
+  //     outside the stadium gets pushed back into the park; a player
+  //     leaving the field via a wall gets pushed back onto the field).
+  //   - Skip entirely if the player's angle is in the entrance sector.
   {
     const sx = nx - STADIUM_KEEPOUT.cx;
     const sz = ny - STADIUM_KEEPOUT.cy;
+    // Use the player-expanded outer; player-contracted inner so player
+    // center stops short of either wall surface by their own radius.
     const ax = STADIUM_KEEPOUT.ax + PLAYER_RADIUS;
     const bz = STADIUM_KEEPOUT.bz + PLAYER_RADIUS;
-    const ovalDist2 = (sx * sx) / (ax * ax) + (sz * sz) / (bz * bz);
-    if (ovalDist2 < 1 && ovalDist2 > 1e-8) {
-      const factor = 1.001 / Math.sqrt(ovalDist2);
-      nx = STADIUM_KEEPOUT.cx + sx * factor;
-      ny = STADIUM_KEEPOUT.cy + sz * factor;
+    const axIn = Math.max(1e-3, STADIUM_KEEPOUT.innerAx - PLAYER_RADIUS);
+    const bzIn = Math.max(1e-3, STADIUM_KEEPOUT.innerBz - PLAYER_RADIUS);
+    const outerSq = (sx * sx) / (ax * ax) + (sz * sz) / (bz * bz);
+    const innerSq = (sx * sx) / (axIn * axIn) + (sz * sz) / (bzIn * bzIn);
+    const inWallBand = outerSq < 1 && innerSq > 1;
+    if (inWallBand) {
+      // Angle from stadium center; south is atan2(-1, 0) = -π/2.
+      const angle = Math.atan2(sz, sx);
+      let distFromSouth = Math.abs(angle - (-Math.PI / 2));
+      if (distFromSouth > Math.PI) distFromSouth = 2 * Math.PI - distFromSouth;
+      const inEntrance = distFromSouth < STADIUM_KEEPOUT.entranceHalfAngle;
+      if (!inEntrance) {
+        // Push to whichever ellipse boundary is closer
+        const distToOuter = 1 - Math.sqrt(outerSq);
+        const distToInner = Math.sqrt(innerSq) - 1;
+        if (distToOuter < distToInner) {
+          // Push outward to the outer ellipse surface
+          const factor = 1.001 / Math.sqrt(outerSq);
+          nx = STADIUM_KEEPOUT.cx + sx * factor;
+          ny = STADIUM_KEEPOUT.cy + sz * factor;
+        } else {
+          // Push inward to the inner ellipse surface
+          const factor = 0.999 / Math.sqrt(innerSq);
+          nx = STADIUM_KEEPOUT.cx + sx * factor;
+          ny = STADIUM_KEEPOUT.cy + sz * factor;
+        }
+      }
     }
   }
 
