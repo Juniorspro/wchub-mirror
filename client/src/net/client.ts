@@ -27,6 +27,24 @@ import type { IdentityStatus, PendingInput, PredictedSelf, SessionMeta, TimedSna
 
 export type NetStatus = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';
 
+export interface TeamStandingSnapshot {
+  readonly position: number;
+  readonly team: string;
+  readonly code: string;
+  readonly played: number;
+  readonly won: number;
+  readonly draw: number;
+  readonly lost: number;
+  readonly goalsFor: number;
+  readonly goalsAgainst: number;
+  readonly goalDifference: number;
+  readonly points: number;
+}
+export interface GroupStandingSnapshot {
+  readonly group: string;
+  readonly teams: ReadonlyArray<TeamStandingSnapshot>;
+}
+
 /** Server-side fixture snapshot pushed via `event:fixtures`. Mirrors the
  *  shape the betting event broadcasts — kept here so the store can be
  *  typed without depending on server code. */
@@ -124,6 +142,9 @@ export class NetClient {
    *  HUD reads this through the store to render the match ticker +
    *  betting popup. Snapshot fan-out below. */
   bettingFixtures: ReadonlyArray<BettingFixtureSnapshot> = [];
+  /** Group-stage standings (12 groups × 4 teams for the 2026 WC). Pushed
+   *  via `event:standings`. Updated daily from the server poller. */
+  bettingStandings: ReadonlyArray<GroupStandingSnapshot> = [];
   /** Targeted bet confirmations from the server. Queue drained by the
    *  render loop to deduct from local balance + show confirmation toast. */
   readonly pendingBetConfirms: Array<{ matchId: string; camp: string; amount: number }> = [];
@@ -342,6 +363,39 @@ export class NetClient {
         const camp = typeof m?.camp === 'string' ? m.camp : '';
         if (!matchId || !result) return;
         this.pendingBetResults.push({ matchId, result, payout, profit, camp });
+      });
+      room.onMessage('event:standings', (m: { groups?: unknown } | undefined) => {
+        const list = Array.isArray(m?.groups) ? m!.groups as unknown[] : [];
+        const out: GroupStandingSnapshot[] = [];
+        for (const g of list) {
+          if (!g || typeof g !== 'object') continue;
+          const gr = g as Record<string, unknown>;
+          const groupName = typeof gr.group === 'string' ? gr.group : '';
+          if (!groupName) continue;
+          const teams: TeamStandingSnapshot[] = [];
+          const teamArr = Array.isArray(gr.teams) ? gr.teams as unknown[] : [];
+          for (const t of teamArr) {
+            if (!t || typeof t !== 'object') continue;
+            const tr = t as Record<string, unknown>;
+            teams.push({
+              position: Number(tr.position) || 0,
+              team: typeof tr.team === 'string' ? tr.team : '',
+              code: typeof tr.code === 'string' ? tr.code : '',
+              played: Number(tr.played) || 0,
+              won: Number(tr.won) || 0,
+              draw: Number(tr.draw) || 0,
+              lost: Number(tr.lost) || 0,
+              goalsFor: Number(tr.goalsFor) || 0,
+              goalsAgainst: Number(tr.goalsAgainst) || 0,
+              goalDifference: Number(tr.goalDifference) || 0,
+              points: Number(tr.points) || 0,
+            });
+          }
+          teams.sort((a, b) => a.position - b.position);
+          out.push({ group: groupName, teams });
+        }
+        out.sort((a, b) => a.group.localeCompare(b.group));
+        this.bettingStandings = out;
       });
       // Ask for the initial snapshot.
       room.send('event:request-fixtures');

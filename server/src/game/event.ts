@@ -21,7 +21,7 @@
 
 import { Room } from "colyseus";
 import { GameState } from "./state";
-import { FixturePoller, Fixture } from "./fixtures";
+import { FixturePoller, Fixture, StandingsPoller, GroupStanding } from "./fixtures";
 
 // ─── Tunables ──────────────────────────────────────────────────────────────
 
@@ -60,6 +60,7 @@ export function registerBettingEvent(
   state: GameState,
 ): { stop: () => void } {
   const poller = new FixturePoller();
+  const standingsPoller = new StandingsPoller();
   const phases = new Map<string, MatchPhase>();
   let stopped = false;
 
@@ -255,8 +256,39 @@ export function registerBettingEvent(
     });
   }
 
+  function broadcastStandings(): void {
+    room.broadcast("event:standings", { groups: standingsPoller.getStandings() });
+  }
+  /** Send standings directly to one client (used on join). */
+  function sendStandings(client: { send(type: string, msg: unknown): void }): void {
+    client.send("event:standings", { groups: standingsPoller.getStandings() });
+  }
+
+  // Daily standings refresh — kicked off lazy, polled in the same tick.
+  // The poller's own throttle ensures the actual HTTP fetch happens at
+  // most once per 24h regardless of how often we ask.
+  let lastStandingsBroadcastAt = 0;
+  function pollAndMaybeBroadcastStandings(): void {
+    void standingsPoller.poll().then(() => {
+      // Broadcast hourly to all rooms regardless — covers cases where a
+      // new client joins between API pulls, AND surfaces background
+      // standings changes after the initial 24h refresh window.
+      const now = Date.now();
+      if (now - lastStandingsBroadcastAt > 60 * 60 * 1000) {
+        lastStandingsBroadcastAt = now;
+        broadcastStandings();
+      }
+    });
+  }
+  // Kick once at start.
+  pollAndMaybeBroadcastStandings();
+  // ... and re-check every 5 min (the poller itself only fetches every 24h).
+  const standingsInterval = setInterval(pollAndMaybeBroadcastStandings, 5 * 60 * 1000);
+
   // Send the current snapshot to every new joiner.
   room.onMessage("event:request-fixtures", (client) => {
+    // Also send the latest standings — same channel, single round-trip.
+    sendStandings(client);
     const now = Date.now();
     const fixtures = poller.getFixtures();
     client.send("event:fixtures", {
@@ -288,6 +320,7 @@ export function registerBettingEvent(
     stop() {
       stopped = true;
       clearInterval(tickInterval);
+      clearInterval(standingsInterval);
     },
   };
 }

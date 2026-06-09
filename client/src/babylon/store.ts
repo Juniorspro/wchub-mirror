@@ -104,6 +104,27 @@ export interface GameStoreSnapshot {
   /** Latest bet result toast — set briefly when a match resolves with a
    *  payout for the player. Cleared by the toast UI after ~6s. */
   readonly lastBetResult: { matchId: string; profit: number; payout: number } | null;
+  /** World Cup group standings, refreshed daily from the server. The
+   *  LeaderboardPanel in the HUD renders this. */
+  readonly bettingStandings: ReadonlyArray<GroupStandingSnapshot>;
+}
+
+export interface TeamStandingSnapshot {
+  readonly position: number;
+  readonly team: string;
+  readonly code: string;
+  readonly played: number;
+  readonly won: number;
+  readonly draw: number;
+  readonly lost: number;
+  readonly goalsFor: number;
+  readonly goalsAgainst: number;
+  readonly goalDifference: number;
+  readonly points: number;
+}
+export interface GroupStandingSnapshot {
+  readonly group: string;
+  readonly teams: ReadonlyArray<TeamStandingSnapshot>;
 }
 
 /** Mirrors the server's broadcasted fixture shape (see event.ts). */
@@ -212,6 +233,7 @@ const initialSnapshot: GameStoreSnapshot = {
   bettingFixtures: [],
   myBets: new Map(),
   lastBetResult: null,
+  bettingStandings: [],
 };
 
 let snapshot: GameStoreSnapshot = initialSnapshot;
@@ -470,6 +492,12 @@ export function purchaseItem(itemId: string): boolean {
  *  game.ts when the NetClient receives an `event:fixtures` broadcast. */
 export function setBettingFixtures(fixtures: ReadonlyArray<BettingFixtureSnapshot>): void {
   setGameSnapshot({ bettingFixtures: fixtures });
+}
+
+/** Update the cached group-standings table. Refreshed daily by the
+ *  server's StandingsPoller. */
+export function setBettingStandings(standings: ReadonlyArray<GroupStandingSnapshot>): void {
+  setGameSnapshot({ bettingStandings: standings });
 }
 
 /** Spend coins to place a bet (local-only; server tracks the bet

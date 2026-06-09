@@ -35,6 +35,7 @@ import {
   hydratePresetsFromStorage,
   resetGameStore,
   setBettingFixtures,
+  setBettingStandings,
   setChatMessages,
   setGameSnapshot,
   setNearbyStall,
@@ -103,6 +104,8 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
   // `event:fixtures` snapshot — so an `!==` comparison is enough to
   // detect "is there fresh data?" without a deep equality check each frame.
   let lastBettingFixturesRef: unknown = null;
+  // Same deal for the group-standings table (daily refresh).
+  let lastBettingStandingsRef: unknown = null;
 
   // ─── Portal-gate state ────────────────────────────────────────────────────
   // G key triggers redirect to the nearby portal's URL. Edge-detect so
@@ -420,6 +423,10 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
       if (net.bettingFixtures !== lastBettingFixturesRef) {
         lastBettingFixturesRef = net.bettingFixtures;
         setBettingFixtures(net.bettingFixtures);
+      }
+      if (net.bettingStandings !== lastBettingStandingsRef) {
+        lastBettingStandingsRef = net.bettingStandings;
+        setBettingStandings(net.bettingStandings);
       }
       // Drain bet confirmations — coins were already deducted locally
       // by placeLocalBet on click; this just ack's that the server

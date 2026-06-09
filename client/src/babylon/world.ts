@@ -187,16 +187,81 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   // to 0.15 so the camera can dip very close to the ground, giving
   // more upward-tilt headroom.
   const GROUND_CAM_MARGIN = 0.15;
+  // Stadium wall keep-out for the camera. Outer ellipse matches the
+  // visible wall ribbon; "+ a hair" so we never z-fight the wall mesh.
+  const STAD_CAM_AX = (STADIUM_OUTER_DIAMETER / 2) * STADIUM_OVAL_RATIO - 0.5;
+  const STAD_CAM_BZ = STADIUM_OUTER_DIAMETER / 2 - 0.5;
+  const STAD_CAM_CX = STADIUM_CENTER.x;
+  const STAD_CAM_CZ = STADIUM_CENTER.z;
   scene.onBeforeRenderObservable.add(() => {
     const c = base.camera;
     if (c.radius <= 0) return;
     const cosArg = (GROUND_CAM_MARGIN - c.target.y) / c.radius;
-    if (cosArg <= -1) { c.upperBetaLimit = Math.PI - 0.05; return; }
-    if (cosArg >=  1) { c.upperBetaLimit = 0.05; return; }
-    // Subtract a small epsilon so the camera never touches the ground.
-    const lower = c.lowerBetaLimit ?? 0.15;
-    c.upperBetaLimit = Math.max(lower + 0.05, Math.acos(cosArg) - 0.02);
+    if (cosArg <= -1) { c.upperBetaLimit = Math.PI - 0.05; }
+    else if (cosArg >= 1) { c.upperBetaLimit = 0.05; }
+    else {
+      const lower = c.lowerBetaLimit ?? 0.15;
+      c.upperBetaLimit = Math.max(lower + 0.05, Math.acos(cosArg) - 0.02);
+    }
     if (c.beta > c.upperBetaLimit) c.beta = c.upperBetaLimit;
+
+    // ─── Wall keep-out: camera must be on the SAME SIDE of the stadium
+    //     wall as the target. If the target is inside the stadium and
+    //     the camera (from radius/alpha/beta) ends up outside the
+    //     wall, shrink the radius to whatever value would put the
+    //     camera exactly on the wall — capped by lowerRadiusLimit so
+    //     it never collapses entirely.
+    //
+    //     ArcRotateCamera position (Babylon left-handed):
+    //       cam.x = target.x - r * cos(alpha) * sin(beta)
+    //       cam.z = target.z - r * sin(alpha) * sin(beta)
+    //     So the unit XZ direction from target → camera is:
+    //       (ux, uz) = (-cos(alpha) * sin(beta), -sin(alpha) * sin(beta))
+    //     Then camera = target + r * (ux, uz).
+    //
+    //     Ellipse norm: N(p) = ((p.x - cx)/ax)² + ((p.z - cz)/bz)²
+    //     We want N(camera) on the same side of 1 as N(target).
+    const sinB = Math.sin(c.beta);
+    const ux = -Math.cos(c.alpha) * sinB;
+    const uz = -Math.sin(c.alpha) * sinB;
+    const tx = c.target.x - STAD_CAM_CX;
+    const tz = c.target.z - STAD_CAM_CZ;
+    const a2 = STAD_CAM_AX * STAD_CAM_AX;
+    const b2 = STAD_CAM_BZ * STAD_CAM_BZ;
+    const targetN = (tx * tx) / a2 + (tz * tz) / b2;
+    const targetInside = targetN < 1;
+    // Camera offset at current radius:
+    const cdx = c.radius * ux;
+    const cdz = c.radius * uz;
+    const camN = ((tx + cdx) * (tx + cdx)) / a2 + ((tz + cdz) * (tz + cdz)) / b2;
+    const camInside = camN < 1;
+    if (targetInside !== camInside) {
+      // Solve N(target + r*u) = 1 for r:
+      //   A·r² + B·r + C = 0
+      //   A = ux²/ax² + uz²/bz²
+      //   B = 2(tx·ux/ax² + tz·uz/bz²)
+      //   C = tx²/ax² + tz²/bz² − 1   (= targetN − 1)
+      const A = (ux * ux) / a2 + (uz * uz) / b2;
+      const B = 2 * (tx * ux / a2 + tz * uz / b2);
+      const C = targetN - 1;
+      const disc = B * B - 4 * A * C;
+      if (disc > 0 && A > 1e-9) {
+        const sq = Math.sqrt(disc);
+        // We want the positive root that lies BEFORE the current
+        // (now-too-large) radius. Both roots if A>0 + C<0 (target
+        // inside) → one positive, one negative; pick positive.
+        const r1 = (-B + sq) / (2 * A);
+        const r2 = (-B - sq) / (2 * A);
+        const candidates = [r1, r2].filter((r) => r > 0.1);
+        if (candidates.length > 0) {
+          const rWall = Math.min(...candidates);
+          // Pull camera radius IN by an extra 0.3 so it sits just
+          // inside (or outside, mirroring) the wall, never touching.
+          const newR = Math.max(c.lowerRadiusLimit ?? 4, rWall - 0.3);
+          if (newR < c.radius) c.radius = newR;
+        }
+      }
+    }
   });
 
   base.hemiLight.intensity = 0.95;
@@ -994,14 +1059,19 @@ function buildPortalGate(scene: Scene, portal: PortalGate): Mesh[] {
   // so we rotate by (facing - π/2) around Y.
   root.rotation.y = -portal.facing + Math.PI / 2;
 
-  // ── Dimensions — tunnel mouth: 5 wide, 4.5 tall, 1.4 deep.
+  // ── Dimensions — flat-frame portal: 5 wide, 4.5 tall, only 0.4 deep.
+  // Old version had a 1.4-unit-deep tunnel recess with a roof + back
+  // wall, which from oblique camera angles occluded the cover poster.
+  // Now everything is shallow + flat: two pillars + lintel + cover
+  // plane between them, with a thin dark backdrop directly behind the
+  // poster to give it contrast without hiding it.
   const mouthW = 5.0;
   const mouthH = 4.5;
-  const mouthD = 1.4;
   const pillarW = 1.0;
-  const pillarD = mouthD + 0.2;
+  const pillarD = 0.5;
 
-  // Two stone pillars flanking the mouth
+  // Two stone pillars flanking the mouth — shallow now so they don't
+  // protrude in front of the cover plane from side angles.
   for (const sign of [-1, 1] as const) {
     const pillar = MeshBuilder.CreateBox(`portal-pillar-${portal.id}-${sign}`, {
       width: pillarW, height: mouthH, depth: pillarD,
@@ -1012,7 +1082,7 @@ function buildPortalGate(scene: Scene, portal: PortalGate): Mesh[] {
     meshes.push(pillar);
   }
 
-  // Lintel across the top — stone, with a thin gold accent line
+  // Lintel across the top
   const lintelW = mouthW + 2 * pillarW + 0.4;
   const lintel = MeshBuilder.CreateBox(`portal-lintel-${portal.id}`, {
     width: lintelW, height: 0.9, depth: pillarD,
@@ -1031,43 +1101,33 @@ function buildPortalGate(scene: Scene, portal: PortalGate): Mesh[] {
   trim.parent = root;
   meshes.push(trim);
 
-  // Tunnel recess — dark interior. Built as 3 boxes: back wall (deep
-  // inside) + roof underside + floor strip. Side walls are the inner
-  // faces of the pillars (already dark in shadow). The cover image
-  // hangs on the back wall, lit by emissive so it pops out of the dark.
-  const backWall = MeshBuilder.CreateBox(`portal-back-${portal.id}`, {
-    width: mouthW, height: mouthH, depth: 0.2,
+  // Thin dark backdrop directly BEHIND the poster — gives the bright
+  // cover image edge contrast without forming a recess that would
+  // occlude it from oblique angles. Sits 0.1 units behind the cover.
+  const coverW = mouthW - 0.2;
+  const coverH = mouthH - 0.7;
+  const backdrop = MeshBuilder.CreateBox(`portal-backdrop-${portal.id}`, {
+    width: coverW + 0.15, height: coverH + 0.15, depth: 0.08,
   }, scene);
-  backWall.position.set(0, mouthH / 2, -mouthD + 0.1);
-  backWall.material = tunnelMat;
-  backWall.parent = root;
-  meshes.push(backWall);
+  backdrop.position.set(0, mouthH / 2 - 0.1, -0.05);
+  backdrop.material = tunnelMat;
+  backdrop.parent = root;
+  meshes.push(backdrop);
 
-  const tunnelRoof = MeshBuilder.CreateBox(`portal-roof-${portal.id}`, {
-    width: mouthW, height: 0.15, depth: mouthD,
-  }, scene);
-  tunnelRoof.position.set(0, mouthH - 0.075, -mouthD / 2);
-  tunnelRoof.material = tunnelMat;
-  tunnelRoof.parent = root;
-  meshes.push(tunnelRoof);
-
-  // ── Cover image — hung on the back wall of the tunnel recess.
-  // Slightly inset so the dark frame is visible around it. Emissive
-  // so the cover glows in the dark tunnel, drawing the eye to it.
+  // ── Cover image — flat plane between the pillars, in FRONT of the
+  // backdrop. Emissive so it stays readable in any light.
   const coverMat = new StandardMaterial(`portal-cover-mat-${portal.id}`, scene);
   const coverTex = new Texture(ASSETS[portal.cover], scene, /* noMipmap */ false, /* invertY */ true);
   coverTex.anisotropicFilteringLevel = 8;
   coverMat.diffuseTexture = coverTex;
   coverMat.emissiveTexture = coverTex;
-  coverMat.emissiveColor = new Color3(0.65, 0.65, 0.65);
+  coverMat.emissiveColor = new Color3(0.6, 0.6, 0.6);
   coverMat.specularColor = new Color3(0, 0, 0);
   coverMat.backFaceCulling = false;
-  const coverW = mouthW - 1.0;
-  const coverH = mouthH - 1.2;
   const cover = MeshBuilder.CreatePlane(`portal-cover-${portal.id}`, {
     width: coverW, height: coverH, sideOrientation: Mesh.DOUBLESIDE,
   }, scene);
-  cover.position.set(0, mouthH / 2, -mouthD + 0.25);
+  cover.position.set(0, mouthH / 2 - 0.1, 0.02);
   cover.material = coverMat;
   cover.parent = root;
   meshes.push(cover);

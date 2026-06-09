@@ -19,7 +19,29 @@
 
 import * as https from "node:https";
 
-// ─── Public types ──────────────────────────────────────────────────────────
+// ─── Public types — standings ──────────────────────────────────────────────
+
+export interface TeamStanding {
+  position: number;
+  team: string;
+  code: string;          // 3-letter team code (TLA)
+  played: number;
+  won: number;
+  draw: number;
+  lost: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  points: number;
+}
+
+export interface GroupStanding {
+  /** "A" / "B" / ... — the trailing letter of the API's "GROUP_X". */
+  group: string;
+  teams: TeamStanding[];
+}
+
+// ─── Public types — fixtures ───────────────────────────────────────────────
 
 export type MatchStatus =
   | "SCHEDULED"
@@ -278,5 +300,144 @@ export class FixturePoller {
       this.cache = this.cache.filter((f) => f.status !== "FINISHED" || now - f.kickoffMs < 100 * 60 * 1000);
     }
     this.cache.sort((a, b) => a.kickoffMs - b.kickoffMs);
+  }
+}
+
+// ─── Standings poller ──────────────────────────────────────────────────────
+// Group-stage standings for the World Cup. Polled at most ONCE PER DAY —
+// standings don't change live (the fixture poller above handles live scores).
+// Daily cadence is also gentle on the Football-Data.org rate budget.
+
+interface FdStandingsRoot {
+  standings?: Array<{
+    stage?: string;
+    type?: string;
+    group?: string;
+    table?: Array<{
+      position?: number;
+      team?: { name?: string; tla?: string };
+      playedGames?: number;
+      won?: number;
+      draw?: number;
+      lost?: number;
+      goalsFor?: number;
+      goalsAgainst?: number;
+      goalDifference?: number;
+      points?: number;
+    }>;
+  }>;
+}
+
+/** 2026 FIFA World Cup — 12 groups of 4, expanded format. Stub seed
+ *  with realistic qualifiers; all teams start with 0-0-0 since the
+ *  tournament hasn't begun. The real API replaces this verbatim when
+ *  FOOTBALL_API_KEY is set. */
+function buildStubStandings(): GroupStanding[] {
+  const groups: Array<[string, Array<[string, string]>]> = [
+    ["A", [["Mexico", "MEX"], ["Argentina", "ARG"], ["Croatia", "CRO"], ["Iran", "IRN"]]],
+    ["B", [["USA", "USA"], ["Brazil", "BRA"], ["Belgium", "BEL"], ["Iraq", "IRQ"]]],
+    ["C", [["Canada", "CAN"], ["Germany", "GER"], ["Senegal", "SEN"], ["Saudi Arabia", "KSA"]]],
+    ["D", [["France", "FRA"], ["Japan", "JPN"], ["Morocco", "MAR"], ["Costa Rica", "CRC"]]],
+    ["E", [["England", "ENG"], ["Spain", "ESP"], ["Nigeria", "NGA"], ["Panama", "PAN"]]],
+    ["F", [["Portugal", "POR"], ["Switzerland", "SUI"], ["Australia", "AUS"], ["Qatar", "QAT"]]],
+    ["G", [["Netherlands", "NED"], ["Italy", "ITA"], ["Ecuador", "ECU"], ["Tunisia", "TUN"]]],
+    ["H", [["Uruguay", "URU"], ["Denmark", "DEN"], ["Colombia", "COL"], ["Ghana", "GHA"]]],
+    ["I", [["Norway", "NOR"], ["Poland", "POL"], ["Egypt", "EGY"], ["Honduras", "HON"]]],
+    ["J", [["Sweden", "SWE"], ["South Korea", "KOR"], ["Cameroon", "CMR"], ["Jamaica", "JAM"]]],
+    ["K", [["Turkey", "TUR"], ["Serbia", "SRB"], ["Algeria", "ALG"], ["New Zealand", "NZL"]]],
+    ["L", [["Austria", "AUT"], ["Wales", "WAL"], ["Ivory Coast", "CIV"], ["Paraguay", "PAR"]]],
+  ];
+  return groups.map(([group, teams]) => ({
+    group,
+    teams: teams.map(([name, code], i) => ({
+      position: i + 1,
+      team: name, code,
+      played: 0, won: 0, draw: 0, lost: 0,
+      goalsFor: 0, goalsAgainst: 0, goalDifference: 0, points: 0,
+    })),
+  }));
+}
+
+function parseFdStandings(data: FdStandingsRoot): GroupStanding[] {
+  const out: GroupStanding[] = [];
+  for (const s of data.standings ?? []) {
+    // Only the group-stage "TOTAL" tables, not the home/away splits.
+    if (s.type && s.type !== "TOTAL") continue;
+    const grpRaw = s.group ?? "";
+    if (!grpRaw.startsWith("GROUP_")) continue;
+    const group = grpRaw.replace("GROUP_", "");
+    const teams: TeamStanding[] = [];
+    for (const t of s.table ?? []) {
+      if (!t.team?.name) continue;
+      teams.push({
+        position: t.position ?? 0,
+        team: t.team.name,
+        code: (t.team.tla ?? t.team.name.slice(0, 3)).toUpperCase(),
+        played: t.playedGames ?? 0,
+        won: t.won ?? 0,
+        draw: t.draw ?? 0,
+        lost: t.lost ?? 0,
+        goalsFor: t.goalsFor ?? 0,
+        goalsAgainst: t.goalsAgainst ?? 0,
+        goalDifference: t.goalDifference ?? 0,
+        points: t.points ?? 0,
+      });
+    }
+    if (teams.length > 0) out.push({ group, teams });
+  }
+  out.sort((a, b) => a.group.localeCompare(b.group));
+  return out;
+}
+
+export class StandingsPoller {
+  private apiKey: string;
+  private useStub: boolean;
+  private cache: GroupStanding[] = [];
+  /** Epoch ms of the last successful poll. */
+  private lastFetchedAt = 0;
+  /** Error back-off until this epoch ms. */
+  private backoffUntil = 0;
+  /** How often to refresh the cache. Daily by design — standings tables
+   *  don't change between matches, the live-fixture poller covers that. */
+  private readonly REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+  constructor(opts: FixturePollerOpts = {}) {
+    this.apiKey = opts.apiKey ?? process.env.FOOTBALL_API_KEY ?? "";
+    this.useStub = opts.useStub ?? !this.apiKey;
+    if (this.useStub) {
+      this.cache = buildStubStandings();
+      this.lastFetchedAt = Date.now();
+    }
+  }
+
+  getStandings(): readonly GroupStanding[] {
+    return this.cache;
+  }
+
+  /** Lazy daily refresh. No-op until 24h has passed since the last
+   *  successful pull (or until the error back-off expires). */
+  async poll(): Promise<void> {
+    const now = Date.now();
+    if (this.backoffUntil > now) return;
+    if (now - this.lastFetchedAt < this.REFRESH_INTERVAL_MS) return;
+    this.lastFetchedAt = now;
+
+    if (this.useStub) {
+      this.cache = buildStubStandings();
+      return;
+    }
+
+    try {
+      const data = await httpJson<FdStandingsRoot>(
+        `/v4/competitions/${COMPETITION_CODE}/standings`,
+        { "X-Auth-Token": this.apiKey, "User-Agent": "dressup-fair/1.0" },
+      );
+      const fresh = parseFdStandings(data);
+      if (fresh.length > 0) this.cache = fresh;
+    } catch (err) {
+      // 6h back-off on error — standings are daily so we can wait.
+      this.backoffUntil = now + 6 * 60 * 60 * 1000;
+      console.warn("[standings] poll failed; backing off:", (err as Error).message);
+    }
   }
 }

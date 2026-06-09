@@ -128,6 +128,7 @@ export function Hud({ phaseRef: _phaseRef, net }: HudProps) {
       ) : null}
 
       <BettingPanel net={net} fixtures={snap.bettingFixtures} myBets={snap.myBets} balance={snap.balance} />
+      <LeaderboardWidget standings={snap.bettingStandings} />
       {snap.lastBetResult ? (
         <BetResultToast result={snap.lastBetResult} fixtures={snap.bettingFixtures} />
       ) : null}
@@ -593,6 +594,95 @@ function SocialPanel({
   );
 }
 
+// ─── Leaderboard widget ─────────────────────────────────────────────────────
+// A small "🏆 Standings" button on the right edge. Click to expand a
+// full-height panel listing every group of the 2026 World Cup with each
+// team's MP / W / D / L / GD / Pts. Daily-refreshed on the server.
+function LeaderboardWidget({
+  standings,
+}: {
+  standings: ReadonlyArray<import('./store').GroupStandingSnapshot>;
+}) {
+  const [open, setOpen] = useState(false);
+  if (standings.length === 0) {
+    // Hide the button entirely until the first standings broadcast lands —
+    // avoids showing an empty panel during connect.
+    return null;
+  }
+  return (
+    <>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{ ...leaderboardButtonStyle, ...(open ? leaderboardButtonActiveStyle : {}) }}
+        title="World Cup standings (daily)"
+      >
+        🏆 Standings
+      </button>
+      {open ? (
+        <div style={leaderboardPanelStyle}>
+          <div style={leaderboardHeaderStyle}>
+            <strong>2026 FIFA World Cup — Group Stage</strong>
+            <button onClick={() => setOpen(false)} style={leaderboardCloseStyle} title="Close">✕</button>
+          </div>
+          <div style={leaderboardGroupsStyle}>
+            {standings.map((g) => (
+              <LeaderboardGroupTable key={g.group} group={g} />
+            ))}
+          </div>
+          <div style={leaderboardFooterStyle}>
+            Standings refresh once per day from Football-Data.org.
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function LeaderboardGroupTable({
+  group,
+}: {
+  group: import('./store').GroupStandingSnapshot;
+}) {
+  return (
+    <div style={leaderboardGroupCardStyle}>
+      <div style={leaderboardGroupTitleStyle}>Group {group.group}</div>
+      <table style={leaderboardTableStyle}>
+        <thead>
+          <tr>
+            <th style={{ ...leaderboardThStyle, textAlign: 'left' }}>Team</th>
+            <th style={leaderboardThStyle}>MP</th>
+            <th style={leaderboardThStyle}>W</th>
+            <th style={leaderboardThStyle}>D</th>
+            <th style={leaderboardThStyle}>L</th>
+            <th style={leaderboardThStyle}>GD</th>
+            <th style={leaderboardThPointsStyle}>Pts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {group.teams.map((t, idx) => {
+            // Top 2 of each group advance — highlight them.
+            const advances = idx < 2;
+            return (
+              <tr key={t.team} style={advances ? leaderboardAdvanceRowStyle : undefined}>
+                <td style={{ ...leaderboardTdStyle, textAlign: 'left' }}>
+                  <span style={leaderboardTeamCodeStyle}>{t.code}</span>
+                  <span style={{ marginLeft: 6 }}>{t.team}</span>
+                </td>
+                <td style={leaderboardTdStyle}>{t.played}</td>
+                <td style={leaderboardTdStyle}>{t.won}</td>
+                <td style={leaderboardTdStyle}>{t.draw}</td>
+                <td style={leaderboardTdStyle}>{t.lost}</td>
+                <td style={leaderboardTdStyle}>{t.goalDifference > 0 ? '+' : ''}{t.goalDifference}</td>
+                <td style={leaderboardTdPointsStyle}>{t.points}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ─── Betting panel ──────────────────────────────────────────────────────────
 // Bottom-right corner widget showing the next match + (during the bet
 // window) three camp buttons. Click a camp + amount to place a bet. A
@@ -916,6 +1006,112 @@ const kbdStyle: CSSProperties = {
   fontFamily: 'ui-monospace, monospace', fontSize: '0.72rem', fontWeight: 700,
   boxShadow: 'inset 0 -2px 0 rgba(0,0,0,0.35)',
 };
+// ─── Leaderboard styles ─────────────────────────────────────────────────────
+const leaderboardButtonStyle: CSSProperties = {
+  position: 'absolute', top: 70, right: 12,
+  padding: '8px 12px', borderRadius: 12,
+  background: 'rgba(255,255,255,0.92)',
+  color: '#1a1a1d',
+  fontFamily: 'Inter, system-ui, sans-serif', fontSize: '0.82rem', fontWeight: 700,
+  border: '1px solid rgba(0,0,0,0.08)',
+  backdropFilter: 'blur(8px)',
+  boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+  cursor: 'pointer',
+  pointerEvents: 'auto',
+};
+const leaderboardButtonActiveStyle: CSSProperties = {
+  background: '#1a1a1d',
+  color: '#fff',
+  borderColor: '#1a1a1d',
+};
+const leaderboardPanelStyle: CSSProperties = {
+  position: 'absolute', top: 116, right: 12,
+  width: 'min(680px, 92vw)',
+  maxHeight: 'calc(100vh - 200px)',
+  display: 'flex', flexDirection: 'column',
+  padding: '0.8rem 1rem',
+  borderRadius: 14,
+  background: 'rgba(255,255,255,0.96)',
+  color: '#1a1a1d',
+  fontFamily: 'Inter, system-ui, sans-serif',
+  boxShadow: '0 16px 48px rgba(0,0,0,0.25)',
+  border: '1px solid rgba(0,0,0,0.08)',
+  pointerEvents: 'auto',
+  overflow: 'hidden',
+};
+const leaderboardHeaderStyle: CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+  paddingBottom: 8,
+  borderBottom: '1px solid rgba(0,0,0,0.1)',
+  fontSize: '0.95rem',
+};
+const leaderboardCloseStyle: CSSProperties = {
+  background: 'transparent', border: 'none',
+  fontSize: '1.1rem', cursor: 'pointer',
+  color: '#1a1a1d', padding: '0 4px',
+};
+const leaderboardGroupsStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+  gap: 12,
+  padding: '10px 0',
+  overflowY: 'auto',
+};
+const leaderboardGroupCardStyle: CSSProperties = {
+  background: '#f7f4ee',
+  borderRadius: 10,
+  padding: '8px 10px',
+  border: '1px solid rgba(0,0,0,0.06)',
+};
+const leaderboardGroupTitleStyle: CSSProperties = {
+  fontSize: '0.82rem', fontWeight: 700,
+  paddingBottom: 4,
+  borderBottom: '1px solid rgba(0,0,0,0.08)',
+};
+const leaderboardTableStyle: CSSProperties = {
+  width: '100%',
+  borderCollapse: 'collapse',
+  fontSize: '0.74rem',
+  marginTop: 4,
+};
+const leaderboardThStyle: CSSProperties = {
+  padding: '4px 2px',
+  textAlign: 'center', fontWeight: 600,
+  color: '#666',
+  borderBottom: '1px solid rgba(0,0,0,0.08)',
+};
+const leaderboardThPointsStyle: CSSProperties = {
+  ...leaderboardThStyle,
+  color: '#3a6ea5',
+};
+const leaderboardTdStyle: CSSProperties = {
+  padding: '4px 2px',
+  textAlign: 'center',
+};
+const leaderboardTdPointsStyle: CSSProperties = {
+  ...leaderboardTdStyle,
+  fontWeight: 700, color: '#3a6ea5',
+};
+const leaderboardAdvanceRowStyle: CSSProperties = {
+  background: 'rgba(58, 134, 52, 0.07)',
+};
+const leaderboardTeamCodeStyle: CSSProperties = {
+  display: 'inline-block',
+  minWidth: 30,
+  padding: '1px 4px',
+  borderRadius: 3,
+  background: '#1a1a1d',
+  color: '#fff',
+  fontSize: '0.66rem', fontWeight: 700,
+  textAlign: 'center',
+};
+const leaderboardFooterStyle: CSSProperties = {
+  borderTop: '1px solid rgba(0,0,0,0.08)',
+  paddingTop: 6,
+  fontSize: '0.7rem', opacity: 0.65,
+  textAlign: 'center',
+};
+
 // ─── Betting panel styles ───────────────────────────────────────────────────
 const bettingPanelStyle: CSSProperties = {
   position: 'absolute', bottom: 12, right: 12,
