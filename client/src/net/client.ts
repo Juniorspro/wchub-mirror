@@ -27,6 +27,15 @@ import type { IdentityStatus, PendingInput, PredictedSelf, SessionMeta, TimedSna
 
 export type NetStatus = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';
 
+export interface TopVoterSnapshot {
+  readonly sid: string;
+  readonly name: string;
+  readonly contribution: number;
+  readonly team: string;
+  readonly teamCode: string;
+  readonly camp: string;  // 'HOME' | 'DRAW' | 'AWAY' | ''
+}
+
 export interface TeamStandingSnapshot {
   readonly position: number;
   readonly team: string;
@@ -145,6 +154,24 @@ export class NetClient {
   /** Group-stage standings (12 groups × 4 teams for the 2026 WC). Pushed
    *  via `event:standings`. Updated daily from the server poller. */
   bettingStandings: ReadonlyArray<GroupStandingSnapshot> = [];
+  /** Server-wide top-up pool — sum of every bet in this room session,
+   *  drives the milestone ladder + monument display. */
+  bettingPool = 0;
+  /** Milestone tier indexes already crossed + paid out. */
+  bettingPoolUnlocked: readonly number[] = [];
+  /** One-shot queue: targeted milestone rewards waiting for the render
+   *  loop to award coins + show toast. scope = 'server' for the shared
+   *  pool tiers, 'personal' for the player's own contribution tiers. */
+  readonly pendingMilestoneRewards: Array<{
+    scope: 'server' | 'personal';
+    tier: number; threshold: number; reward: number; label: string;
+  }> = [];
+  /** Personal lifetime contribution + unlocked personal-tier indexes. */
+  bettingMyContribution = 0;
+  bettingMyUnlocked: readonly number[] = [];
+  /** Top-10 voters by lifetime contribution, sorted DESC. Server
+   *  broadcasts on each bet and on join. */
+  bettingTopVoters: ReadonlyArray<TopVoterSnapshot> = [];
   /** Targeted bet confirmations from the server. Queue drained by the
    *  render loop to deduct from local balance + show confirmation toast. */
   readonly pendingBetConfirms: Array<{ matchId: string; camp: string; amount: number }> = [];
@@ -396,6 +423,55 @@ export class NetClient {
         }
         out.sort((a, b) => a.group.localeCompare(b.group));
         this.bettingStandings = out;
+      });
+      room.onMessage('event:pool-update', (m: { pool?: unknown; unlocked?: unknown } | undefined) => {
+        const pool = Number(m?.pool);
+        if (Number.isFinite(pool) && pool >= 0) this.bettingPool = pool;
+        const arr = Array.isArray(m?.unlocked) ? m!.unlocked as unknown[] : [];
+        const ids: number[] = [];
+        for (const n of arr) {
+          const v = typeof n === 'number' ? n : Number(n);
+          if (Number.isFinite(v)) ids.push(v);
+        }
+        this.bettingPoolUnlocked = ids;
+      });
+      room.onMessage('event:milestone-reward', (m: { scope?: unknown; tier?: unknown; threshold?: unknown; reward?: unknown; label?: unknown } | undefined) => {
+        const scope = (m?.scope === 'personal') ? 'personal' as const : 'server' as const;
+        const tier = Number(m?.tier);
+        const threshold = Number(m?.threshold);
+        const reward = Number(m?.reward);
+        const label = typeof m?.label === 'string' ? m.label : '';
+        if (!Number.isFinite(tier) || !Number.isFinite(reward)) return;
+        this.pendingMilestoneRewards.push({ scope, tier, threshold, reward, label });
+      });
+      room.onMessage('event:top-voters', (m: { entries?: unknown } | undefined) => {
+        const list = Array.isArray(m?.entries) ? m!.entries as unknown[] : [];
+        const out: TopVoterSnapshot[] = [];
+        for (const e of list) {
+          if (!e || typeof e !== 'object') continue;
+          const r = e as Record<string, unknown>;
+          if (typeof r.sid !== 'string') continue;
+          out.push({
+            sid: r.sid,
+            name: typeof r.name === 'string' ? r.name : '',
+            contribution: Number(r.contribution) || 0,
+            team: typeof r.team === 'string' ? r.team : '',
+            teamCode: typeof r.teamCode === 'string' ? r.teamCode : '',
+            camp: typeof r.camp === 'string' ? r.camp : '',
+          });
+        }
+        this.bettingTopVoters = out;
+      });
+      room.onMessage('event:personal-update', (m: { contribution?: unknown; unlocked?: unknown } | undefined) => {
+        const c = Number(m?.contribution);
+        if (Number.isFinite(c) && c >= 0) this.bettingMyContribution = c;
+        const arr = Array.isArray(m?.unlocked) ? m!.unlocked as unknown[] : [];
+        const ids: number[] = [];
+        for (const n of arr) {
+          const v = typeof n === 'number' ? n : Number(n);
+          if (Number.isFinite(v)) ids.push(v);
+        }
+        this.bettingMyUnlocked = ids;
       });
       // Ask for the initial snapshot.
       room.send('event:request-fixtures');

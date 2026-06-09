@@ -33,8 +33,11 @@ import {
   getGameSnapshot,
   hydrateEconomyFromStorage,
   hydratePresetsFromStorage,
+  applyMilestoneReward,
   resetGameStore,
   setBettingFixtures,
+  setBettingPersonal,
+  setBettingPool,
   setBettingStandings,
   setChatMessages,
   setGameSnapshot,
@@ -51,6 +54,9 @@ import {
   createGameWorld,
   FAIR_CENTER,
   PORTAL_INTERACT_RADIUS,
+  SIGNPOST_INTERACT_RADIUS,
+  SIGNPOST_X,
+  SIGNPOST_Z,
   STADIUM_PORTAL_GATES,
   type GameWorldObjects,
 } from './world';
@@ -106,6 +112,14 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
   let lastBettingFixturesRef: unknown = null;
   // Same deal for the group-standings table (daily refresh).
   let lastBettingStandingsRef: unknown = null;
+  // Top-up pool tracking (number + unlocked-tier-count → simple compare).
+  let lastBettingPool = -1;
+  let lastBettingPoolUnlockedLen = -1;
+  // Personal contribution tracking — same diff strategy.
+  let lastMyContrib = -1;
+  let lastMyUnlockedLen = -1;
+  // Top-voters list — reference compare.
+  let lastTopVotersRef: unknown = null;
 
   // ─── Portal-gate state ────────────────────────────────────────────────────
   // G key triggers redirect to the nearby portal's URL. Edge-detect so
@@ -423,10 +437,39 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
       if (net.bettingFixtures !== lastBettingFixturesRef) {
         lastBettingFixturesRef = net.bettingFixtures;
         setBettingFixtures(net.bettingFixtures);
+        // Repaint the in-world fixture board's display texture.
+        objects.world.updateFixtureBoard(net.bettingFixtures);
       }
       if (net.bettingStandings !== lastBettingStandingsRef) {
         lastBettingStandingsRef = net.bettingStandings;
         setBettingStandings(net.bettingStandings);
+      }
+      // Top-up pool refresh. Tracked as a tuple of (pool, unlocked-set-length)
+      // — both change atomically on a pool-update broadcast.
+      if (net.bettingPool !== lastBettingPool
+        || net.bettingPoolUnlocked.length !== lastBettingPoolUnlockedLen) {
+        lastBettingPool = net.bettingPool;
+        lastBettingPoolUnlockedLen = net.bettingPoolUnlocked.length;
+        setBettingPool(net.bettingPool, net.bettingPoolUnlocked);
+        objects.world.updateMonument(net.bettingPool, net.bettingPoolUnlocked);
+      }
+      // Personal contribution + unlocked tiers (per-player snapshot).
+      if (net.bettingMyContribution !== lastMyContrib
+        || net.bettingMyUnlocked.length !== lastMyUnlockedLen) {
+        lastMyContrib = net.bettingMyContribution;
+        lastMyUnlockedLen = net.bettingMyUnlocked.length;
+        setBettingPersonal(net.bettingMyContribution, net.bettingMyUnlocked);
+      }
+      // Top-voters board — repaint when the server pushes a new list.
+      if (net.bettingTopVoters !== lastTopVotersRef) {
+        lastTopVotersRef = net.bettingTopVoters;
+        objects.world.updateTopVotersBoard(net.bettingTopVoters);
+      }
+      // Milestone rewards — apply each + show toast.
+      while (net.pendingMilestoneRewards.length > 0) {
+        const r = net.pendingMilestoneRewards.shift();
+        if (!r) continue;
+        applyMilestoneReward(r);
       }
       // Drain bet confirmations — coins were already deducted locally
       // by placeLocalBet on click; this just ack's that the server
@@ -507,6 +550,12 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
       }
       gHeldLastFrame = gHeld;
 
+      // Signpost proximity — surfaces a HUD controls cheat-sheet when
+      // the player walks up to the map signpost. No key required;
+      // pure "info on approach" interaction.
+      const distToSignpost = Math.hypot(SIGNPOST_X - myX, SIGNPOST_Z - myZ);
+      const newNearSignpost = distToSignpost < SIGNPOST_INTERACT_RADIUS;
+
       // Only push to the store when one of the HUD-visible fields
       // actually changes — this runs 60Hz inside the render loop so a
       // naive setGameSnapshot would trigger React re-renders every frame.
@@ -523,7 +572,8 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
         || Math.floor(curSnap.crowdTimer) !== timerSec
         || curSnap.nearbyPortalId !== nearbyPortalId
         || curSnap.nearbyPortalLabel !== nearbyPortalLabel
-        || curSnap.nearbyPortalUrl !== nearbyPortalUrl;
+        || curSnap.nearbyPortalUrl !== nearbyPortalUrl
+        || curSnap.nearbySignpost !== newNearSignpost;
       if (changed) {
         setGameSnapshot({
           nearestOtherId: nearestId,
@@ -534,6 +584,7 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
           nearbyPortalId,
           nearbyPortalLabel,
           nearbyPortalUrl,
+          nearbySignpost: newNearSignpost,
         });
       }
     }

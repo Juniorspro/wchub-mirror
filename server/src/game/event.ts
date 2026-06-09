@@ -34,6 +34,34 @@ const MAX_BET = 200;
 /** Minimum players in the room before events run. */
 const MIN_PLAYERS = 1;  // Phase 1: keep low so it's testable solo
 
+/** SERVER milestone ladder — collective goal. Every bet contributes to
+ *  a server-wide pool (room-scoped, since one Container = one room).
+ *  When the pool crosses a threshold, every player who's ever placed
+ *  a bet in this session receives the listed coin reward instantly.
+ *  Thresholds raised significantly so the ladder represents real
+ *  long-tail collective contribution — players bring large coin
+ *  balances; the old 100-6000 ladder ate through in minutes. */
+const SERVER_MILESTONES = [
+  { threshold:   1000, reward:   30, label: "First Thousand" },
+  { threshold:   5000, reward:  100, label: "Five Thousand Pool" },
+  { threshold:  15000, reward:  200, label: "Fifteen K Mark" },
+  { threshold:  40000, reward:  500, label: "Forty K Tier" },
+  { threshold: 100000, reward: 1500, label: "Hundred K Champion" },
+] as const;
+
+/** PERSONAL milestone ladder — your individual contribution to the
+ *  pool across the session. Smaller thresholds with smaller rewards,
+ *  so each player has their own incremental progression on top of
+ *  the shared server ladder. Each player's contribution is the sum
+ *  of every bet they've placed (regardless of outcome). */
+const PERSONAL_MILESTONES = [
+  { threshold:   50, reward:  10, label: "Backer" },
+  { threshold:  200, reward:  30, label: "Supporter" },
+  { threshold:  500, reward:  75, label: "Patron" },
+  { threshold: 1500, reward: 200, label: "Champion" },
+  { threshold: 5000, reward: 500, label: "Legend" },
+] as const;
+
 // ─── Bet types ─────────────────────────────────────────────────────────────
 
 type Camp = "HOME" | "DRAW" | "AWAY";
@@ -63,6 +91,87 @@ export function registerBettingEvent(
   const standingsPoller = new StandingsPoller();
   const phases = new Map<string, MatchPhase>();
   let stopped = false;
+
+  // ─── Server-wide top-up pool ────────────────────────────────────────────
+  // Sum of every bet placed in this room session. Drives the SERVER
+  // milestone ladder. Resets only when the Container restarts.
+  let globalPool = 0;
+  // Tiers (by index into SERVER_MILESTONES) that have crossed.
+  const unlockedMilestones = new Set<number>();
+  // Session ids that have placed at least one bet — eligible for the
+  // server-wide milestone rewards when new tiers cross.
+  const everBet = new Set<string>();
+
+  // ─── Per-player contribution tracking ─────────────────────────────────
+  // Each player's lifetime contribution (sum of their bet amounts) in
+  // this session. Drives the PERSONAL milestone ladder — they unlock
+  // their own tier rewards independently from the server ladder.
+  const playerContribution = new Map<string, number>();
+  // Per-player unlocked-tier indexes into PERSONAL_MILESTONES.
+  const playerUnlockedTiers = new Map<string, Set<number>>();
+  // Most-recent bet per player — drives the top-voters board's team
+  // column. Overwrites on every new bet from that player.
+  const playerMostRecentBet = new Map<string, {
+    matchId: string; camp: Camp; teamName: string; teamCode: string;
+  }>();
+
+  function broadcastTopVoters(): void {
+    // Sort by contribution DESC, take top 10. Look up name from state
+    // at broadcast time so renames flow through correctly.
+    const entries: Array<{
+      sid: string; name: string; contribution: number;
+      team: string; teamCode: string; camp: string;
+    }> = [];
+    for (const [sid, contribution] of playerContribution) {
+      const p = state.players.get(sid);
+      if (!p) continue;
+      const recent = playerMostRecentBet.get(sid);
+      entries.push({
+        sid,
+        name: p.username,
+        contribution,
+        team: recent?.teamName ?? "",
+        teamCode: recent?.teamCode ?? "",
+        camp: recent?.camp ?? "",
+      });
+    }
+    entries.sort((a, b) => b.contribution - a.contribution);
+    room.broadcast("event:top-voters", { entries: entries.slice(0, 10) });
+  }
+  function sendTopVoters(client: { send(t: string, m: unknown): void }): void {
+    const entries: Array<{
+      sid: string; name: string; contribution: number;
+      team: string; teamCode: string; camp: string;
+    }> = [];
+    for (const [sid, contribution] of playerContribution) {
+      const p = state.players.get(sid);
+      if (!p) continue;
+      const recent = playerMostRecentBet.get(sid);
+      entries.push({
+        sid,
+        name: p.username,
+        contribution,
+        team: recent?.teamName ?? "",
+        teamCode: recent?.teamCode ?? "",
+        camp: recent?.camp ?? "",
+      });
+    }
+    entries.sort((a, b) => b.contribution - a.contribution);
+    client.send("event:top-voters", { entries: entries.slice(0, 10) });
+  }
+
+  function broadcastPool(): void {
+    room.broadcast("event:pool-update", {
+      pool: globalPool,
+      unlocked: Array.from(unlockedMilestones).sort((a, b) => a - b),
+    });
+  }
+  function sendPool(client: { send(t: string, m: unknown): void }): void {
+    client.send("event:pool-update", {
+      pool: globalPool,
+      unlocked: Array.from(unlockedMilestones).sort((a, b) => a - b),
+    });
+  }
 
   function getPhase(matchId: string): MatchPhase {
     let p = phases.get(matchId);
@@ -147,6 +256,70 @@ export function registerBettingEvent(
       amount,
       name: player.username,
     });
+
+    // SERVER pool: add this bet to the global tally + check for newly
+    // crossed server milestones. Pay out INSTANTLY to every player
+    // who has ever bet (Top-Hero collective-reward pattern).
+    globalPool += amount;
+    everBet.add(client.sessionId);
+    for (let i = 0; i < SERVER_MILESTONES.length; i++) {
+      if (unlockedMilestones.has(i)) continue;
+      const m = SERVER_MILESTONES[i];
+      if (globalPool < m.threshold) continue;
+      unlockedMilestones.add(i);
+      for (const sid of everBet) {
+        const c = room.clients.find((rc) => rc.sessionId === sid);
+        if (c) {
+          c.send("event:milestone-reward", {
+            scope: "server",
+            tier: i, threshold: m.threshold, reward: m.reward, label: m.label,
+          });
+        }
+      }
+      room.broadcast("event:milestone-unlocked", {
+        scope: "server",
+        tier: i, threshold: m.threshold, label: m.label, reward: m.reward,
+      });
+    }
+
+    // PERSONAL pool: add this bet to the player's lifetime contribution
+    // + check their own milestones. Each player has their own ladder;
+    // rewards are sent ONLY to this player (no broadcast).
+    const sid = client.sessionId;
+    const prevContrib = playerContribution.get(sid) ?? 0;
+    const newContrib = prevContrib + amount;
+    playerContribution.set(sid, newContrib);
+    let myUnlocked = playerUnlockedTiers.get(sid);
+    if (!myUnlocked) { myUnlocked = new Set(); playerUnlockedTiers.set(sid, myUnlocked); }
+    for (let i = 0; i < PERSONAL_MILESTONES.length; i++) {
+      if (myUnlocked.has(i)) continue;
+      const m = PERSONAL_MILESTONES[i];
+      if (newContrib < m.threshold) continue;
+      myUnlocked.add(i);
+      client.send("event:milestone-reward", {
+        scope: "personal",
+        tier: i, threshold: m.threshold, reward: m.reward, label: m.label,
+      });
+    }
+    // Send the player their updated personal stats (contribution +
+    // unlocked tiers). Targeted — other clients don't need to know.
+    client.send("event:personal-update", {
+      contribution: newContrib,
+      unlocked: Array.from(myUnlocked).sort((a, b) => a - b),
+    });
+
+    // Update the player's most-recent-bet record for the top-voters
+    // board, then broadcast the new sorted top-10.
+    const teamName = camp === "HOME" ? fixture.homeTeam
+      : camp === "AWAY" ? fixture.awayTeam
+      : "Draw";
+    const teamCode = camp === "HOME" ? fixture.homeCode
+      : camp === "AWAY" ? fixture.awayCode
+      : "DRAW";
+    playerMostRecentBet.set(sid, { matchId, camp, teamName, teamCode });
+    broadcastTopVoters();
+
+    broadcastPool();
 
     // Confirm to the sender so they know it landed + the (now-deducted)
     // amount is real. Client deducts from local balance on confirmation.
@@ -289,6 +462,20 @@ export function registerBettingEvent(
   room.onMessage("event:request-fixtures", (client) => {
     // Also send the latest standings — same channel, single round-trip.
     sendStandings(client);
+    // ... and the top-up pool snapshot so the monument paints right
+    // on first frame.
+    sendPool(client);
+    // ... and the player's personal contribution + unlocked tiers
+    // (0 / empty for first-time joiners).
+    const sid = client.sessionId;
+    const contrib = playerContribution.get(sid) ?? 0;
+    const unlocked = playerUnlockedTiers.get(sid);
+    client.send("event:personal-update", {
+      contribution: contrib,
+      unlocked: unlocked ? Array.from(unlocked).sort((a, b) => a - b) : [],
+    });
+    // Top-voters snapshot.
+    sendTopVoters(client);
     const now = Date.now();
     const fixtures = poller.getFixtures();
     client.send("event:fixtures", {

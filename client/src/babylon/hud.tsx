@@ -126,6 +126,7 @@ export function Hud({ phaseRef: _phaseRef, net }: HudProps) {
       {snap.nearbyPortalLabel ? (
         <PortalPrompt label={snap.nearbyPortalLabel} />
       ) : null}
+      {snap.nearbySignpost ? <SignpostPanel /> : null}
 
       <BettingPanel net={net} fixtures={snap.bettingFixtures} myBets={snap.myBets} balance={snap.balance} />
       <LeaderboardWidget standings={snap.bettingStandings} />
@@ -847,6 +848,26 @@ function BetResultToast({
   );
 }
 
+// ─── Signpost panel ─────────────────────────────────────────────────────────
+// Bottom-center cheat sheet shown when the player stands near the
+// signpost. Lists the keyboard controls + community emotes — works as
+// a "tutorial" surface that's always available but never in the way.
+function SignpostPanel() {
+  return (
+    <div style={signpostPanelStyle}>
+      <div style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: 6 }}>
+        🗺️ Park guide
+      </div>
+      <div style={signpostRowStyle}><kbd style={kbdStyle}>WASD</kbd><span>walk</span></div>
+      <div style={signpostRowStyle}><kbd style={kbdStyle}>Space</kbd><span>jump</span></div>
+      <div style={signpostRowStyle}><kbd style={kbdStyle}>E</kbd><span>compliment nearest player (+5 🪙 to them)</span></div>
+      <div style={signpostRowStyle}><kbd style={kbdStyle}>F</kbd><span>wave 👋</span></div>
+      <div style={signpostRowStyle}><kbd style={kbdStyle}>G</kbd><span>enter portal (when near one)</span></div>
+      <div style={signpostRowStyle}><kbd style={kbdStyle}>Enter</kbd><span>open chat (drag mouse to orbit camera)</span></div>
+    </div>
+  );
+}
+
 // ─── Portal prompt ──────────────────────────────────────────────────────────
 // Center-screen call to action when the player stands near a stadium
 // portal gate. Press G to leave this game and jump to the linked one.
@@ -1198,6 +1219,22 @@ const betToastLostStyle: CSSProperties = {
 };
 const betToastEvenStyle: CSSProperties = {
   background: 'rgba(60, 60, 80, 0.92)',
+};
+
+const signpostPanelStyle: CSSProperties = {
+  position: 'absolute', bottom: 200, left: '50%', transform: 'translateX(-50%)',
+  display: 'flex', flexDirection: 'column', gap: 4,
+  padding: '0.75rem 1rem', borderRadius: 12,
+  background: 'rgba(244, 235, 214, 0.96)',
+  color: '#3a2410', fontFamily: 'Inter, system-ui, sans-serif',
+  fontSize: '0.82rem',
+  pointerEvents: 'none', userSelect: 'none',
+  border: '2px solid #7a5836',
+  boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+  minWidth: 280,
+};
+const signpostRowStyle: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 8,
 };
 
 const portalPromptStyle: CSSProperties = {

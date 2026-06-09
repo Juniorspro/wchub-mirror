@@ -691,40 +691,40 @@ function buildShoes(scene: Scene, parent: TransformNode, design: GarmentDesign, 
   const meshes: Mesh[] = [];
 
   const buildOne = (side: 'l' | 'r', x: number) => {
-    // Sole — shifted forward (z=0.1 → 0.16) and Z scale shortened
-    // (1.78 → 1.5) so the shoe's heel doesn't extend so far behind the
-    // ankle. Toe length is roughly preserved.
+    // SOLE — chunky thickness so the shoe reads as a SHOE from low
+    // camera angles, not a flat disc. Old version was 0.04 thick which
+    // turned into a barely-visible white plate near the ground; bumped
+    // to 0.09. Position raised correspondingly so the bottom still
+    // touches ground.
     const sole = MeshBuilder.CreateCylinder(`${label}-sole-${side}`, {
-      diameter: 0.5, height: 0.04, tessellation: 22,
+      diameter: 0.5, height: 0.09, tessellation: 22,
     }, scene);
     sole.parent = parent;
-    sole.position.set(x, 0.02, 0.16);
+    sole.position.set(x, 0.045, 0.16);
     sole.scaling.set(0.95, 1.0, 1.5);
     sole.material = soleMat;
     meshes.push(sole);
 
-    // Upper — matched to the shorter sole.
+    // UPPER — taller (Y-scale 0.7 → 1.05) so the dome rises above the
+    // sole as a proper shoe upper rather than a squashed cap. Sits on
+    // top of the (now-thicker) sole.
     const upper = MeshBuilder.CreateSphere(`${label}-upper-${side}`, {
       diameter: 0.52, segments: 22, slice: 0.5,
     }, scene);
     upper.parent = parent;
-    upper.position.set(x, 0.04, 0.16);
-    upper.scaling.set(0.88, 0.7, 1.4);
+    upper.position.set(x, 0.09, 0.16);
+    upper.scaling.set(0.88, 1.05, 1.4);
     upper.material = upperMat;
     meshes.push(upper);
 
-    // Lace patch — thin contrasting box positioned ON the upper's top
-    // surface at z≈0.30 (slightly forward of the upper's apex at z=0.1).
-    // The upper at this z has y ≈ 0.20 and slopes downward toward the toe;
-    // a +0.21 rad rotation around X tilts the patch's +Z (front) edge
-    // DOWN to follow that slope, so the patch lies flat against the upper
-    // instead of hovering above it. Prior code used a negative rotation
-    // that tilted AWAY from the slope, making the lace float.
+    // LACE patch — moved up to match the taller upper. The upper's
+    // mid-front at z≈0.30 now sits around y≈0.30; the +0.21 rad
+    // forward-tilt keeps the patch hugging the slope of the upper.
     const lace = MeshBuilder.CreateBox(`${label}-lace-${side}`, {
-      width: 0.14, height: 0.025, depth: 0.16,
+      width: 0.16, height: 0.025, depth: 0.18,
     }, scene);
     lace.parent = parent;
-    lace.position.set(x, 0.21, 0.30);
+    lace.position.set(x, 0.32, 0.30);
     lace.rotation.x = 0.21;
     lace.material = laceMat;
     meshes.push(lace);

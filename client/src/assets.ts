@@ -14,7 +14,7 @@ export const ASSETS: Record<string, string> = {
   "jersey-argentina-fabric": new URL("./assets/sprite/sprite_jersey-argentina-fabric_d81d80.png", import.meta.url).href,
   "jersey-croatia-fabric": new URL("./assets/sprite/sprite_jersey-croatia-fabric_58ae31.png", import.meta.url).href,
   "jersey-germany-fabric": new URL("./assets/sprite/sprite_jersey-germany-fabric_a0f09e.png", import.meta.url).href,
-  "oak-tree": new URL("./assets/sprite/sprite_oak-tree_1b24ee.png", import.meta.url).href,
+  "oak-tree": new URL("./assets/sprite/sprite_oak-tree_154b7e.png", import.meta.url).href,
   "portal-cover-adventure": new URL("./assets/sprite/sprite_portal-cover-adventure_7921e1.png", import.meta.url).href,
   "portal-cover-cards": new URL("./assets/sprite/sprite_portal-cover-cards_52fb70.png", import.meta.url).href,
   "portal-cover-defender": new URL("./assets/sprite/sprite_portal-cover-defender_2f613b.png", import.meta.url).href,

@@ -879,10 +879,18 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
         // Raise + wiggle: lift the arm forward-up (~-1.0 rad) plus add a
         // sine oscillation for the side-to-side wave (rotation.z).
         const liftEnvelope = Math.sin(phase * Math.PI);  // 0 → 1 → 0
-        shoulderJointR.rotation.x = -1.1 * liftEnvelope;
+        // Lift the arm OVERHEAD (was -1.1 rad ≈ 63° — barely above
+        // horizontal; now -2.5 rad ≈ 143° → arm points up-and-slightly-back,
+        // the natural wave-hi position).
+        shoulderJointR.rotation.x = -2.5 * liftEnvelope;
+        // Also straighten the elbow during the wave so the forearm
+        // doesn't sag into a half-bent pose — the walking-anim block
+        // above damps elbow rotation but doesn't zero it; we override.
+        elbowJointR.rotation.x = 0;
         // ROTATION.Z controls the side-to-side hand wave around the
-        // arm's vertical axis. 3 full oscillations across the lifetime.
-        shoulderJointR.rotation.z = Math.sin(waveT * 12) * 0.5 * liftEnvelope;
+        // arm's vertical axis. 3 full oscillations across the lifetime,
+        // amplitude widened a touch now that the arm is overhead.
+        shoulderJointR.rotation.z = Math.sin(waveT * 12) * 0.6 * liftEnvelope;
       }
     } else {
       // Damp any residual rotation.z (from a prior wave) toward 0 so the

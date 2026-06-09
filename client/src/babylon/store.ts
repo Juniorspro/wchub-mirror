@@ -107,6 +107,25 @@ export interface GameStoreSnapshot {
   /** World Cup group standings, refreshed daily from the server. The
    *  LeaderboardPanel in the HUD renders this. */
   readonly bettingStandings: ReadonlyArray<GroupStandingSnapshot>;
+  /** Server-wide top-up pool (sum of every bet placed this session).
+   *  Drives the monument display + milestone ladder. */
+  readonly bettingPool: number;
+  /** Indexes of milestone tiers already crossed + paid out. */
+  readonly bettingPoolUnlocked: readonly number[];
+  /** Latest milestone unlock toast — set briefly when a tier crosses
+   *  AND the player is one of the recipients (everyone-who's-bet). */
+  readonly lastMilestoneReward: {
+    scope: 'server' | 'personal';
+    tier: number; threshold: number; reward: number; label: string;
+  } | null;
+  /** Player's personal lifetime contribution (sum of bet amounts this
+   *  session). Drives the personal milestone ladder. */
+  readonly bettingMyContribution: number;
+  /** Personal-tier indexes already unlocked + rewarded for this player. */
+  readonly bettingMyUnlocked: readonly number[];
+  /** True when the player is standing close enough to the signpost
+   *  to read its controls cheat-sheet. */
+  readonly nearbySignpost: boolean;
 }
 
 export interface TeamStandingSnapshot {
@@ -234,7 +253,35 @@ const initialSnapshot: GameStoreSnapshot = {
   myBets: new Map(),
   lastBetResult: null,
   bettingStandings: [],
+  bettingPool: 0,
+  bettingPoolUnlocked: [],
+  lastMilestoneReward: null,
+  bettingMyContribution: 0,
+  bettingMyUnlocked: [],
+  nearbySignpost: false,
 };
+
+/** SERVER milestone ladder — mirrors SERVER_MILESTONES in
+ *  server/src/game/event.ts. The monument paints every tier. */
+export const BETTING_SERVER_MILESTONES: ReadonlyArray<{
+  threshold: number; reward: number; label: string;
+}> = [
+  { threshold:   1000, reward:   30, label: 'First Thousand' },
+  { threshold:   5000, reward:  100, label: 'Five Thousand Pool' },
+  { threshold:  15000, reward:  200, label: 'Fifteen K Mark' },
+  { threshold:  40000, reward:  500, label: 'Forty K Tier' },
+  { threshold: 100000, reward: 1500, label: 'Hundred K Champion' },
+];
+/** PERSONAL milestone ladder — mirrors PERSONAL_MILESTONES on the server. */
+export const BETTING_PERSONAL_MILESTONES: ReadonlyArray<{
+  threshold: number; reward: number; label: string;
+}> = [
+  { threshold:   50, reward:  10, label: 'Backer' },
+  { threshold:  200, reward:  30, label: 'Supporter' },
+  { threshold:  500, reward:  75, label: 'Patron' },
+  { threshold: 1500, reward: 200, label: 'Champion' },
+  { threshold: 5000, reward: 500, label: 'Legend' },
+];
 
 let snapshot: GameStoreSnapshot = initialSnapshot;
 const listeners = new Set<GameStoreListener>();
@@ -498,6 +545,32 @@ export function setBettingFixtures(fixtures: ReadonlyArray<BettingFixtureSnapsho
  *  server's StandingsPoller. */
 export function setBettingStandings(standings: ReadonlyArray<GroupStandingSnapshot>): void {
   setGameSnapshot({ bettingStandings: standings });
+}
+
+/** Update the server-wide top-up pool + unlocked milestone tiers. */
+export function setBettingPool(pool: number, unlocked: readonly number[]): void {
+  setGameSnapshot({ bettingPool: pool, bettingPoolUnlocked: unlocked });
+}
+
+/** Apply a milestone reward — credits coins to local balance + sets the
+ *  toast snapshot so the HUD can briefly display it. Called from
+ *  game.ts when NetClient receives event:milestone-reward. */
+export function applyMilestoneReward(reward: {
+  scope: 'server' | 'personal';
+  tier: number; threshold: number; reward: number; label: string;
+}): void {
+  const nextBalance = snapshot.balance + reward.reward;
+  setGameSnapshot({ balance: nextBalance, lastMilestoneReward: reward });
+  persistEconomy(nextBalance, snapshot.ownedItems);
+}
+
+/** Update the player's personal contribution + unlocked-tier list. */
+export function setBettingPersonal(contribution: number, unlocked: readonly number[]): void {
+  setGameSnapshot({ bettingMyContribution: contribution, bettingMyUnlocked: unlocked });
+}
+
+export function clearMilestoneReward(): void {
+  setGameSnapshot({ lastMilestoneReward: null });
 }
 
 /** Spend coins to place a bet (local-only; server tracks the bet
