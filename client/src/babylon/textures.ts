@@ -71,6 +71,23 @@ export interface GarmentDesign {
    * stripe down the outer side of each leg (adidas-style track pants).
    * For shirts it shows up on the body side seam + sleeve seam. */
   sideStripeColor?: string;
+  /** Optional freehand pixel-art layer drawn by the player at the
+   * Design Bench. Rendered as a chest print on the FRONT and BACK
+   * body panels, on top of the base patterns, under the jersey
+   * overlay. Compact wire format — see PixelArt. */
+  pixelArt?: PixelArt;
+}
+
+/** Player-drawn pixel art. `data` is a row-major hex-nibble string of
+ * w*h chars; each nibble indexes into `palette` (so palettes are capped
+ * at 15 colors), with 'f' meaning transparent / skip. A 24×24 grid is
+ * 576 chars — small enough that the whole design still fits the
+ * look:<slot>:<b64> wire format the server relays. */
+export interface PixelArt {
+  palette: string[];
+  data: string;
+  w: number;
+  h: number;
 }
 
 // Jersey-specific overlay rendered ON TOP of the base panel patterns.
@@ -124,15 +141,21 @@ export function getImageTexture(scene: Scene, url: string): Texture {
   if (cached) return cached;
   const tex = new Texture(url, scene);
   tex.anisotropicFilteringLevel = 8;
+  // Self-healing cache: actor.clearGarments() disposes garment meshes
+  // with dispose(false, /*disposeMaterialAndTextures*/ true), which can
+  // kill this SHARED cached texture in place. Evict the cache entry the
+  // moment the texture is disposed so a later re-equip rebuilds it
+  // instead of handing back a dead texture (the "avatar got stripped"
+  // bug). Babylon fires onDisposeObservable from dispose().
+  tex.onDisposeObservable.addOnce(() => {
+    if (IMAGE_TEXTURE_CACHE.get(url) === tex) IMAGE_TEXTURE_CACHE.delete(url);
+  });
   // If the URL 404s or fails CORS, Babylon silently leaves diffuseTexture
   // in a broken state — surface as black/white on most drivers. Drop the
   // failed texture so a later equip can re-fetch (e.g. after the user
   // refreshes the underlying CDN object), and the material falls back to
   // diffuseColor which the caller has already set to white.
   tex.onLoadObservable.addOnce(() => { /* keep cached on success */ });
-  // Babylon's Texture exposes a Loaded/Error observable on the underlying
-  // _texture in some versions, but the public surface is onLoadObservable
-  // for success only — we instead listen for the engine-level error event.
   const ie = tex.getInternalTexture();
   if (ie) {
     ie.onErrorObservable.addOnce(() => {
@@ -151,6 +174,15 @@ export function getPatternTexture(scene: Scene, key: string, design: GarmentDesi
   const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
   drawSewingPattern(ctx, design, tex);
   tex.anisotropicFilteringLevel = 4;
+  // Self-healing cache: actor.clearGarments() disposes garment meshes
+  // with dispose(false, /*disposeMaterialAndTextures*/ true), which
+  // kills this SHARED cached texture while it's still registered here.
+  // A re-equip with the SAME design then got a cache hit on a dead
+  // texture → the garment rendered invisible ("the avatar got
+  // stripped"). Evict on dispose so the next call rebuilds it.
+  tex.onDisposeObservable.addOnce(() => {
+    if (TEXTURE_CACHE.get(key) === tex) TEXTURE_CACHE.delete(key);
+  });
   TEXTURE_CACHE.set(key, tex);
   return tex;
 }
@@ -236,8 +268,39 @@ export function drawDesignPanelsSync(ctx: CanvasRenderingContext2D, design: Garm
   // each panel. For pants this lands on the outer side of each leg.
   if (design.sideStripeColor) drawSideStripes(ctx, size, design.sideStripeColor);
 
+  // Player-drawn pixel art — chest print on the front + back body
+  // panels, above base patterns, below the jersey overlay text.
+  if (design.pixelArt) drawPixelArtPanels(ctx, design.pixelArt, size);
+
   // Jersey overlay last so it sits ON TOP of the panel patterns + seams.
   if (design.overlay) drawJerseyOverlay(ctx, design.overlay, size);
+}
+
+// Paint the player's pixel grid into the FRONT (top-right) and BACK
+// (top-left) body quadrants, centred with a margin so it reads as a
+// printed chest graphic. Nibbles outside the palette range (including
+// the explicit 'f' eraser value) are transparent — the base pattern
+// shows through.
+function drawPixelArtPanels(ctx: CanvasRenderingContext2D, art: PixelArt, size: number): void {
+  if (!art.data || art.w <= 0 || art.h <= 0) return;
+  const half = size / 2;
+  const margin = half * 0.14;
+  const area = half - margin * 2;
+  const cell = area / Math.max(art.w, art.h);
+  for (const [ox, oy] of [[half, 0], [0, 0]] as ReadonlyArray<readonly [number, number]>) {
+    for (let py = 0; py < art.h; py++) {
+      for (let px = 0; px < art.w; px++) {
+        const ch = art.data[py * art.w + px];
+        if (ch === undefined || ch === 'f') continue;
+        const nib = parseInt(ch, 16);
+        if (!Number.isFinite(nib) || nib >= art.palette.length) continue;
+        ctx.fillStyle = art.palette[nib];
+        // Ceil the cell size so adjacent pixels never leave hairline
+        // gaps from fractional rounding.
+        ctx.fillRect(ox + margin + px * cell, oy + margin + py * cell, Math.ceil(cell), Math.ceil(cell));
+      }
+    }
+  }
 }
 
 // Vertical side stripes on the outer-seam UV positions:

@@ -26,7 +26,10 @@ export function addPlayer(
   // Optional initial outfit carried in joinOpts (so a returning player can
   // walk in already wearing what they had). Server still validates on
   // explicit `equip` messages — see messages.ts.
-  if (typeof opts?.textureItems === "string") p.textureItems = opts.textureItems.slice(0, 256);
+  // Cap matches messages.ts MAX_LOOK_LEN-sized look ids plus a few
+  // catalog ids — the old 256 cap silently truncated pixel-art look
+  // ids carried back in by returning players.
+  if (typeof opts?.textureItems === "string") p.textureItems = opts.textureItems.slice(0, 2800);
   if (typeof opts?.accessoryItems === "string") p.accessoryItems = opts.accessoryItems.slice(0, 256);
   spawnAt(p);
   state.players.set(sessionId, p);

@@ -14,9 +14,11 @@ import {
   Color3,
   Color4,
   DynamicTexture,
+  ImportMeshAsync,
   Material,
   Mesh,
   MeshBuilder,
+  Quaternion,
   StandardMaterial,
   Texture,
   TransformNode,
@@ -27,6 +29,7 @@ import {
   type Scene,
 } from '@babylonjs/core';
 import { createBaseSceneObjects, createStandardMaterial } from './helpers';
+import { createCharacterAvatar, type CharacterAvatar } from './actor';
 import { ASSETS } from '../assets';
 import { RUNTIME_CONFIG } from './config';
 
@@ -47,11 +50,20 @@ export interface GameWorldObjects {
   /** Repaint the top-up monument's display. Call when the server's
    *  pool total or unlocked-milestone set changes. */
   updateMonument(pool: number, unlockedTierIds: readonly number[]): void;
-  /** Repaint the top-voters board. Call when the server's broadcast
-   *  list of top contributors changes. */
+  /** Update the top-voters podium. Each top voter is rendered as a
+   *  static avatar statue (their actual outfit) on a tiered circular
+   *  plinth, with a name + contribution plaque at its base. Call
+   *  whenever the server broadcasts a fresh top-voters list. */
   updateTopVotersBoard(entries: ReadonlyArray<{
-    name: string; contribution: number; team: string; teamCode: string; camp: string;
+    sid: string; name: string; contribution: number;
+    team: string; teamCode: string; camp: string;
+    color: string; textureItems: string; accessoryItems: string;
   }>): void;
+  /** Move the soccer ball to a world-space (x, z) position and apply a
+   *  cumulative spin angle (rotation around the velocity-perpendicular
+   *  axis — fakes rolling). Called every render frame from game.ts with
+   *  the smoothed server ball state. */
+  updateSoccerBall(x: number, z: number, spin: number, spinAxisX: number, spinAxisZ: number): void;
   dispose(): void;
 }
 
@@ -68,6 +80,7 @@ interface MonumentController {
 interface TopVotersBoardController {
   meshes: Mesh[];
   repaint(entries: Parameters<GameWorldObjects['updateTopVotersBoard']>[0]): void;
+  dispose(): void;
 }
 
 // Map recenter (2026-06-08): everything shifted +86 in x so the stadium
@@ -79,6 +92,48 @@ interface TopVotersBoardController {
 export const FAIR_CENTER = new Vector3(110, 0, 24);
 export const FAIR_SIZE = 48;
 export const PLAZA_RADIUS = 4.5;
+// Larger paved disc that sits beneath the full ring of stalls — gives the
+// fair a coherent "town square" footprint instead of a small island under
+// the monument. Sized to comfortably enclose the cluster of stalls around
+// FAIR_CENTER (stalls roughly span x=94..121, z=14..39).
+export const PLAZA_BASE_RADIUS = 17;
+// Height of the raised monument platform (a low cylinder under the
+// centerpiece — gives the monument a real plinth instead of a flat decal).
+export const PLAZA_PLATFORM_HEIGHT = 0.5;
+
+// ─── Park trails — hand-drawn winding polylines ─────────────────────────────
+// The old path network was a rigid axis-aligned cross (one straight
+// N-S spine + one straight E-W trunk) that read as a city grid, not a
+// park. These are meandering trails: each entry is a list of bend
+// points; the builder lays a straight walkway segment between each
+// consecutive pair plus a small disc at every interior bend so elbows
+// read as continuous curves. The SAME data drives isGrassOpenArea so
+// grass blades never sprout through a trail.
+//
+// Every bend point was checked against the POI plots (no overlap):
+//   plaza disc r17.4 @ (110,24)   monument plot r5.1 @ (98,50)
+//   podium r8.9 @ (50,50)         fixture plot r4.5 @ (140,50)
+//   soccer pitch 149..167 × 19..45    picnic r5.85 @ (162,56)
+//   amphitheater stage+backdrop @ (148,66..72)  tent ±3.2 @ (180,45)
+//   trophy plaza r6 @ (186,60)    photo spot @ (186,25)
+//   concessions r4 @ (146,12)     stadium oval 73.5/52.5 @ (110,120)
+const TRAIL_DEFS: ReadonlyArray<{ w: number; pts: ReadonlyArray<readonly [number, number]> }> = [
+  // Plaza → stadium gate. Curves east through the meadow (the top-up
+  // monument stands west of the trail at (98, 50), display face aimed
+  // at spawn), then ducks under the flag banner to the gate at 67.5.
+  { w: 1.8, pts: [[110, 40], [115, 45], [118, 51], [117, 58], [113, 63], [110, 67]] },
+  // Plaza → top-voters podium, a lazy south-west meadow arc.
+  { w: 1.6, pts: [[95, 22], [86, 27], [77, 33], [67, 40], [60, 45]] },
+  // Plaza → east, hugging the south touchline of the soccer pitch out
+  // to the Sneaker Stand.
+  { w: 1.6, pts: [[126, 22], [134, 20], [143, 18], [153, 16.5], [163, 17.5], [168, 22]] },
+  // Branch at (143,18): north along the pitch's west side, past the
+  // fixture board, then east around the pitch's NE corner to fade out
+  // at the picnic plaza rim (162, 56).
+  { w: 1.4, pts: [[143, 18], [141, 26], [140, 34], [140, 41], [145, 46], [151, 50], [156, 53]] },
+  // East continuation from the Sneaker Stand into the Trophy Walk.
+  { w: 1.4, pts: [[168, 22], [174, 27], [180, 33], [185, 38]] },
+];
 
 // ─── Portal gates — leave THIS game and enter another in the Rezona app.
 // Modelled on the player-tunnel entrances at the base of stadium stands
@@ -116,8 +171,14 @@ export const SIGNPOST_INTERACT_RADIUS = 3.5;
 // before (outer diameter 140 vs 100) to give the interior room for
 // tiered stands + crowd backdrop, and to read as a proper arena from
 // the park. The wall is taller too so it can frame the new roof.
-const STADIUM_CENTER = new Vector3(110, 0, 150);
-const STADIUM_OUTER_DIAMETER = 140;
+// Stadium shrunk 2026-06-10 (25% reduction): outer diameter 140 → 105
+// (X semi-axis 98 → 73.5, Z semi-axis 70 → 52.5). Center z pulled to
+// 120 so the WHOLE oval fits inside the 175-deep fence (at cy=130 the
+// north wall reached z=182.5 and the fence rail sliced through the
+// stadium band — an overlap). North extent is now 120+52.5 = 172.5,
+// 2.5 clear of the fence; the south gate lands at z = 67.5.
+const STADIUM_CENTER = new Vector3(110, 0, 120);
+const STADIUM_OUTER_DIAMETER = 105;
 const STADIUM_OVAL_RATIO = 1.4;
 const STADIUM_WALL_HEIGHT = 26;
 
@@ -343,25 +404,76 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   allTextures.push(groundTex);
   allMaterials.push(groundMat);
 
-  // ─── Plaza disc + soft shadow ─────────────────────────────────────────────
-  const plazaMat = createStandardMaterial(scene, 'plaza-mat', Color3.FromHexString('#d8c5a4'));
-  const plaza = MeshBuilder.CreateDisc('plaza', { radius: PLAZA_RADIUS, tessellation: 48 }, scene);
-  plaza.rotation.x = Math.PI / 2;
-  plaza.position.set(FAIR_CENTER.x, 0.015, FAIR_CENTER.z);
-  plaza.material = plazaMat;
-  allMeshes.push(plaza);
-
-  const plazaShadow = MeshBuilder.CreateDisc('plaza-shadow', {
-    radius: PLAZA_RADIUS + 0.18, tessellation: 48,
+  // ─── Plaza: tiered town-square footprint ─────────────────────────────────
+  // Two concentric discs:
+  //   1. PLAZA_BASE — a large paved disc spanning the whole stall ring,
+  //      sitting flush with the ground (acts as the "courtyard floor").
+  //   2. PLAZA_PLATFORM — a raised cylinder at the centre that the
+  //      top-up monument sits on top of. The cylinder has visible side
+  //      thickness so the platform reads from any camera angle.
+  const plazaBaseMat = createStandardMaterial(
+    scene, 'plaza-base-mat', Color3.FromHexString('#c9b48d')
+  );
+  const plazaBase = MeshBuilder.CreateDisc('plaza-base', {
+    radius: PLAZA_BASE_RADIUS, tessellation: 64,
   }, scene);
-  plazaShadow.rotation.x = Math.PI / 2;
-  plazaShadow.position.set(FAIR_CENTER.x, 0.008, FAIR_CENTER.z);
-  const shadowMat = new StandardMaterial('plaza-shadow-mat', scene);
-  shadowMat.diffuseColor = Color3.FromHexString('#000000');
-  shadowMat.alpha = 0.08;
-  plazaShadow.material = shadowMat;
-  plazaShadow.isPickable = false;
-  allMeshes.push(plazaShadow);
+  plazaBase.rotation.x = Math.PI / 2;
+  plazaBase.position.set(FAIR_CENTER.x, 0.012, FAIR_CENTER.z);
+  plazaBase.material = plazaBaseMat;
+  plazaBase.isPickable = false;
+  allMeshes.push(plazaBase);
+  allMaterials.push(plazaBaseMat);
+
+  // Subtle outer rim — slightly darker ring that reads as a paving edge.
+  const plazaRimMat = createStandardMaterial(
+    scene, 'plaza-rim-mat', Color3.FromHexString('#a5916c')
+  );
+  const plazaRim = MeshBuilder.CreateDisc('plaza-rim', {
+    radius: PLAZA_BASE_RADIUS + 0.4, tessellation: 64,
+  }, scene);
+  plazaRim.rotation.x = Math.PI / 2;
+  plazaRim.position.set(FAIR_CENTER.x, 0.010, FAIR_CENTER.z);
+  plazaRim.material = plazaRimMat;
+  plazaRim.isPickable = false;
+  allMeshes.push(plazaRim);
+  allMaterials.push(plazaRimMat);
+
+  // Raised monument platform — visible plinth under the centerpiece.
+  const platformMat = createStandardMaterial(
+    scene, 'plaza-platform-mat', Color3.FromHexString('#e2cfa8')
+  );
+  const platform = MeshBuilder.CreateCylinder('plaza-platform', {
+    diameter: PLAZA_RADIUS * 2,
+    height: PLAZA_PLATFORM_HEIGHT,
+    tessellation: 48,
+  }, scene);
+  platform.position.set(
+    FAIR_CENTER.x,
+    PLAZA_PLATFORM_HEIGHT / 2,
+    FAIR_CENTER.z
+  );
+  platform.material = platformMat;
+  allMeshes.push(platform);
+  allMaterials.push(platformMat);
+
+  // Slightly larger step ring at the platform's base — implies a single
+  // step up onto the plinth without needing real stair geometry.
+  const stepMat = createStandardMaterial(
+    scene, 'plaza-step-mat', Color3.FromHexString('#bfa97e')
+  );
+  const step = MeshBuilder.CreateCylinder('plaza-platform-step', {
+    diameter: (PLAZA_RADIUS + 0.7) * 2,
+    height: PLAZA_PLATFORM_HEIGHT * 0.45,
+    tessellation: 48,
+  }, scene);
+  step.position.set(
+    FAIR_CENTER.x,
+    (PLAZA_PLATFORM_HEIGHT * 0.45) / 2,
+    FAIR_CENTER.z
+  );
+  step.material = stepMat;
+  allMeshes.push(step);
+  allMaterials.push(stepMat);
 
   // ─── Walkways ─────────────────────────────────────────────────────────────
   // Park-interior cross + radial branches to stalls, PLUS a wider
@@ -382,66 +494,40 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   pathMat.diffuseTexture = pathTex;
   allTextures.push(pathTex);
   allMaterials.push(pathMat);
-  // All x values += 86 from the original (map recenter).
-  const pathSpec: Array<[number, number, number, number, number?]> = [
-    // Park interior — central cross
-    [110,  1, 110, 47, 2.0],
-    [ 87, 24, 133, 24, 2.0],
-    // Park interior — radial branches to stalls
-    [110, 14, 108, 14, 1.2],
-    [110, 18,  98, 16, 1.2],
-    [110, 18, 121, 18, 1.2],
-    [115, 24, 125, 32, 1.2],
-    [110, 32, 114, 39, 1.2],
-    [108, 32, 100, 34, 1.2],
-    [104, 24,  94, 28, 1.2],
-    // Extension — north spine to the stadium gate. Stadium grew so the
-    // south wall is now at z = STADIUM_CENTER.z - bz = 150 - 70 = 80.
-    [110, 47, 110, 78, 2.0],
-    // Extension — east main artery past soccer + shoes to photo spot
-    [133, 24, 186, 24, 1.8],
-    // Branch — main artery → shoes stall (extended to reach the stall)
-    [156, 24, 170, 20, 1.4],
-    // Branch — south to concession cluster
-    [146, 24, 146, 12, 1.4],
-    // Branch — north to amphitheater (extended to reach the stage front)
-    [148, 45, 148, 70, 1.4],
-    // Branch — north to trophy plaza, reaching the central pedestal
-    [186, 24, 186, 60, 1.6],
-    // Branch — short stub north to the photo selfie spot
-    [186, 24, 186, 25, 1.4],
-
-    // ─── Cluster connector paths (themed-zone interconnections) ─────────
-    // West "Betting Plaza" loop — links signpost (75, 30) → monument
-    // (80, 50) → top-voters (95, 40) → fixture board (140, 50) all
-    // together so the four boards read as one walkable zone.
-    [ 75, 30,  80, 50, 1.4],
-    [ 80, 50,  95, 40, 1.4],
-    [ 95, 40, 140, 50, 1.4],
-    // Spur from the spine path at z=47 west to the betting plaza so
-    // players see it on the way to the stadium gate.
-    [110, 47,  95, 40, 1.4],
-    // East "Trophy Walk" loop — trophy plaza (186, 60) → trophy tent
-    // (180, 45) → mascot (195, 40) → photo spot (186, 25).
-    [186, 60, 180, 45, 1.4],
-    [180, 45, 195, 40, 1.2],
-    [186, 25, 195, 40, 1.2],
-    // Spine spur east at z=80 to the new fan-zone (130, 92) — links
-    // amphitheater approach with the fan zone.
-    [110, 80, 130, 92, 1.6],
-    [130, 92, 148, 70, 1.4],
-    // Stadium-approach press tent spur (90, 78) — runs west off the spine.
-    [110, 70,  90, 78, 1.4],
-    // "Food Avenue" connector — concession cluster (146, 12) east to
-    // the new food court (160, 20).
-    [146, 12, 160, 20, 1.4],
-  ];
-  for (const [x1, z1, x2, z2, w] of pathSpec) {
-    allMeshes.push(buildWalkway(scene, x1, z1, x2, z2, w ?? 1.5, pathMat));
+  // ─── Winding trails — see TRAIL_DEFS at module scope ──────────────────────
+  // Each polyline becomes N walkway segments + a small joint disc at
+  // every interior bend (fills the elbow gap so curves read continuous).
+  // Per-trail tiny Y stagger so trails that share a branch point (e.g.
+  // the pitch-side branch forking off the east trail at (143, 18))
+  // don't z-fight where their boxes overlap.
+  let trailIdx = 0;
+  for (const trail of TRAIL_DEFS) {
+    const yLift = trailIdx * 0.002;
+    for (let i = 0; i < trail.pts.length - 1; i++) {
+      const [x1, z1] = trail.pts[i];
+      const [x2, z2] = trail.pts[i + 1];
+      const seg = buildWalkway(scene, x1, z1, x2, z2, trail.w, pathMat);
+      seg.position.y += yLift;
+      allMeshes.push(seg);
+      // Elbow disc at each interior bend point (skip the very first).
+      if (i > 0) {
+        const joint = MeshBuilder.CreateDisc(`trail-joint-${trailIdx}-${i}`, {
+          radius: trail.w / 2, tessellation: 20,
+        }, scene);
+        joint.rotation.x = Math.PI / 2;
+        joint.position.set(x1, 0.041 + yLift, z1);
+        joint.material = pathMat;
+        joint.isPickable = false;
+        allMeshes.push(joint);
+      }
+    }
+    trailIdx++;
   }
 
   // ─── Soccer practice field ────────────────────────────────────────────────
-  for (const m of buildSoccerField(scene, 158, 32)) allMeshes.push(m);
+  const soccerField = buildSoccerField(scene, 158, 32);
+  for (const m of soccerField.meshes) allMeshes.push(m);
+  const soccerBallRoot = soccerField.ballRoot;
 
   // ─── Festive decor: lampposts + flag banners + balloons ─────────────────
   for (const m of buildFestiveDecor(scene)) allMeshes.push(m);
@@ -449,9 +535,39 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   // ─── Extra POIs to fill empty park areas — see buildExtraPois ─────────
   for (const m of buildExtraPois(scene)) allMeshes.push(m);
 
+  // ─── Event hero banner — the official "REZONA WORLD CUP" poster on a
+  // tall billboard at the plaza's north edge, facing spawn (110, 19) so
+  // every player sees it on arrival. Texture lands when poster_rezona_hero
+  // is generated; until then a deep-blue placeholder face shows.
+  for (const m of buildPosterSign(scene, allTextures, {
+    cx: 110, cz: 41, baseY: 3.2, width: 9.5, height: 5.3,
+    faceYaw: 0,                 // front normal points -Z → faces south/spawn
+    posterKey: 'poster_rezona_hero', postHeight: 6.2, id: 'banner-hero',
+  })) allMeshes.push(m);
+
+  // ─── Little mascot posters in varied poses, scattered on stands around
+  // the map (per the official orange-dino mascot). Each upgrades from a
+  // placeholder to its pose art when the matching image is generated.
+  const posterSpots: Array<{ x: number; z: number; yaw: number; key: string; id: string }> = [
+    { x: 88,  z: 30, yaw: -0.5,            key: 'poster_mascot_cheer', id: 'poster-cheer' },  // betting-plaza approach
+    { x: 132, z: 30, yaw: 0.5,             key: 'poster_mascot_kick',  id: 'poster-kick' },   // east trunk near pitch
+    { x: 118, z: 64, yaw: Math.PI,         key: 'poster_mascot_wave',  id: 'poster-wave' },   // gate approach, faces north walkers
+    { x: 60,  z: 46, yaw: -0.9,            key: 'poster_mascot_cheer', id: 'poster-cheer2' },  // podium meadow
+  ];
+  for (const p of posterSpots) {
+    for (const m of buildPosterSign(scene, allTextures, {
+      cx: p.x, cz: p.z, baseY: 1.7, width: 1.7, height: 2.3,
+      faceYaw: p.yaw, posterKey: p.key, postHeight: 1.7, id: p.id,
+    })) allMeshes.push(m);
+  }
+
+  // Hedge zone separators removed — they read as fragmented blocks
+  // rather than continuous boundaries from the top-down view.
+
   // ─── Stadium entrance gate — at the south wall of the enlarged stadium ───
-  // STADIUM_CENTER.z (150) - bz (70) = 80, the south face of the wall.
-  for (const m of buildStadiumGate(scene, STADIUM_CENTER.x, STADIUM_CENTER.z - 70)) allMeshes.push(m);
+  // South face of the wall = STADIUM_CENTER.z - (STADIUM_OUTER_DIAMETER/2).
+  // Uses the constant so this stays correct when the stadium gets resized.
+  for (const m of buildStadiumGate(scene, STADIUM_CENTER.x, STADIUM_CENTER.z - STADIUM_OUTER_DIAMETER / 2)) allMeshes.push(m);
 
   // ─── Portal gates — leave to another Rezona game ──────────────────────────
   // Decorative gates mounted on the stadium wall with game cover images.
@@ -482,20 +598,28 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   for (const m of boardCtl.meshes) allMeshes.push(m);
   fixtureBoardController = boardCtl;
 
-  // ─── Top-Hero monument — mirror plot west of the plaza ────────────────────
-  // Tall obelisk showing the server-wide top-up pool progress, with all
-  // five milestone tiers and unlock state. Sits at (80, 50), opposite
-  // the fixture board for visual balance.
-  const monumentCtl = buildTopupMonument(scene, 80, 50);
+  // ─── Top-Hero monument — west meadow landmark ────────────────────────────
+  // Tall obelisk showing the server-wide top-up pool progress with all
+  // milestone tiers + unlock state. Was at (110, 56) where it crowded
+  // the stadium gate + flag banner after the stadium shrink; moved to
+  // the open meadow at (98, 50) — west of the gate trail, clear of the
+  // banner, trees, lamps, and benches — and its display face is aimed
+  // straight at the spawn point so it's the first readable thing a new
+  // player sees.
+  const monumentCtl = buildTopupMonument(scene, 98, 50);
   for (const m of monumentCtl.meshes) allMeshes.push(m);
   monumentController = monumentCtl;
 
-  // ─── Top-voters board — Betting Plaza cluster ─────────────────────────
-  // Sits with the top-up monument (80, 50), fixture board (140, 50),
-  // and signpost (75, 30). Moved from (65, 80) to (95, 40) so the
-  // four boards are within a short walk of each other on the west
-  // side of the plaza — coherent "Betting Plaza" zone.
-  const topVotersCtl = buildTopVotersBoard(scene, 95, 40);
+  // ─── Top-voters podium — art-installation monument ────────────────────
+  // Was a tall flat billboard at (95, 40); replaced with a tiered
+  // circular plinth that holds STATIC AVATAR STATUES of the top voters,
+  // each with a nameplate + contribution amount carved on the base. The
+  // server now ships outfit data in `event:top-voters` so the statues
+  // wear exactly what the player wears live. Moved to (50, 50) — an
+  // empty grass plot west of the central spine, between the betting-
+  // plaza boards and the west fence, with clear sightlines from both
+  // the EW trunk and the north spine.
+  const topVotersCtl = buildTopVotersPodium(scene, 50, 50);
   for (const m of topVotersCtl.meshes) allMeshes.push(m);
   topVotersBoardController = topVotersCtl;
 
@@ -509,15 +633,17 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   // interior is empty space (the ground texture shows through).
 
   // ─── Park fence — visible boundary matching the server clamp ─────────────
-  // Map is now 220×220 (was 400×220 with stadium on west edge → wildly
-  // asymmetric fence distances). The east + west fences sit symmetric
-  // around the stadium midline at x=110.
-  for (const m of buildParkFence(scene, 0, 0, 220, 220)) {
+  // Map was 220×220 — too sparse, lots of empty grass between content
+  // and fence on the north + west. Shrunk 2026-06-10 to 200×175
+  // (server gameConfig.world matches), so the playable rectangle hugs
+  // the actual content footprint (south plaza + stalls at z≈10–40, the
+  // betting cluster at z≈40–60, the stadium oval at z≈77.5–182.5).
+  for (const m of buildParkFence(scene, 0, 0, 200, 175)) {
     allMeshes.push(m);
   }
 
   // ─── Centerpiece: championship football monument at plaza center ──────────
-  for (const m of buildCenterpiece(scene, FAIR_CENTER.x, FAIR_CENTER.z)) {
+  for (const m of buildCenterpiece(scene, FAIR_CENTER.x, FAIR_CENTER.z, PLAZA_PLATFORM_HEIGHT)) {
     allMeshes.push(m);
   }
 
@@ -541,48 +667,63 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   // ~35 oak trees, no pines (per design call: oak only for a unified
   // canopy look). Slightly varied scale per instance so the silhouette
   // doesn't read as identical clones.
-  // All x values += 86 from the original (map recenter).
+  // ─── Tree placement (organized around the current zone layout) ──────────
+  // Trees only land in CLEAR grass — no overlap with the plaza, stall
+  // radials, Betting Plaza (75–145 × 30–55), Trophy Walk (175–200 × 25–60),
+  // Food Avenue (140–165 × 10–22), Stadium Approach corridor (102–118 × 50–78),
+  // or any path. Three bands: a tight perimeter forest (the world edge),
+  // a few isolated specimen trees in between-zone pockets, and a
+  // south-fence-outside fringe for backdrop depth.
   const treeSpec: Array<[number, number, 'oak' | 'pine', number]> = [
-    // ─── Park interior — borders only, center kept clear ─────────────────
-    [ 92, 10, 'oak',  1.9],
-    [ 91, 32, 'oak',  1.7],
-    [ 92, 42, 'oak',  1.9],
-    [104,  6, 'oak',  1.7],
-    [116,  6, 'oak',  1.9],
-    [128, 12, 'oak',  1.8],
-    [130, 22, 'oak',  1.7],
-    [129, 32, 'oak',  1.9],
-    [122, 45, 'oak',  1.7],
-    [104, 44, 'oak',  1.8],
+    // Natural-clump layout: trees gather in twos and threes the way a
+    // real park plants them, instead of a regular perimeter row. Every
+    // position verified OUTSIDE: the stadium oval ((x-110)/73.5)² +
+    // ((z-120)/52.5)² ≥ 1, the (0,0)–(200,175) fence, every paved plot,
+    // and ≥3 units from every trail centerline.
+    // ─── West edge drifts ─────────────────────────────────────────────────
+    [ 15,  18, 'oak', 2.0],
+    [ 22,  40, 'oak', 2.2],
+    [ 14,  60, 'oak', 2.0],
+    [ 25,  82, 'oak', 2.1],
+    [ 10, 130, 'oak', 2.2],
+    [  8, 160, 'oak', 2.4],
 
-    // ─── South tree fringe (just outside the south fence) ────────────────
-    [ 71,  -4, 'oak', 2.0],
-    [ 96,  -8, 'oak', 2.2],
-    [126,  -2, 'oak', 1.9],
-    [156,  -4, 'oak', 2.1],
-    [116, -18, 'oak', 2.4],
-    [176, -12, 'oak', 2.2],
+    // ─── East edge drifts ─────────────────────────────────────────────────
+    [192,  20, 'oak', 2.1],
+    [195,  48, 'oak', 2.0],
+    [188, 100, 'oak', 2.2],
+    [195, 130, 'oak', 2.1],
+    [188, 160, 'oak', 2.3],
 
-    // ─── East scatter (around concession + soccer + trophy) ─────────────
-    [174, 10, 'oak', 2.1],
-    [199, 18, 'oak', 2.0],
-    [199, 45, 'oak', 2.2],
-    [200, 68, 'oak', 2.0],
+    // ─── South meadow clumps ──────────────────────────────────────────────
+    [ 80,   6, 'oak', 1.7],
+    [130,   8, 'oak', 1.6],
+    [140,   6, 'oak', 1.8],
+    [ 70,  10, 'oak', 1.8],
+    [ 62,  16, 'oak', 1.6],
+    [176,  16, 'oak', 1.9],
 
-    // ─── West scatter (mirror of east now that the stadium's centered) ──
-    [ 64, 28, 'oak', 1.9],
-    [ 72, 58, 'oak', 2.3],
-    [ 56, 12, 'oak', 1.9],
+    // ─── West meadow clumps (between podium trail and the fence) ─────────
+    [ 70,  53, 'oak', 1.9],
+    [ 78,  46, 'oak', 1.7],
+    [ 88,  46, 'oak', 1.8],
+    [ 64,  30, 'oak', 1.7],
+    [ 55,  60, 'oak', 2.0],
 
-    // ─── North buffer (frames the stadium gate) ────────────────────────
-    [ 94, 72, 'oak', 2.1],
-    [128, 74, 'oak', 2.0],
-    [ 80, 60, 'oak', 1.9],
-    [132, 56, 'oak', 2.0],
+    // ─── North-west meadow pair (between podium and stadium west wall) ───
+    [ 38,  68, 'oak', 2.1],
+    [ 46,  77, 'oak', 1.9],
 
-    // No "behind stadium" trees — the enlarged stadium now reaches all
-    // the way to the north fence (z=220), so there's no room for a
-    // tree band north of it.
+    // ─── East-centre lone specimen (between picnic and trophy plaza) ─────
+    [174,  60, 'oak', 1.9],
+
+    // ─── South fence fringe (z < 0, OUTSIDE the playable area) — read
+    //     as the forest beyond the park ─────────────────────────────────
+    [ 30,  -8, 'oak', 2.3],
+    [ 70, -12, 'oak', 2.1],
+    [110, -18, 'oak', 2.5],
+    [150, -10, 'oak', 2.2],
+    [190, -14, 'oak', 2.4],
   ];
   // Pine support kept in the type signature in case it returns later, but
   // the catalog above is oak-only — all entries map to oakMat.
@@ -598,15 +739,16 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   const grassMat = makeFoliageMaterial(scene, 'grass-sprite-mat', grassTex);
   allMaterials.push(grassMat);
 
-  // Grass lattice — step bumped 2.6 → 4.5 so we render ~75 tufts (×2
-  // planes = ~150 transparent meshes) instead of ~290 (~580). Visual
-  // density is preserved by slightly larger tufts in buildGrassTuft;
-  // GPU jitter on lower-end hardware drops dramatically.
-  // Park interior grass — bounds shifted +86 to match the recentered
-  // plaza (x ∈ [88, 132] now, was [2, 46]).
+  // Grass lattice — covers the WHOLE playable rectangle (0,0)→(200,175)
+  // with a 4.5-unit step. isGrassOpenArea() filters out positions that
+  // overlap paved discs / walkways / stalls / stadium interior so blades
+  // only sprout on actual grass dirt. Visible tufts ≈ ~700 (after the
+  // ~30% rejection rate from the filters), each = 2 alpha-test planes,
+  // ~1400 transparent meshes — well within budget for desktops + mid-
+  // tier mobile.
   let grassIdx = 0;
-  for (let gx = 88; gx < 132; gx += 4.5) {
-    for (let gz = 2; gz < 46; gz += 4.5) {
+  for (let gx = 5; gx < 198; gx += 4.5) {
+    for (let gz = 5; gz < 173; gz += 4.5) {
       const jx = (Math.sin(grassIdx * 12.9898) * 43758.5453) % 1;
       const jz = (Math.sin(grassIdx * 78.233)  * 43758.5453) % 1;
       const x = gx + jx * 2.5;
@@ -619,18 +761,57 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
 
   // ─── Benches ──────────────────────────────────────────────────────────────
   // x values += 86 (map recenter).
+  // Benches: two on the plaza pavement, the rest scattered trail-side
+  // at the bends with varied (non-cardinal) rotations so they read as
+  // hand-placed park furniture. Each position is ≥2.5 from any trail
+  // centerline and clear of every plot/stall footprint.
   const benchSpec: Array<[number, number, number]> = [
-    [107,  9,  Math.PI],
-    [113,  9,  0],
-    [107, 43,  Math.PI],
-    [113, 43,  0],
-    [ 95, 21,  Math.PI / 2],
-    [ 95, 27, -Math.PI / 2],
-    [125, 21,  Math.PI / 2],
-    [125, 27, -Math.PI / 2],
+    [107,  9,  Math.PI],          // plaza south, facing the centerpiece
+    [113,  9,  0.15],             // plaza south, slightly skewed twin
+    [105, 42,  0.5],              // gate trail, first bend (west side)
+    [120, 47, -0.6],              // gate trail, mid bend (east side)
+    [ 92, 30,  2.2],              // podium trail near the plaza exit
+    [ 56, 40,  0.8],              // podium approach, looking at the statues
+    [146, 51, -0.9],              // pitch NE / fixture-board rest stop (3.6 off the trail)
+    [172, 30,  2.6],              // east trail, looking back at the pitch
   ];
   for (const [x, z, rot] of benchSpec) {
     for (const m of buildBench(scene, x, z, rot)) allMeshes.push(m);
+  }
+
+  // ─── Skin procedural map objects with AI tileable textures ─────────────
+  // Name-keyed post-pass: walk every built mesh and re-skin its material
+  // with the matching generated texture (wood / stone / flagstone). One
+  // texture per unique material (shared mats are skinned once). All calls
+  // are guarded inside applyMapTexture — if a texture key is missing the
+  // material keeps its flat color, so this never breaks the world.
+  const skinnedMats = new Set<Material>();
+  const skin = (m: Mesh, key: string, repeat: number, keepTint = false): void => {
+    const mat = m.material;
+    if (!mat || skinnedMats.has(mat) || !(mat instanceof StandardMaterial)) return;
+    skinnedMats.add(mat);
+    applyMapTexture(scene, mat, key, allTextures, { repeat, keepTint });
+  };
+  for (const m of allMeshes) {
+    const n = m.name;
+    // Wood — fence rails/posts, bench seats/backs, picnic tabletops/benches,
+    // signpost + trophy-tent posts.
+    if (/^fence-rail|^fence-post|^bench-(seat|back)|^decor-picnic-(top|bench)|^epoi-sign-post|^epoi-trophy-post/.test(n)) {
+      skin(m, 'tex_wood_planks', 2);
+    // Cut stone — monument shaft/steps, podium plinths, centerpiece column,
+    // mascot + trophy pedestals.
+    } else if (/^mon-shaft|^mon-step|^mon-plot|^tvp-plinth|^cp-(base|column|cap)|^epoi-mascot-base|^epoi-trophy-ped/.test(n)) {
+      skin(m, 'tex_cut_stone', 1.5);
+    // Flagstone paving — plaza base/rim/platform + every paved plot disc.
+    } else if (/^plaza-base|^plaza-rim|^plaza-platform|^tvp-base|^tvp-tier|^trophy-plaza-disc|^photo-disc|^decor-picnic-(plot|rim)/.test(n)) {
+      skin(m, 'tex_flagstone', 5);
+    // Awning cloth — concession-cart roof panels. keepTint: the texture is
+    // near-white so each cart's diffuseColor tints it, one cloth for all
+    // four cart colors. (Stall awnings get the same treatment in
+    // entities.ts — stall meshes aren't part of allMeshes.)
+    } else if (/^concession-\d+-roof/.test(n)) {
+      skin(m, 'tex_awning_cloth', 2, /* keepTint */ true);
+    }
   }
 
   // ─── Perf: freeze the world matrix of every static decoration ──────────
@@ -643,7 +824,15 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   ground.freezeWorldMatrix();
   for (const m of allMeshes) {
     m.isPickable = false;
-    m.freezeWorldMatrix();
+    // The soccer ball children move every frame — DON'T freeze those.
+    // Anything parented to the ballRoot keeps a live world matrix.
+    let ancestor: TransformNode | null = m.parent as TransformNode | null;
+    let attachedToBall = false;
+    while (ancestor) {
+      if (ancestor === soccerBallRoot) { attachedToBall = true; break; }
+      ancestor = ancestor.parent as TransformNode | null;
+    }
+    if (!attachedToBall) m.freezeWorldMatrix();
   }
 
   return {
@@ -658,7 +847,24 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
     updateTopVotersBoard(entries) {
       if (topVotersBoardController) topVotersBoardController.repaint(entries);
     },
+    updateSoccerBall(x, z, spin, spinAxisX, spinAxisZ) {
+      soccerBallRoot.position.x = x;
+      soccerBallRoot.position.z = z;
+      // Spin around the perpendicular-to-velocity horizontal axis to
+      // fake a rolling ball. The roll axis is (-vz, 0, vx) (90° CCW
+      // from the velocity vector in the XZ plane). Use a quaternion so
+      // the rotation is true axis-angle, not an Euler approximation
+      // that would tumble incorrectly at large `spin`.
+      const len = Math.hypot(spinAxisX, spinAxisZ);
+      if (len > 0.001) {
+        const axis = new Vector3(-spinAxisZ / len, 0, spinAxisX / len);
+        soccerBallRoot.rotationQuaternion = Quaternion.RotationAxis(axis, spin);
+      }
+    },
     dispose() {
+      // Tear down dynamic avatar statues + their materials/textures
+      // BEFORE we wipe the global mesh/material/texture pools.
+      topVotersBoardController?.dispose();
       ground.dispose();
       for (const m of allMeshes) m.dispose();
       for (const mat of allMaterials) mat.dispose();
@@ -683,11 +889,11 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
   // SERVER_MILESTONES in server/src/game/event.ts. Local copy so this
   // file stays asset-only.
   const TIERS = [
-    { threshold:   1000, reward:   30, label: 'First Thousand' },
-    { threshold:   5000, reward:  100, label: 'Five Thousand Pool' },
-    { threshold:  15000, reward:  200, label: 'Fifteen K Mark' },
-    { threshold:  40000, reward:  500, label: 'Forty K Tier' },
-    { threshold: 100000, reward: 1500, label: 'Hundred K Champion' },
+    { threshold:   1000, reward:  150, label: 'First Thousand' },
+    { threshold:   5000, reward:  500, label: 'Five Thousand Pool' },
+    { threshold:  15000, reward: 1200, label: 'Fifteen K Mark' },
+    { threshold:  40000, reward: 3000, label: 'Forty K Tier' },
+    { threshold: 100000, reward: 8000, label: 'Hundred K Champion' },
   ];
   const meshes: Mesh[] = [];
   const stoneMat = createStandardMaterial(scene, 'mon-stone', Color3.FromHexString('#9a8e72'));
@@ -697,13 +903,34 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
   crystalMat.emissiveColor = new Color3(0.4, 0.85, 0.7);
   crystalMat.specularColor = new Color3(0.6, 0.9, 0.8);
 
-  // Paved plot
-  const plot = MeshBuilder.CreateDisc('mon-plot', { radius: 4.5, tessellation: 32 }, scene);
-  plot.rotation.x = Math.PI / 2;
-  plot.position.set(cx, 0.03, cz);
+  // Paved plot — raised cylinder platform (was a flat disc). Gives the
+  // monument a visible plinth from any camera angle and matches the
+  // raised central plaza platform stylistically.
+  const PLOT_R = 4.5;
+  const PLOT_H = 0.5;
+  const plot = MeshBuilder.CreateCylinder('mon-plot', {
+    diameter: PLOT_R * 2,
+    height: PLOT_H,
+    tessellation: 48,
+  }, scene);
+  plot.position.set(cx, PLOT_H / 2, cz);
   plot.material = stoneMat;
   plot.isPickable = false;
   meshes.push(plot);
+
+  // Single short step ring around the plot so it reads as a real plinth.
+  const plotStep = MeshBuilder.CreateCylinder('mon-plot-step', {
+    diameter: (PLOT_R + 0.6) * 2,
+    height: PLOT_H * 0.45,
+    tessellation: 48,
+  }, scene);
+  plotStep.position.set(cx, (PLOT_H * 0.45) / 2, cz);
+  plotStep.material = stoneDarkMat;
+  plotStep.isPickable = false;
+  meshes.push(plotStep);
+
+  // All monument geometry sits ON TOP of the plot platform.
+  const baseY = PLOT_H;
 
   // Stepped stone base (3 levels, wider at the bottom)
   for (const [w, h, y] of [
@@ -712,7 +939,7 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
     [2.6, 0.4, 1.10],
   ] as Array<[number, number, number]>) {
     const step = MeshBuilder.CreateBox('mon-step', { width: w, height: h, depth: w }, scene);
-    step.position.set(cx, y, cz);
+    step.position.set(cx, baseY + y, cz);
     step.material = (y === 0.65) ? stoneDarkMat : stoneMat;
     meshes.push(step);
   }
@@ -722,7 +949,7 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
   const shaft = MeshBuilder.CreateCylinder('mon-shaft', {
     height: SHAFT_H, diameterTop: 1.4, diameterBottom: 1.8, tessellation: 8,
   }, scene);
-  shaft.position.set(cx, 1.3 + SHAFT_H / 2, cz);
+  shaft.position.set(cx, baseY + 1.3 + SHAFT_H / 2, cz);
   shaft.material = stoneMat;
   meshes.push(shaft);
 
@@ -730,7 +957,7 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
   const ring = MeshBuilder.CreateCylinder('mon-ring', {
     height: 0.3, diameter: 1.7, tessellation: 16,
   }, scene);
-  ring.position.set(cx, 1.3 + SHAFT_H - 0.2, cz);
+  ring.position.set(cx, baseY + 1.3 + SHAFT_H - 0.2, cz);
   ring.material = goldMat;
   meshes.push(ring);
 
@@ -739,7 +966,7 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
     diameter: 1.2, segments: 8,
   }, scene);
   crystal.scaling.y = 1.5;
-  crystal.position.set(cx, 1.3 + SHAFT_H + 0.6, cz);
+  crystal.position.set(cx, baseY + 1.3 + SHAFT_H + 0.6, cz);
   crystal.material = crystalMat;
   meshes.push(crystal);
 
@@ -747,15 +974,42 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
   const pinnacle = MeshBuilder.CreateCylinder('mon-pinnacle', {
     height: 0.6, diameterTop: 0.05, diameterBottom: 0.6, tessellation: 4,
   }, scene);
-  pinnacle.position.set(cx, 1.3 + SHAFT_H + 1.5, cz);
+  pinnacle.position.set(cx, baseY + 1.3 + SHAFT_H + 1.5, cz);
   pinnacle.material = goldMat;
   meshes.push(pinnacle);
 
-  // Front display panel — wide and tall, mounted on the front face of
-  // the obelisk facing south (toward the plaza).
-  const FACE_W = 4.4;
-  const FACE_H = 5.5;
-  const FACE_Y = 4.5;
+  // ── Physical growth states ────────────────────────────────────────────
+  // One ring per SERVER milestone, hugging the tapered shaft. They start
+  // as dark stone and IGNITE to glowing gold as each pool threshold is
+  // crossed — so the obelisk itself reads as a progress bar from across
+  // the park, no board-reading required. The crystal at the top also
+  // grows + brightens with total pool progress (see repaint below).
+  const ringGlowMat = createStandardMaterial(scene, 'mon-ring-glow', Color3.FromHexString('#ffd75e'));
+  ringGlowMat.emissiveColor = new Color3(0.85, 0.7, 0.25);
+  ringGlowMat.specularColor = new Color3(0.9, 0.8, 0.4);
+  const tierRings: Mesh[] = [];
+  for (let i = 0; i < TIERS.length; i++) {
+    const ry = baseY + 3.4 + i * 1.3;
+    // Shaft tapers 1.8 → 1.4 across its 8-unit height; ring centerline
+    // sits 0.04 outside the local shaft surface.
+    const shaftDia = 1.8 - 0.4 * ((ry - (baseY + 1.3)) / SHAFT_H);
+    const tierRing = MeshBuilder.CreateTorus(`mon-tier-ring-${i}`, {
+      diameter: shaftDia + 0.04, thickness: 0.12, tessellation: 24,
+    }, scene);
+    tierRing.position.set(cx, ry, cz);
+    tierRing.material = stoneDarkMat;
+    tierRing.isPickable = false;
+    meshes.push(tierRing);
+    tierRings.push(tierRing);
+  }
+
+  // Front display panel — wide and tall, framed in gold and aimed
+  // squarely at the SPAWN POINT so a freshly-joined player reads the
+  // pool progress without walking around the obelisk. Lifted onto the
+  // plinth.
+  const FACE_W = 6.0;
+  const FACE_H = 7.6;
+  const FACE_Y = baseY + 5.0;
   const CANVAS_W = 1024;
   const CANVAS_H = Math.floor(CANVAS_W * (FACE_H / FACE_W));
   const tex = new DynamicTexture('mon-tex', { width: CANVAS_W, height: CANVAS_H }, scene, true);
@@ -770,13 +1024,51 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
   faceMat.emissiveColor = new Color3(0.7, 0.7, 0.7);
   faceMat.specularColor = new Color3(0, 0, 0);
   faceMat.backFaceCulling = false;
+  // Face root — rotated so the panel's outward normal points at the
+  // spawn (110, 19). Babylon's CreatePlane front face looks down -Z;
+  // a Y-rotation of θ maps that normal to (-sin θ, 0, -cos θ), so
+  // θ = atan2(-nx, -nz) for the desired unit direction (nx, nz).
+  const SPAWN_X = 110, SPAWN_Z = 19;
+  const dirX = SPAWN_X - cx, dirZ = SPAWN_Z - cz;
+  const dirLen = Math.hypot(dirX, dirZ) || 1;
+  const nX = dirX / dirLen, nZ = dirZ / dirLen;
+  const faceYaw = Math.atan2(-nX, -nZ);
+  const faceRoot = new TransformNode('mon-face-root', scene);
+  faceRoot.position.set(cx, FACE_Y, cz);
+  faceRoot.rotation.y = faceYaw;
+
   const face = MeshBuilder.CreatePlane('mon-face', {
     width: FACE_W, height: FACE_H, sideOrientation: Mesh.DOUBLESIDE,
   }, scene);
-  face.position.set(cx, FACE_Y, cz - 0.92);  // front face, slightly outside the shaft
+  face.parent = faceRoot;
+  // 1.05 out from the shaft axis — clear of the widest tier ring
+  // (outer radius ≈ 0.93) so the rings never pierce the board.
+  face.position.set(0, 0, -1.05);  // local -Z = toward the spawn
   face.material = faceMat;
   face.isPickable = false;
   meshes.push(face);
+
+  // Gold frame around the panel — top/bottom rails + side stiles,
+  // all parented to the face root so they track the spawn-facing yaw.
+  const FRAME_T = 0.18;   // bar thickness (in the panel plane)
+  const FRAME_D = 0.14;   // bar depth (out of the panel plane)
+  const frameSpec: Array<[string, number, number, number, number]> = [
+    // [name, localX, localY, barWidth, barHeight]
+    ['top',     0,  FACE_H / 2 + FRAME_T / 2, FACE_W + FRAME_T * 2, FRAME_T],
+    ['bottom',  0, -FACE_H / 2 - FRAME_T / 2, FACE_W + FRAME_T * 2, FRAME_T],
+    ['left',  -(FACE_W / 2 + FRAME_T / 2), 0, FRAME_T, FACE_H],
+    ['right',  (FACE_W / 2 + FRAME_T / 2), 0, FRAME_T, FACE_H],
+  ];
+  for (const [fname, fx, fy, fw, fh] of frameSpec) {
+    const bar = MeshBuilder.CreateBox(`mon-face-frame-${fname}`, {
+      width: fw, height: fh, depth: FRAME_D,
+    }, scene);
+    bar.parent = faceRoot;
+    bar.position.set(fx, fy, -1.05);
+    bar.material = goldMat;
+    bar.isPickable = false;
+    meshes.push(bar);
+  }
 
   function repaint(pool: number, unlockedIds: readonly number[]): void {
     const unlocked = new Set(unlockedIds);
@@ -790,27 +1082,27 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
 
     // Header
     ctx.fillStyle = '#e6c34a';
-    ctx.fillRect(0, 0, CANVAS_W, 80);
+    ctx.fillRect(0, 0, CANVAS_W, 110);
     ctx.fillStyle = '#1a1f2c';
-    ctx.font = 'bold 40px Inter, system-ui, sans-serif';
+    ctx.font = 'bold 56px Inter, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('🏆 TOP-UP POOL', CANVAS_W / 2, 40);
+    ctx.fillText('🏆 TOP-UP POOL', CANVAS_W / 2, 55);
 
     // Current pool — big number
     ctx.fillStyle = '#e6c34a';
-    ctx.font = 'bold 110px Inter, system-ui, sans-serif';
-    ctx.fillText(`${pool}`, CANVAS_W / 2, 200);
+    ctx.font = 'bold 150px Inter, system-ui, sans-serif';
+    ctx.fillText(`${pool}`, CANVAS_W / 2, 240);
     ctx.fillStyle = '#aaa';
-    ctx.font = 'bold 28px Inter, system-ui, sans-serif';
-    ctx.fillText('coins contributed', CANVAS_W / 2, 270);
+    ctx.font = 'bold 38px Inter, system-ui, sans-serif';
+    ctx.fillText('coins contributed', CANVAS_W / 2, 330);
 
     // Progress bar to the next tier
     const nextTier = TIERS.find((t, i) => !unlocked.has(i));
-    const barX = 60;
-    const barY = 330;
+    const barX = 70;
+    const barY = 380;
     const barW = CANVAS_W - 2 * barX;
-    const barH = 32;
+    const barH = 46;
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
     ctx.fillRect(barX, barY, barW, barH);
     if (nextTier) {
@@ -825,53 +1117,81 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
       ctx.fillStyle = grad2;
       ctx.fillRect(barX, barY, barW * t, barH);
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 22px Inter, system-ui, sans-serif';
+      ctx.font = 'bold 30px Inter, system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(
         `${pool} / ${nextTier.threshold}  ·  next: ${nextTier.label} (+${nextTier.reward} 🪙)`,
         CANVAS_W / 2, barY + barH / 2 + 1,
+        barW - 24,
       );
     } else {
       ctx.fillStyle = '#3a8634';
       ctx.fillRect(barX, barY, barW, barH);
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 24px Inter, system-ui, sans-serif';
+      ctx.font = 'bold 34px Inter, system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('ALL MILESTONES UNLOCKED', CANVAS_W / 2, barY + barH / 2 + 1);
     }
 
-    // Tier ladder
-    ctx.font = 'bold 32px Inter, system-ui, sans-serif';
+    // Tier ladder — significantly larger so each milestone reads as a
+    // big bold mark, not tiny grey text.
     ctx.textBaseline = 'middle';
-    const rowsY0 = 420;
-    const rowH = (CANVAS_H - rowsY0 - 50) / TIERS.length;
+    const rowsY0 = 480;
+    const rowH = (CANVAS_H - rowsY0 - 30) / TIERS.length;
     for (let i = 0; i < TIERS.length; i++) {
       const t = TIERS[i];
       const ok = unlocked.has(i);
       const y = rowsY0 + i * rowH + rowH / 2;
       // row tint
       if (ok) {
-        ctx.fillStyle = 'rgba(58, 134, 52, 0.15)';
-        ctx.fillRect(40, rowsY0 + i * rowH + 4, CANVAS_W - 80, rowH - 8);
+        ctx.fillStyle = 'rgba(58, 134, 52, 0.18)';
+        ctx.fillRect(40, rowsY0 + i * rowH + 6, CANVAS_W - 80, rowH - 12);
       }
-      // checkmark / locked icon
-      ctx.fillStyle = ok ? '#3a8634' : '#666';
+      // checkmark / locked icon — bigger
+      ctx.fillStyle = ok ? '#3a8634' : '#888';
+      ctx.font = 'bold 56px Inter, system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(ok ? '✓' : '○', 90, y);
-      // threshold + label
-      ctx.fillStyle = ok ? '#fff' : '#aaa';
+      ctx.fillText(ok ? '✓' : '○', 110, y);
+      // threshold (number) — larger, bold. Column layout with maxWidth
+      // clamps on every cell so long labels ("Hundred K Champion")
+      // compress instead of running under the reward column.
+      ctx.fillStyle = ok ? '#fff' : '#bbb';
+      ctx.font = 'bold 48px Inter, system-ui, sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(`${t.threshold}`, 160, y);
-      ctx.font = 'bold 26px Inter, system-ui, sans-serif';
-      ctx.fillText(t.label, 320, y);
-      ctx.font = 'bold 32px Inter, system-ui, sans-serif';
+      ctx.fillText(`${t.threshold}`, 200, y, 190);
+      // label — clamp to end before the reward column starts (~740)
+      ctx.font = 'bold 38px Inter, system-ui, sans-serif';
+      ctx.fillText(t.label, 410, y, 300);
       // reward on the right
-      ctx.fillStyle = ok ? '#e6c34a' : '#776';
+      ctx.fillStyle = ok ? '#e6c34a' : '#998a55';
+      ctx.font = 'bold 52px Inter, system-ui, sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(`+${t.reward} 🪙`, CANVAS_W - 60, y);
+      ctx.fillText(`+${t.reward} 🪙`, CANVAS_W - 60, y, 230);
     }
 
     tex.update();
+
+    // ── Physical growth states ──────────────────────────────────────────
+    // Ignite one shaft ring per unlocked SERVER tier; grow + brighten
+    // the crystal with overall pool progress toward the final tier.
+    for (let i = 0; i < tierRings.length; i++) {
+      tierRings[i].material = unlocked.has(i) ? ringGlowMat : stoneDarkMat;
+    }
+    const maxThreshold = TIERS[TIERS.length - 1].threshold;
+    const prog = Math.max(0, Math.min(1, pool / maxThreshold));
+    const s = 0.7 + 0.8 * prog;
+    // The world freezes every static mesh's matrix after construction;
+    // unfreeze → rescale → recompute → refreeze so the crystal's new
+    // size actually renders.
+    crystal.unfreezeWorldMatrix();
+    crystal.scaling.set(s, 1.5 * s, s);
+    crystal.computeWorldMatrix(true);
+    crystal.freezeWorldMatrix();
+    crystalMat.emissiveColor = new Color3(
+      0.3 + 0.5 * prog,
+      0.6 + 0.3 * prog,
+      0.5 + 0.3 * prog,
+    );
   }
 
   // Initial paint with zero state — will be overwritten by first
@@ -881,212 +1201,235 @@ function buildTopupMonument(scene: Scene, cx: number, cz: number): MonumentContr
   return { meshes, repaint };
 }
 
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Top-voters board — leaderboard of biggest betters in this room session.
-// Standalone wooden billboard, similar architecture to the fixture board
-// but a slimmer profile and a different content schema. Each row shows
-// rank, player name, their team affiliation (3-letter code + team
-// name), and their lifetime contribution amount. Camp colors (HOME/
-// DRAW/AWAY) tint the team chip so it reads at a glance.
-function buildTopVotersBoard(scene: Scene, cx: number, cz: number): TopVotersBoardController {
+// Top-voters podium — an in-world circular monument that displays the
+// top contributors as STATIC AVATAR STATUES on a tiered plinth, each
+// with a stone-engraved nameplate carrying their handle + contribution.
+// Replaces the older tall-billboard board; the goal is a park-monument
+// feel, not a reading panel.
+//
+// Layout (looking from above):
+//
+//                       ┌─────┐
+//                       │  1  │   ← #1 voter on central tall plinth
+//                       └─────┘
+//          ┌─┐     ┌─┐         ┌─┐     ┌─┐
+//          │5│     │3│         │2│     │4│
+//          └─┘     └─┘         └─┘     └─┘   ← ranks 2–5 on a ring
+//                  └────  outer base disc  ────┘
+//
+// Repaint dispose-and-rebuilds the avatar statues each time the server
+// pushes a fresh top-voters list — clean diff would be more efficient
+// but this list updates at most a few times a minute so the cost is
+// negligible vs. the code complexity.
+function buildTopVotersPodium(scene: Scene, cx: number, cz: number): TopVotersBoardController {
   const meshes: Mesh[] = [];
-  const woodMat = createStandardMaterial(scene, 'tv-wood-mat', Color3.FromHexString('#7a5836'));
-  const woodDarkMat = createStandardMaterial(scene, 'tv-wood-dark', Color3.FromHexString('#4a341c'));
-  const stoneMat = createStandardMaterial(scene, 'tv-stone', Color3.FromHexString('#b8aa90'));
-  const goldMat = createStandardMaterial(scene, 'tv-gold', Color3.FromHexString('#e6c34a'));
+  const stoneLightMat = createStandardMaterial(scene, 'tvp-stone-light', Color3.FromHexString('#d6cdb6'));
+  const stoneDarkMat = createStandardMaterial(scene, 'tvp-stone-dark', Color3.FromHexString('#7a705a'));
+  const goldMat = createStandardMaterial(scene, 'tvp-gold', Color3.FromHexString('#e6c34a'));
+  goldMat.specularColor = new Color3(0.9, 0.75, 0.3);
 
-  // Paved plot
-  const plot = MeshBuilder.CreateDisc('tv-plot', { radius: 4.5, tessellation: 32 }, scene);
-  plot.rotation.x = Math.PI / 2;
-  plot.position.set(cx, 0.03, cz);
-  plot.material = stoneMat;
-  plot.isPickable = false;
-  meshes.push(plot);
-
-  // Frame dimensions (taller than the fixture board, narrower)
-  const FACE_W = 6.2;
-  const FACE_H = 4.8;
-  const FACE_Y = 3.2;
-  const POST_HEIGHT = 5.2;
-  const POST_OFFSET = FACE_W / 2 + 0.5;
-
-  // Posts outside the face
-  for (const sign of [-1, 1] as const) {
-    const post = MeshBuilder.CreateCylinder(`tv-post-${sign}`, {
-      height: POST_HEIGHT, diameter: 0.32, tessellation: 10,
-    }, scene);
-    post.position.set(cx + sign * POST_OFFSET, POST_HEIGHT / 2, cz);
-    post.material = woodDarkMat;
-    meshes.push(post);
-    const cap = MeshBuilder.CreateCylinder(`tv-post-cap-${sign}`, {
-      height: 0.18, diameterTop: 0.38, diameterBottom: 0.55, tessellation: 10,
-    }, scene);
-    cap.position.set(cx + sign * POST_OFFSET, POST_HEIGHT + 0.05, cz);
-    cap.material = goldMat;
-    meshes.push(cap);
-  }
-
-  // Frame
-  const frameThick = 0.12;
-  const frameDepth = 0.25;
-  for (const [name, dx, dy, w, h] of [
-    ['top', 0, FACE_H / 2 + frameThick / 2, FACE_W + 0.4, frameThick],
-    ['bot', 0, -FACE_H / 2 - frameThick / 2, FACE_W + 0.4, frameThick],
-  ] as Array<[string, number, number, number, number]>) {
-    const bar = MeshBuilder.CreateBox(`tv-frame-${name}`, {
-      width: w, height: h, depth: frameDepth,
-    }, scene);
-    bar.position.set(cx + dx, FACE_Y + dy, cz);
-    bar.material = woodMat;
-    meshes.push(bar);
-  }
-  for (const sign of [-1, 1] as const) {
-    const side = MeshBuilder.CreateBox(`tv-frame-side-${sign}`, {
-      width: frameThick, height: FACE_H + 2 * frameThick, depth: frameDepth,
-    }, scene);
-    side.position.set(cx + sign * (FACE_W / 2 + frameThick / 2), FACE_Y, cz);
-    side.material = woodMat;
-    meshes.push(side);
-  }
-
-  // Topper accent
-  const topper = MeshBuilder.CreateBox('tv-topper', {
-    width: FACE_W * 0.5, height: 0.5, depth: 0.18,
+  // ── Base disc (wide outer paving + darker rim) ─────────────────────────
+  const BASE_R = 8.5;
+  const baseDisc = MeshBuilder.CreateCylinder('tvp-base-disc', {
+    diameter: BASE_R * 2, height: 0.35, tessellation: 64,
   }, scene);
-  topper.position.set(cx, FACE_Y + FACE_H / 2 + 0.5, cz);
-  topper.material = goldMat;
-  meshes.push(topper);
-
-  // Display face — DynamicTexture
-  const CANVAS_W = 1024;
-  const CANVAS_H = Math.floor(CANVAS_W * (FACE_H / FACE_W));
-  const tex = new DynamicTexture('tv-tex', { width: CANVAS_W, height: CANVAS_H }, scene, true);
-  const ctxInit = tex.getContext() as unknown as CanvasRenderingContext2D;
-  ctxInit.fillStyle = '#1c1b1a';
-  ctxInit.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  ctxInit.fillStyle = '#c8c0a8';
-  ctxInit.font = 'bold 48px Inter, system-ui, sans-serif';
-  ctxInit.textAlign = 'center';
-  ctxInit.fillText('LOADING…', CANVAS_W / 2, CANVAS_H / 2);
-  tex.update();
-
-  const faceMat = new StandardMaterial('tv-face-mat', scene);
-  faceMat.diffuseTexture = tex;
-  faceMat.emissiveTexture = tex;
-  faceMat.emissiveColor = new Color3(0.7, 0.7, 0.7);
-  faceMat.specularColor = new Color3(0, 0, 0);
-  faceMat.backFaceCulling = false;
-  const face = MeshBuilder.CreatePlane('tv-face', {
-    width: FACE_W, height: FACE_H, sideOrientation: Mesh.DOUBLESIDE,
+  baseDisc.position.set(cx, 0.175, cz);
+  baseDisc.material = stoneLightMat;
+  baseDisc.isPickable = false;
+  meshes.push(baseDisc);
+  const baseRim = MeshBuilder.CreateCylinder('tvp-base-rim', {
+    diameter: (BASE_R + 0.4) * 2, height: 0.15, tessellation: 64,
   }, scene);
-  face.position.set(cx, FACE_Y, cz + 0.01);
-  face.material = faceMat;
-  face.isPickable = false;
-  meshes.push(face);
+  baseRim.position.set(cx, 0.075, cz);
+  baseRim.material = stoneDarkMat;
+  baseRim.isPickable = false;
+  meshes.push(baseRim);
 
-  // Camp → chip color
-  const campColor = (camp: string): string => {
-    if (camp === 'HOME') return '#3a6ea5';
-    if (camp === 'AWAY') return '#c14444';
-    if (camp === 'DRAW') return '#7a7a7a';
-    return '#4a4a4a';
-  };
+  // ── Second tier (inner ring that holds the ranks-2…5 plinths) ─────────
+  const TIER2_R = 5.5;
+  const tier2 = MeshBuilder.CreateCylinder('tvp-tier-2', {
+    diameter: TIER2_R * 2, height: 0.35, tessellation: 48,
+  }, scene);
+  tier2.position.set(cx, 0.35 + 0.175, cz);
+  tier2.material = stoneLightMat;
+  tier2.isPickable = false;
+  meshes.push(tier2);
+
+  // ── Central plinth (rank #1) ──────────────────────────────────────────
+  const PLINTH1_R = 1.6;
+  const PLINTH1_H = 1.0;
+  const plinth1 = MeshBuilder.CreateCylinder('tvp-plinth-1', {
+    diameter: PLINTH1_R * 2, height: PLINTH1_H, tessellation: 32,
+  }, scene);
+  const PLINTH1_BASE_Y = 0.7;
+  plinth1.position.set(cx, PLINTH1_BASE_Y + PLINTH1_H / 2, cz);
+  plinth1.material = stoneDarkMat;
+  plinth1.isPickable = false;
+  meshes.push(plinth1);
+
+  // Gold ring around the top of plinth 1 — art-installation accent.
+  const plinth1Ring = MeshBuilder.CreateTorus('tvp-plinth-1-ring', {
+    diameter: PLINTH1_R * 2 + 0.18, thickness: 0.10, tessellation: 32,
+  }, scene);
+  plinth1Ring.position.set(cx, PLINTH1_BASE_Y + PLINTH1_H - 0.02, cz);
+  plinth1Ring.material = goldMat;
+  plinth1Ring.isPickable = false;
+  meshes.push(plinth1Ring);
+
+  // ── Four outer plinths (ranks 2–5) around the inner ring ──────────────
+  // Angles in radians (measured from +X axis): south, east, north, west.
+  const OUTER_PLINTH_R = 1.1;
+  const OUTER_PLINTH_H = 0.55;
+  const OUTER_RING_R = 3.7;
+  const OUTER_ANGLES = [
+    Math.PI / 2,             // S (front of monument — rank 2)
+    -Math.PI / 2,            // N (rank 3)
+    0,                       // E (rank 4)
+    Math.PI,                 // W (rank 5)
+  ];
+  // Map rank index (0-based) → plinth position
+  const plinthSlots: Array<{
+    x: number; y: number; z: number;
+    plinthTopY: number; nameplateMesh: Mesh;
+    statueRotY: number;
+  }> = [];
+  // Rank 1 first (centre, facing south so it looks back at incoming players)
+  plinthSlots.push({
+    x: cx,
+    z: cz,
+    y: PLINTH1_BASE_Y + PLINTH1_H,
+    plinthTopY: PLINTH1_BASE_Y + PLINTH1_H,
+    nameplateMesh: plinth1,
+    statueRotY: Math.PI,  // face south (-Z), toward the approach side
+  });
+  for (let i = 0; i < OUTER_ANGLES.length; i++) {
+    const a = OUTER_ANGLES[i];
+    const px = cx + Math.cos(a) * OUTER_RING_R;
+    const pz = cz + Math.sin(a) * OUTER_RING_R;
+    const plinth = MeshBuilder.CreateCylinder(`tvp-plinth-outer-${i}`, {
+      diameter: OUTER_PLINTH_R * 2, height: OUTER_PLINTH_H, tessellation: 24,
+    }, scene);
+    const PLINTH_BASE_Y = 0.7;
+    plinth.position.set(px, PLINTH_BASE_Y + OUTER_PLINTH_H / 2, pz);
+    plinth.material = stoneDarkMat;
+    plinth.isPickable = false;
+    meshes.push(plinth);
+    // Each outer statue faces inward (toward the centre plinth).
+    const facing = Math.atan2(cx - px, pz - cz);
+    plinthSlots.push({
+      x: px, z: pz,
+      y: PLINTH_BASE_Y + OUTER_PLINTH_H,
+      plinthTopY: PLINTH_BASE_Y + OUTER_PLINTH_H,
+      nameplateMesh: plinth,
+      statueRotY: facing,
+    });
+  }
+
+  // ── Plaque texture builder ────────────────────────────────────────────
+  // Each plinth gets a DynamicTexture wrapped around its side surface
+  // (default cylinder UV maps the side to a strip of the texture). The
+  // wrapped strip shows the rank + name + contribution.
+  function makePlaqueTexture(rank: number, name: string, contribution: number) {
+    const W = 1024, H = 256;
+    const tex = new DynamicTexture(`tvp-plaque-${rank}-${Date.now()}`, { width: W, height: H }, scene, true);
+    const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
+    // Stone-coloured background (matches plinth so the band reads as
+    // engraving rather than a sticker).
+    ctx.fillStyle = '#7a705a';
+    ctx.fillRect(0, 0, W, H);
+    // Repeat the engraved label N times around the cylinder so the
+    // text is visible from any angle. The cylinder UV wraps once
+    // around the side, so 3 repetitions = 3 readable spots at 120°.
+    const REPEATS = 3;
+    for (let r = 0; r < REPEATS; r++) {
+      const x0 = (W / REPEATS) * r;
+      const xc = x0 + (W / REPEATS) / 2;
+      // Rank circle (gold)
+      ctx.fillStyle = '#e6c34a';
+      ctx.beginPath();
+      ctx.arc(xc - 130, H / 2, 56, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#3a2410';
+      ctx.font = 'bold 76px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${rank}`, xc - 130, H / 2 + 2);
+      // Name + contribution
+      ctx.fillStyle = '#f3ead4';
+      ctx.font = 'bold 52px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(name.slice(0, 14), xc - 60, H / 2 - 28);
+      ctx.fillStyle = '#e6c34a';
+      ctx.font = 'bold 44px Inter, system-ui, sans-serif';
+      ctx.fillText(`${contribution} 🪙`, xc - 60, H / 2 + 36);
+    }
+    tex.update();
+    return tex;
+  }
+
+  // ── Statue + plaque registry (rebuilt per repaint) ────────────────────
+  const liveStatues: CharacterAvatar[] = [];
+  const livePlaqueMats: StandardMaterial[] = [];
+  const livePlaqueTextures: Texture[] = [];
+
+  function disposeLiveAvatars(): void {
+    for (const s of liveStatues) s.dispose();
+    liveStatues.length = 0;
+    // Restore plinth materials so they don't keep refs to disposed textures
+    for (const slot of plinthSlots) slot.nameplateMesh.material = stoneDarkMat;
+    for (const t of livePlaqueTextures) t.dispose();
+    livePlaqueTextures.length = 0;
+    for (const m of livePlaqueMats) m.dispose();
+    livePlaqueMats.length = 0;
+  }
 
   function repaint(entries: Parameters<GameWorldObjects['updateTopVotersBoard']>[0]): void {
-    const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
-    // Dark wood background with gold header
-    ctx.fillStyle = '#1c1b1a';
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    ctx.fillStyle = '#e6c34a';
-    ctx.fillRect(0, 0, CANVAS_W, 84);
-    ctx.fillStyle = '#1c1b1a';
-    ctx.font = 'bold 50px Inter, system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('🏆 TOP VOTERS', CANVAS_W / 2, 42);
+    disposeLiveAvatars();
+    const n = Math.min(entries.length, plinthSlots.length);
+    for (let i = 0; i < n; i++) {
+      const e = entries[i];
+      const slot = plinthSlots[i];
+      // Build an avatar statue at the plinth top. createCharacterAvatar
+      // grounds the avatar at y=0 (feet on ground), so we offset y by
+      // plinthTopY so the avatar stands ON the plinth.
+      const statue = createCharacterAvatar(scene, {
+        id: `podium-${i}-${e.sid}`,
+        x: slot.x,
+        y: slot.plinthTopY,
+        z: slot.z,
+      });
+      const textureIds = e.textureItems.split(',').map((s) => s.trim()).filter(Boolean);
+      const accessoryIds = e.accessoryItems.split(',').map((s) => s.trim()).filter(Boolean);
+      try {
+        statue.applyOutfit(textureIds, accessoryIds);
+      } catch (err) {
+        console.warn('[top-podium] applyOutfit failed', err);
+      }
+      statue.setRotationY(slot.statueRotY);
+      liveStatues.push(statue);
 
-    if (entries.length === 0) {
-      ctx.fillStyle = '#888';
-      ctx.font = '36px Inter, system-ui, sans-serif';
-      ctx.fillText('Be the first to place a bet!', CANVAS_W / 2, CANVAS_H / 2 + 20);
-      tex.update();
-      return;
+      // Plaque material wrapping the plinth's side.
+      const tex = makePlaqueTexture(i + 1, e.name || `Player ${i + 1}`, e.contribution);
+      livePlaqueTextures.push(tex);
+      const plaqueMat = new StandardMaterial(`tvp-plaque-mat-${i}`, scene);
+      plaqueMat.diffuseTexture = tex;
+      plaqueMat.emissiveTexture = tex;
+      plaqueMat.emissiveColor = new Color3(0.45, 0.45, 0.45);
+      plaqueMat.specularColor = new Color3(0, 0, 0);
+      livePlaqueMats.push(plaqueMat);
+      slot.nameplateMesh.material = plaqueMat;
     }
-
-    // Show up to 8 rows for legibility
-    const list = entries.slice(0, 8);
-    const rowH = (CANVAS_H - 110) / list.length;
-    ctx.font = 'bold 30px Inter, system-ui, sans-serif';
-    ctx.textBaseline = 'middle';
-    list.forEach((e, i) => {
-      const y = 100 + i * rowH + rowH / 2;
-      // Alternate row tint
-      if (i % 2 === 1) {
-        ctx.fillStyle = 'rgba(255,255,255,0.04)';
-        ctx.fillRect(0, 100 + i * rowH, CANVAS_W, rowH);
-      }
-      // Rank with medal for top 3
-      const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
-      ctx.fillStyle = '#fff5d8';
-      ctx.textAlign = 'left';
-      ctx.font = 'bold 34px Inter, system-ui, sans-serif';
-      ctx.fillText(medal, 36, y);
-
-      // Player name
-      ctx.font = 'bold 30px Inter, system-ui, sans-serif';
-      ctx.fillStyle = '#fff5d8';
-      ctx.fillText(e.name.slice(0, 14), 110, y);
-
-      // Team chip (rounded rect with the team code on a colored fill)
-      const chipX = 440;
-      const chipW = 140;
-      const chipH = 40;
-      const chipY = y - chipH / 2;
-      if (e.teamCode) {
-        ctx.fillStyle = campColor(e.camp);
-        ctx.beginPath();
-        const r = 8;
-        ctx.moveTo(chipX + r, chipY);
-        ctx.lineTo(chipX + chipW - r, chipY);
-        ctx.quadraticCurveTo(chipX + chipW, chipY, chipX + chipW, chipY + r);
-        ctx.lineTo(chipX + chipW, chipY + chipH - r);
-        ctx.quadraticCurveTo(chipX + chipW, chipY + chipH, chipX + chipW - r, chipY + chipH);
-        ctx.lineTo(chipX + r, chipY + chipH);
-        ctx.quadraticCurveTo(chipX, chipY + chipH, chipX, chipY + chipH - r);
-        ctx.lineTo(chipX, chipY + r);
-        ctx.quadraticCurveTo(chipX, chipY, chipX + r, chipY);
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 24px ui-monospace, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(e.teamCode, chipX + chipW / 2, y + 1);
-        // Team name to the right of the chip
-        ctx.font = '24px Inter, system-ui, sans-serif';
-        ctx.fillStyle = '#c8c0a8';
-        ctx.textAlign = 'left';
-        ctx.fillText(e.team.slice(0, 14), chipX + chipW + 14, y);
-      } else {
-        ctx.fillStyle = '#666';
-        ctx.font = 'italic 24px Inter, system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.fillText('— (no bet yet)', chipX, y);
-      }
-
-      // Contribution amount on the right
-      ctx.fillStyle = '#e6c34a';
-      ctx.font = 'bold 32px Inter, system-ui, sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText(`${e.contribution} 🪙`, CANVAS_W - 36, y);
-    });
-
-    tex.update();
   }
 
-  // Initial paint with empty list
-  repaint([]);
-
-  return { meshes, repaint };
+  return {
+    meshes,
+    repaint,
+    dispose() {
+      disposeLiveAvatars();
+    },
+  };
 }
 
 function buildFixtureBoard(scene: Scene, cx: number, cz: number): FixtureBoardController {
@@ -1255,13 +1598,16 @@ function buildFixtureBoard(scene: Scene, cx: number, cz: number): FixtureBoardCo
       ctx.fillStyle = leftColor;
       ctx.fillText(leftLabel, 36, y);
 
-      // Teams in the center: HOME (right-aligned) [vs / score] AWAY (left-aligned)
+      // Teams in the center: HOME (right-aligned) [vs / score] AWAY
+      // (left-aligned). Both use fillText's maxWidth clamp so long
+      // names ("Bosnia & Herzegovina") compress instead of running
+      // into the time column / TLA codes column.
       ctx.fillStyle = '#fff5d8';
       const midX = CANVAS_W / 2;
       ctx.textAlign = 'right';
-      ctx.fillText(f.homeTeam, midX - 60, y);
+      ctx.fillText(f.homeTeam, midX - 60, y, 300);
       ctx.textAlign = 'left';
-      ctx.fillText(f.awayTeam, midX + 60, y);
+      ctx.fillText(f.awayTeam, midX + 60, y, 240);
 
       // Score (live/FT) or "vs"
       ctx.textAlign = 'center';
@@ -1279,7 +1625,7 @@ function buildFixtureBoard(scene: Scene, cx: number, cz: number): FixtureBoardCo
       ctx.fillStyle = '#aaa';
       ctx.textAlign = 'right';
       ctx.font = 'bold 24px ui-monospace, monospace';
-      ctx.fillText(`${f.homeCode} · ${f.awayCode}`, CANVAS_W - 36, y);
+      ctx.fillText(`${f.homeCode} · ${f.awayCode}`, CANVAS_W - 36, y, 150);
       ctx.font = 'bold 32px Inter, system-ui, sans-serif';
     });
 
@@ -1290,26 +1636,85 @@ function buildFixtureBoard(scene: Scene, cx: number, cz: number): FixtureBoardCo
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Open-area filter for grass: rejects positions that overlap walkways,
-// the plaza, the centerpiece base, or the bench footprints.
+// Open-area filter for grass tufts. Returns true ONLY for green dirt —
+// any paved disc, walkway, stall footprint, or stadium interior returns
+// false so blades don't grow through stone/wood/concrete.
 function isGrassOpenArea(x: number, z: number): boolean {
-  // Plaza disc + centerpiece radius (map recenter: plaza is now at x=110).
-  const dPlaza = Math.hypot(x - 110, z - 24);
-  if (dPlaza < PLAZA_RADIUS + 0.5) return false;
+  // ── Plaza base disc (radius 17 paved courtyard around FAIR_CENTER) ──
+  if (Math.hypot(x - 110, z - 24) < PLAZA_BASE_RADIUS + 0.4) return false;
 
-  // Main + cross walkways (1.2 wide buffer)
-  if (Math.abs(x - 110) < 1.5) return false;
-  if (Math.abs(z - 24) < 1.5) return false;
+  // ── Stadium interior (oval at 110, 120 with semi-axes 73.5 × 52.5) ──
+  // Excludes ALL of the stadium footprint — the wall band, the stands,
+  // and the pitch — so no grass sprite renders through the audience or
+  // on the indoor pitch surface.
+  {
+    const ex = (x - 110) / 73.5;
+    const ez = (z - 120) / 52.5;
+    if (ex * ex + ez * ez < 1.0) return false;
+  }
 
-  // Skip tiles very close to known stall positions (small clearing
-  // around each stall counter). x values += 86 from the original.
-  const stallPts = [
+  // ── Top-voters podium base (radius 8.5 outer rim ~9) at (50, 50) ──
+  if (Math.hypot(x - 50, z - 50) < 9.2) return false;
+
+  // ── Top-up monument plinth (radius 4.5 + step 0.6) at (98, 50) ──
+  if (Math.hypot(x - 98, z - 50) < 5.4) return false;
+
+  // ── Fixture board paved plot (radius 4.5) at (140, 50) ──
+  if (Math.hypot(x - 140, z - 50) < 5.0) return false;
+
+  // ── Soccer pitch rectangle (cx 158, cz 32, half-w 9, half-d 13) ──
+  if (x >= 148 && x <= 168 && z >= 18 && z <= 46) return false;
+
+  // ── Amphitheater (backdrop at z≈71.5 PLUS the stage disc that
+  //    extends south to z≈63.5 and the flagpole at (150.5, 66)) ──
+  if (Math.abs(x - 148) < 6.5 && Math.abs(z - 67.5) < 7.0) return false;
+
+  // ── Trophy Walk tent (roof + corner posts around 180, 45) ──
+  if (Math.abs(x - 180) < 3.2 && Math.abs(z - 45) < 3.2) return false;
+
+  // ── Trophy plaza paved disc (radius 6) at (186, 60) ──
+  if (Math.hypot(x - 186, z - 60) < 6.5) return false;
+
+  // ── Photo spot paved disc at (186, 25) ──
+  if (Math.hypot(x - 186, z - 25) < 4.8) return false;
+
+  // ── Mascot pedestal (cylinder bases around 195, 40) ──
+  if (Math.hypot(x - 195, z - 40) < 2.5) return false;
+
+  // ── Concession-stand cluster (4 carts around 146, 12) ──
+  if (Math.hypot(x - 146, z - 12) < 4.0) return false;
+
+  // ── Picnic area paved plot (radius 5.5 + rim 0.35) at (162, 56) ──
+  if (Math.hypot(x - 162, z - 56) < 6.0) return false;
+
+  // ── Winding trails — same polyline data the builder lays down ──
+  // Point-to-segment distance against every trail segment; rejects
+  // within half the trail width plus a 0.7 blade-clearance margin.
+  for (const trail of TRAIL_DEFS) {
+    const clear = trail.w / 2 + 0.7;
+    for (let i = 0; i < trail.pts.length - 1; i++) {
+      const [ax, az] = trail.pts[i];
+      const [bx, bz] = trail.pts[i + 1];
+      const abx = bx - ax, abz = bz - az;
+      const lenSq = abx * abx + abz * abz;
+      const t = lenSq > 0
+        ? Math.max(0, Math.min(1, ((x - ax) * abx + (z - az) * abz) / lenSq))
+        : 0;
+      const px = ax + t * abx, pz = az + t * abz;
+      if (Math.hypot(x - px, z - pz) < clear) return false;
+    }
+  }
+
+  // ── Stalls (small clearing around each counter) ──
+  const stallPts: Array<[number, number]> = [
     [ 98, 16], [121, 18], [125, 32], [114, 39],
     [100, 34], [ 94, 28], [110, 14],
+    [170, 20],  // Sneaker stand on the east trail
   ];
   for (const [sx, sz] of stallPts) {
     if (Math.hypot(x - sx, z - sz) < 2.4) return false;
   }
+
   return true;
 }
 
@@ -1431,11 +1836,122 @@ function buildGrassTuft(scene: Scene, x: number, z: number, mat: StandardMateria
 //   node ~/.claude/skills/rezona-pgc-tools-gen-image/scripts/gen-image.mjs \
 //     --model gpt-image-2 --kind sprite --size 1024x1024 --no-compress \
 //     --key <oak-tree|pine-tree|grass-tuft> --root client --prompt "..."
+// Framed event/mascot poster on two posts. The poster face shows the
+// generated image at `posterKey`; until that asset exists it renders a
+// deep-blue placeholder so the structure is visible from day one. Used
+// for the big "REZONA WORLD CUP" hero banner and the small scattered
+// mascot pose posters — same builder, different dimensions.
+function buildPosterSign(
+  scene: Scene, sink: Texture[], opts: {
+    cx: number; cz: number; baseY: number; width: number; height: number;
+    faceYaw: number; posterKey: string; postHeight: number; id: string;
+  },
+): Mesh[] {
+  const { cx, cz, baseY, width, height, faceYaw, posterKey, postHeight, id } = opts;
+  const meshes: Mesh[] = [];
+  const woodDark = createStandardMaterial(scene, `${id}-post-mat`, Color3.FromHexString('#4a341c'));
+  const goldMat = createStandardMaterial(scene, `${id}-frame-mat`, Color3.FromHexString('#e6c34a'));
+
+  const root = new TransformNode(`${id}-root`, scene);
+  root.position.set(cx, 0, cz);
+  root.rotation.y = faceYaw;
+
+  // Two support posts straddling the poster.
+  const postOffset = width / 2 + 0.25;
+  for (const sign of [-1, 1] as const) {
+    const post = MeshBuilder.CreateCylinder(`${id}-post-${sign}`, {
+      height: baseY + postHeight, diameter: width > 4 ? 0.3 : 0.14, tessellation: 10,
+    }, scene);
+    post.parent = root;
+    post.position.set(sign * postOffset, (baseY + postHeight) / 2, 0);
+    post.material = woodDark;
+    meshes.push(post);
+  }
+
+  const faceY = baseY + height / 2;
+  // Gold frame — top/bottom rails + side stiles, slightly behind the face.
+  const FT = width > 4 ? 0.22 : 0.1;
+  const frameSpec: Array<[string, number, number, number, number]> = [
+    ['top', 0, height / 2 + FT / 2, width + FT * 2, FT],
+    ['bot', 0, -height / 2 - FT / 2, width + FT * 2, FT],
+    ['left', -(width / 2 + FT / 2), 0, FT, height],
+    ['right', (width / 2 + FT / 2), 0, FT, height],
+  ];
+  for (const [n, fx, fy, fw, fh] of frameSpec) {
+    const bar = MeshBuilder.CreateBox(`${id}-frame-${n}`, { width: fw, height: fh, depth: 0.12 }, scene);
+    bar.parent = root;
+    // Poster center sits at local y = faceY; frame bars offset from it,
+    // pushed slightly behind the face plane (z -0.04) so it reads as a frame.
+    bar.position.set(fx, faceY + fy, -0.04);
+    bar.material = goldMat;
+    meshes.push(bar);
+  }
+
+  // Poster face — a plane carrying the generated image (or placeholder).
+  const faceMat = createStandardMaterial(scene, `${id}-face-mat`, Color3.FromHexString('#243d5c'));
+  // Posters are flat printed art — lift emissive so they read brightly
+  // and aren't darkened by the directional sun on the shaded side.
+  faceMat.emissiveColor = new Color3(0.55, 0.55, 0.55);
+  faceMat.specularColor = new Color3(0, 0, 0);
+  const url = ASSETS[posterKey];
+  if (url) {
+    const tex = new Texture(url, scene);
+    tex.anisotropicFilteringLevel = 4;
+    tex.name = `${posterKey}-poster-tex`;
+    faceMat.diffuseTexture = tex;
+    faceMat.emissiveTexture = tex;
+    faceMat.diffuseColor = new Color3(1, 1, 1);
+    faceMat.emissiveColor = new Color3(0.85, 0.85, 0.85);
+    sink.push(tex);
+  }
+  const face = MeshBuilder.CreatePlane(`${id}-face`, {
+    width, height, sideOrientation: Mesh.DOUBLESIDE,
+  }, scene);
+  face.parent = root;
+  face.position.set(0, faceY, 0);
+  face.material = faceMat;
+  meshes.push(face);
+
+  return meshes;
+}
+
 function loadSpriteTexture(scene: Scene, assetKey: 'oak-tree' | 'pine-tree' | 'grass-tuft'): Texture {
   const url = ASSETS[assetKey];
   const tex = new Texture(url, scene, /* noMipmapOrOptions */ false, /* invertY */ true);
   tex.hasAlpha = true;
   tex.name = `${assetKey}-sprite-tex`;
+  return tex;
+}
+
+// Skin a procedural material with one of the AI-generated tileable map
+// textures (tex_wood_planks / tex_awning_cloth / tex_cut_stone /
+// tex_flagstone). GUARDED: if the asset key isn't registered (texture
+// gen failed / not run), it's a no-op and the material keeps its flat
+// diffuseColor — so the world never breaks on a missing texture.
+//   repeat   — uv tiling count (bigger = smaller pattern on the surface)
+//   keepTint — true: leave diffuseColor as a multiplier tint (for the
+//              near-white awning cloth, so the stall color shows through).
+//              false (default): set diffuseColor white so the texture
+//              renders at its true generated color.
+// Returns the created Texture (already pushed to `sink` for disposal), or
+// null when the key was absent.
+export function applyMapTexture(
+  scene: Scene, mat: StandardMaterial, assetKey: string,
+  sink: Texture[], opts: { repeat?: number; keepTint?: boolean } = {},
+): Texture | null {
+  const url = ASSETS[assetKey];
+  if (!url) return null;
+  const tex = new Texture(url, scene);
+  const r = opts.repeat ?? 1;
+  tex.uScale = r;
+  tex.vScale = r;
+  tex.wrapU = Texture.WRAP_ADDRESSMODE;
+  tex.wrapV = Texture.WRAP_ADDRESSMODE;
+  tex.anisotropicFilteringLevel = 4;
+  tex.name = `${assetKey}-map-tex`;
+  mat.diffuseTexture = tex;
+  if (!opts.keepTint) mat.diffuseColor = new Color3(1, 1, 1);
+  sink.push(tex);
   return tex;
 }
 
@@ -1447,6 +1963,99 @@ function loadSpriteTexture(scene: Scene, assetKey: 'oak-tree' | 'pine-tree' | 'g
 // just geometric "stuff" to make the world feel populated. Coords are
 // hand-picked to land in empty park regions away from the existing
 // stalls / attractions.
+// ─────────────────────────────────────────────────────────────────────────────
+// Zone separators — hedge rows defining the perimeter of each themed
+// cluster. Players walk over them (no collision) but visually they
+// communicate "you are entering / leaving this zone". Built as a row of
+// short evergreen boxes with a darker bottom and small fluctuating
+// height for a more organic silhouette.
+function buildZoneSeparators(scene: Scene): Mesh[] {
+  const meshes: Mesh[] = [];
+  const hedgeMat = createStandardMaterial(scene, 'hedge-mat', Color3.FromHexString('#3a6a3a'));
+  const hedgeDarkMat = createStandardMaterial(scene, 'hedge-dark-mat', Color3.FromHexString('#2a4a2a'));
+
+  /** Lay a row of hedge boxes along the line from (x1, z1) to (x2, z2),
+   *  spaced every 1.5 units, with small random-ish height variance. */
+  const layHedge = (
+    x1: number, z1: number, x2: number, z2: number, label: string,
+  ): void => {
+    const dx = x2 - x1;
+    const dz = z2 - z1;
+    const length = Math.hypot(dx, dz);
+    const angle = Math.atan2(dz, dx);
+    const STEP = 1.5;
+    const count = Math.max(2, Math.floor(length / STEP));
+    for (let i = 0; i < count; i++) {
+      const t = (i + 0.5) / count;
+      const cx = x1 + dx * t;
+      const cz = z1 + dz * t;
+      // Pseudo-random height (no Math.random — deterministic so it
+      // doesn't churn each session).
+      const seed = Math.sin(cx * 12.9898 + cz * 78.233) * 43758.5453;
+      const jitter = (seed - Math.floor(seed));
+      const h = 0.8 + jitter * 0.35;  // 0.8 → 1.15 tall
+      const w = 0.9 + jitter * 0.15;
+      // Body (lighter green)
+      const body = MeshBuilder.CreateBox(`hedge-${label}-${i}`, {
+        width: w, height: h, depth: 0.85,
+      }, scene);
+      body.position.set(cx, h / 2, cz);
+      body.rotation.y = -angle;
+      body.material = hedgeMat;
+      meshes.push(body);
+      // Dark base — bottom 30% of the hedge in darker green
+      const base = MeshBuilder.CreateBox(`hedge-${label}-base-${i}`, {
+        width: w + 0.06, height: h * 0.3, depth: 0.92,
+      }, scene);
+      base.position.set(cx, h * 0.15, cz);
+      base.rotation.y = -angle;
+      base.material = hedgeDarkMat;
+      meshes.push(base);
+    }
+  };
+
+  // ── Plaza ring — defines the central plaza zone. Open on the four
+  //    cardinal cardinal walkways (where the cross paths enter/exit).
+  //    Hedges go around the corners of the plaza disc.
+  //    Plaza center (110, 24), radius ~4.5. Hedges along a square at
+  //    distance 7 from center, with gaps for the cross paths.
+  // East side hedges (between N and S cross-path arms)
+  layHedge(116, 18, 116, 21, 'plaza-NE-1');  // NE inner
+  layHedge(116, 27, 116, 30, 'plaza-SE-1');  // SE inner
+  // West side
+  layHedge(104, 18, 104, 21, 'plaza-NW-1');
+  layHedge(104, 27, 104, 30, 'plaza-SW-1');
+
+  // ── Betting Plaza (west cluster) — bracketed by hedges on the south
+  //    and east sides so it reads as a distinct walled garden of boards.
+  //    Cluster at (75-140, 30-50). Single path entrance from (95, 24).
+  // South edge — hedge along z=32, gap at x=95 for the entrance path
+  layHedge( 70, 32,  90, 32, 'betting-S-w');   // west of entrance
+  layHedge(100, 32, 145, 32, 'betting-S-e');   // east of entrance
+  // East edge — hedge along x=145, gap at z=50 for fixture-board area
+  layHedge(145, 32, 145, 56, 'betting-E');
+
+  // ── Trophy Walk (east cluster) — hedges on south and west sides.
+  //    Single trunk enters at (190, 24) → (186, 60).
+  layHedge(175, 32, 175, 65, 'trophy-W');      // west edge
+  layHedge(175, 65, 200, 65, 'trophy-N');      // north edge
+
+  // ── Food Avenue (south-east) — short hedge framing on the north
+  //    side, separating it from the plaza-to-east trunk path.
+  layHedge(140,  4, 140, 10, 'food-W');
+  layHedge(165,  4, 165, 18, 'food-E');
+
+  // ── Stadium Approach (north of plaza) — hedges flanking the spine
+  //    path going up to the gate. Defines the gateway corridor + visually
+  //    separates the press tent + fan zone clusters from the spine.
+  // West side of spine — hedge between x=100 and the press tent
+  layHedge(102, 52, 102, 76, 'spine-W');
+  // East side of spine — hedge between x=118 and the fan-zone branch
+  layHedge(118, 52, 118, 76, 'spine-E');
+
+  return meshes;
+}
+
 function buildExtraPois(scene: Scene): Mesh[] {
   const meshes: Mesh[] = [];
   const cream = createStandardMaterial(scene, 'epoi-cream', Color3.FromHexString('#f4ebd6'));
@@ -1546,121 +2155,27 @@ function buildExtraPois(scene: Scene): Mesh[] {
     meshes.push(glove);
   }
 
-  // ── 2. FAN ZONE — relocated next to the amphitheater (Stadium Approach) ─
-  // Was at (178, 105) — far NE, no thematic neighbour. Moved to (130,
-  // 88), west of the amphitheater (148, 70), east of the spine path
-  // (110). Now reads as "the second viewing area before the stadium,"
-  // grouped with the amphitheater as match-day watch spots.
-  const fzCx = 130, fzCz = 92;
-  // Paved square
-  const fzPlot = MeshBuilder.CreateDisc('epoi-fz-plot', { radius: 8, tessellation: 32 }, scene);
-  fzPlot.rotation.x = Math.PI / 2;
-  fzPlot.position.set(fzCx, 0.03, fzCz);
-  fzPlot.material = stone;
-  fzPlot.isPickable = false;
-  meshes.push(fzPlot);
-  // Two-post big screen frame
-  for (const sign of [-1, 1] as const) {
-    const screenPost = MeshBuilder.CreateBox(`epoi-fz-post-${sign}`, {
-      width: 0.4, height: 6.5, depth: 0.4,
-    }, scene);
-    screenPost.position.set(fzCx + sign * 3.5, 3.25, fzCz + 5.5);
-    screenPost.material = charcoal;
-    meshes.push(screenPost);
-  }
-  // The screen itself — dark panel with blue tint (suggesting glow)
-  const screen = MeshBuilder.CreateBox('epoi-fz-screen', {
-    width: 7.4, height: 4.2, depth: 0.25,
-  }, scene);
-  screen.position.set(fzCx, 4.0, fzCz + 5.5);
-  const screenMat = createStandardMaterial(scene, 'epoi-fz-screen-mat', Color3.FromHexString('#1a3a6e'));
-  screenMat.emissiveColor = new Color3(0.25, 0.45, 0.7);
-  screen.material = screenMat;
-  meshes.push(screen);
-  // Screen frame (gold trim)
-  const frameTop = MeshBuilder.CreateBox('epoi-fz-frame-top', {
-    width: 7.8, height: 0.3, depth: 0.35,
-  }, scene);
-  frameTop.position.set(fzCx, 6.25, fzCz + 5.5);
-  frameTop.material = gold;
-  meshes.push(frameTop);
-  // Chair rows facing the screen
-  for (let row = 0; row < 3; row++) {
-    for (let col = 0; col < 7; col++) {
-      const cx = fzCx + (col - 3) * 0.9;
-      const cz = fzCz - 1 + row * 1.1;
-      const seat = MeshBuilder.CreateBox(`epoi-fz-chair-${row}-${col}`, {
-        width: 0.65, height: 0.08, depth: 0.6,
-      }, scene);
-      seat.position.set(cx, 0.5, cz);
-      seat.material = (col + row) % 2 === 0 ? red : blue;
-      meshes.push(seat);
-      const back = MeshBuilder.CreateBox(`epoi-fz-back-${row}-${col}`, {
-        width: 0.65, height: 0.7, depth: 0.07,
-      }, scene);
-      back.position.set(cx, 0.85, cz + 0.27);
-      back.material = (col + row) % 2 === 0 ? red : blue;
-      meshes.push(back);
-    }
-  }
+  // ── 2. FAN ZONE — REMOVED ──────────────────────────────────────────────
+  // The big-screen frame + the grid of red/blue chair boxes read as
+  // domino-shaped clutter rather than seating from any angle. Removed
+  // entirely; the amphitheater (148, 70) covers the "match-day watch
+  // spot" theme on its own.
 
-  // ── 3. PRESS / MEDIA AREA — relocated to the Stadium Approach ──────────
-  // Was at (60, 85) — far west, disconnected from the stadium it's
-  // supposed to cover. Moved to (90, 78), just west of the spine path
-  // approaching the gate, so the cameras genuinely face the gate.
-  const prCx = 90, prCz = 78;
-  // Tent base — square with peaked roof (built from box + 4 triangular ribbons would be heavy; use a box + a pyramid cap)
-  const tentBody = MeshBuilder.CreateBox('epoi-press-tent-body', {
-    width: 5, height: 2.5, depth: 4,
-  }, scene);
-  tentBody.position.set(prCx, 1.25, prCz);
-  const tentMat = createStandardMaterial(scene, 'epoi-press-tent-mat', Color3.FromHexString('#3a3a8c'));
-  tentBody.material = tentMat;
-  meshes.push(tentBody);
-  // Striped awning over the front
-  const awning = MeshBuilder.CreateBox('epoi-press-awning', {
-    width: 5.4, height: 0.2, depth: 1.6,
-  }, scene);
-  awning.position.set(prCx, 2.65, prCz - 2.4);
-  awning.rotation.x = -0.25;
-  awning.material = white;
-  meshes.push(awning);
-  // PRESS label on the front (gold horizontal stripe)
-  const label = MeshBuilder.CreateBox('epoi-press-label', {
-    width: 3.5, height: 0.5, depth: 0.06,
-  }, scene);
-  label.position.set(prCx, 1.6, prCz - 2.05);
-  label.material = gold;
-  meshes.push(label);
-  // 3 camera tripods in front of the tent
-  for (let i = 0; i < 3; i++) {
-    const tx = prCx + (i - 1) * 1.6;
-    const tz = prCz - 4.5;
-    // Tripod — 3 legs as a cone, then a cylinder body
-    const tripod = MeshBuilder.CreateCylinder(`epoi-press-tripod-${i}`, {
-      height: 1.4, diameterTop: 0.06, diameterBottom: 0.5, tessellation: 6,
-    }, scene);
-    tripod.position.set(tx, 0.7, tz);
-    tripod.material = charcoal;
-    meshes.push(tripod);
-    // Camera body
-    const cam = MeshBuilder.CreateBox(`epoi-press-cam-${i}`, {
-      width: 0.45, height: 0.35, depth: 0.7,
-    }, scene);
-    cam.position.set(tx, 1.55, tz);
-    cam.material = charcoal;
-    meshes.push(cam);
-    // Lens
-    const lens = MeshBuilder.CreateCylinder(`epoi-press-lens-${i}`, {
-      height: 0.4, diameter: 0.25, tessellation: 10,
-    }, scene);
-    lens.position.set(tx, 1.55, tz - 0.55);
-    lens.rotation.x = Math.PI / 2;
-    lens.material = white;
-    meshes.push(lens);
-  }
+  // ── 3. PRESS / MEDIA AREA — REMOVED ────────────────────────────────────
+  // The dark-blue tent box + the three cone tripods read as random
+  // misshapen boxes from any normal camera angle. Removed entirely —
+  // the press theme adds nothing to gameplay and clutters the Stadium
+  // Approach corridor that players walk to reach the stadium gate.
 
-  // ── 4. SIGNPOST WITH PARK MAP (west park, near plaza) ──────────────────
+
+  // ── 4. SIGNPOST WITH PARK MAP — REMOVED ────────────────────────────────
+  // The painted map text rendered mirrored on the public-facing side
+  // (CSS-style text on a 3D plane reverses when the plane normal points
+  // away from default), and the post was an isolated piece in the west
+  // park without a thematic cluster. Removed; controls are documented
+  // in the README / out-of-game.
+  /*
+
   // Wooden post + angled signboard with a DynamicTexture map of the
   // park's POIs. INTERACTIVE: when the player walks within
   // SIGNPOST_INTERACT_RADIUS, the HUD shows a controls cheat-sheet (see
@@ -1681,15 +2196,19 @@ function buildExtraPois(scene: Scene): Mesh[] {
   spBase.position.set(spCx, 0.15, spCz);
   spBase.material = stone;
   meshes.push(spBase);
-  // Signboard — wider flat panel angled toward the spawn so players
-  // see it on their way to the plaza
+  // Signboard — wider flat panel angled toward the spawn / central
+  // plaza (south-east of this post) so players see the map face as
+  // they walk in from the spine, not the wooden back.
   const SIGN_W = 2.6, SIGN_H = 1.7;
+  // Rotate by π + (-0.4) so the painted face's normal points toward the
+  // plaza (south-east) instead of away from it (north-west).
+  const SIGN_ROT = Math.PI - 0.4;
   const signFrame = MeshBuilder.CreateBox('epoi-sign-frame', {
     width: SIGN_W + 0.2, height: SIGN_H + 0.2, depth: 0.18,
   }, scene);
   signFrame.position.set(spCx, 2.5, spCz);
   signFrame.material = woodDark;
-  signFrame.rotation.y = -0.4;
+  signFrame.rotation.y = SIGN_ROT;
   meshes.push(signFrame);
   // Painted face — small DynamicTexture map of the park's main POIs
   const signTex = new DynamicTexture('epoi-sign-tex', { width: 768, height: 512 }, scene, true);
@@ -1739,11 +2258,11 @@ function buildExtraPois(scene: Scene): Mesh[] {
   signCtx.stroke();
   // POIs (dot + label)
   drawPoi(110,  24, '#c14444', 'Plaza');
-  drawPoi( 80,  50, '#3a6ea5', 'Monument');
+  drawPoi(110,  56, '#3a6ea5', 'Monument');
   drawPoi(140,  50, '#3a8634', 'Fixtures');
+  drawPoi(158,  32, '#7a7a7a', 'Soccer');
   drawPoi(110, 150, '#e6c34a', 'Stadium');
-  drawPoi(178, 105, '#d96bc4', 'Fan zone');
-  drawPoi( 60,  85, '#7a7a7a', 'Press');
+  drawPoi(148,  70, '#d96bc4', 'Amphitheater');
   signTex.update();
   const signFaceMat = new StandardMaterial('epoi-sign-face-mat', scene);
   signFaceMat.diffuseTexture = signTex;
@@ -1753,63 +2272,27 @@ function buildExtraPois(scene: Scene): Mesh[] {
   const signFace = MeshBuilder.CreatePlane('epoi-sign-face', {
     width: SIGN_W, height: SIGN_H, sideOrientation: Mesh.DOUBLESIDE,
   }, scene);
+  // Offset the face plane slightly toward the OUTWARD-normal direction
+  // of the new rotation so it sits in front of the wooden frame, not
+  // inside it. Outward normal of a +Z plane rotated SIGN_ROT around Y
+  // is (sin SIGN_ROT, 0, cos SIGN_ROT).
   signFace.position.set(
-    spCx + Math.cos(-0.4 + Math.PI / 2) * 0.10,
+    spCx + Math.sin(SIGN_ROT) * 0.10,
     2.5,
-    spCz + Math.sin(-0.4 + Math.PI / 2) * 0.10,
+    spCz + Math.cos(SIGN_ROT) * 0.10,
   );
-  signFace.rotation.y = -0.4;
+  signFace.rotation.y = SIGN_ROT;
   signFace.material = signFaceMat;
   meshes.push(signFace);
+  */
 
-  // ── 5. FOOD COURT — relocated adjacent to the concession cluster ───────
-  // Was at (175, 50) — isolated mid-east. Moved to (160, 20), east of
-  // the existing concession cluster (146, 12) so the two form a
-  // continuous "Food Avenue" instead of two separate isolated spots.
-  const fcCx = 160, fcCz = 20;
-  const fcPlot = MeshBuilder.CreateDisc('epoi-fc-plot', { radius: 6, tessellation: 24 }, scene);
-  fcPlot.rotation.x = Math.PI / 2;
-  fcPlot.position.set(fcCx, 0.03, fcCz);
-  fcPlot.material = stone;
-  fcPlot.isPickable = false;
-  meshes.push(fcPlot);
-  const truckColors = [red, blue, green];
-  for (let i = 0; i < 3; i++) {
-    const tx = fcCx + (i - 1) * 3.2;
-    const tz = fcCz;
-    // Truck body (box)
-    const body = MeshBuilder.CreateBox(`epoi-fc-truck-${i}`, {
-      width: 2.6, height: 1.6, depth: 1.4,
-    }, scene);
-    body.position.set(tx, 1.0, tz);
-    body.material = truckColors[i];
-    meshes.push(body);
-    // Cab
-    const cab = MeshBuilder.CreateBox(`epoi-fc-cab-${i}`, {
-      width: 0.9, height: 1.0, depth: 1.2,
-    }, scene);
-    cab.position.set(tx + 1.2, 0.7, tz);
-    cab.material = truckColors[i];
-    meshes.push(cab);
-    // Awning over the service window
-    const truckAwning = MeshBuilder.CreateBox(`epoi-fc-awning-${i}`, {
-      width: 2.0, height: 0.05, depth: 0.8,
-    }, scene);
-    truckAwning.position.set(tx - 0.2, 2.0, tz - 0.85);
-    truckAwning.rotation.x = -0.18;
-    truckAwning.material = white;
-    meshes.push(truckAwning);
-    // Wheels
-    for (const wx of [tx - 0.9, tx + 0.9]) {
-      const wheel = MeshBuilder.CreateCylinder(`epoi-fc-wheel-${i}-${wx}`, {
-        height: 0.25, diameter: 0.5, tessellation: 10,
-      }, scene);
-      wheel.position.set(wx, 0.25, tz + 0.7);
-      wheel.rotation.z = Math.PI / 2;
-      wheel.material = charcoal;
-      meshes.push(wheel);
-    }
-  }
+  // ── 5. FOOD COURT — REMOVED ────────────────────────────────────────────
+  // The three colored food trucks at (160, 20) read as random trash bins
+  // sitting at the south edge of the soccer field (z=19), with the white
+  // awnings looking like loose poles. Removed entirely to declutter the
+  // soccer-field surrounds — there are still concession stands elsewhere
+  // for the "food" theme, and the user explicitly called this cluster out
+  // as not belonging.
 
   // ── 7. TROPHY REPLICA TENT — anchors the Trophy Walk cluster ──────────
   // Was at (200, 90) — isolated far east. Moved to (180, 45), close to
@@ -1925,13 +2408,20 @@ function buildFestiveDecor(scene: Scene): Mesh[] {
     meshes.push(cap);
   };
 
-  // Lampposts at the corners of the central plaza + along the spine
-  // path leading to the stadium gate. Six total — enough for visual
-  // rhythm without crowding.
+  // Lampposts: four on the plaza pavement (kept slightly off-square so
+  // they don't read as grid corners), plus trail-side lamps placed a
+  // couple of units off the winding trails at the bends — like a real
+  // park, lamps follow the trails, not a coordinate grid. Every
+  // position is checked clear of trail surfaces, plots, and benches.
   const lampPositions: Array<[number, number]> = [
-    [102, 16], [118, 16],  // Plaza corners (SE / SW of centerpiece)
-    [102, 32], [118, 32],  // Plaza corners (NE / NW)
-    [110, 55], [110, 70],  // Along the spine to the stadium gate
+    [102, 16], [118, 17],  // Plaza south pair (one nudged for asymmetry)
+    [103, 33], [118, 31],  // Plaza north pair
+    [109, 44],             // Gate-trail first bend (west side)
+    [119, 61],             // Gate-trail upper bend (east side)
+    [ 91, 21],             // Podium trail near the plaza exit
+    [ 68, 36],             // Podium trail mid-meadow
+    [137, 15],             // East trail south of the pitch
+    [137, 38],             // Pitch-side branch, west of the fixture board
   ];
   for (const [lx, lz] of lampPositions) buildLamppost(lx, lz);
 
@@ -2017,11 +2507,39 @@ function buildFestiveDecor(scene: Scene): Mesh[] {
   // Fixture board — anchor at the topper above the board (y≈3.6)
   buildBalloonCluster(140, 51, 3.6);
 
-  // ── Small picnic tables scattered in open grass areas to give
-  //    eat-and-chat spots. Each is a top box + 2 bench planks +
-  //    cross-leg pairs. Color and size unified for batch-friendliness.
+  // ── Picnic area — an organized cluster of 4 tables around a shared
+  //    paved plot. Sits at (162, 56): north-east of the soccer pitch
+  //    (pitch ends z=46, plot starts z=50.15) and SOUTH of the
+  //    amphitheater — the previous spot at (150, 60) clipped into the
+  //    amphitheater's stage disc (its ellipse reaches z≈63.5 at
+  //    (148, 66)) and its flagpole. All clearances re-verified:
+  //    stage ellipse, flagpole, pitch rect, trophy plaza r6 @ (186,60),
+  //    fixture plot, the lone tree at (174, 60), and the trails.
   const tableTopMat = createStandardMaterial(scene, 'decor-picnic-top', Color3.FromHexString('#a07851'));
   const tableLegMat = createStandardMaterial(scene, 'decor-picnic-leg', Color3.FromHexString('#6b4628'));
+  const picnicStoneMat = createStandardMaterial(scene, 'decor-picnic-stone', Color3.FromHexString('#c9b48d'));
+  const picnicRimMat = createStandardMaterial(scene, 'decor-picnic-rim', Color3.FromHexString('#a5916c'));
+  const PICNIC_CX = 162, PICNIC_CZ = 56;
+  const PICNIC_R = 5.5;
+
+  // Paved circular plot + rim — the dedicated picnic plaza floor.
+  const picnicPlot = MeshBuilder.CreateDisc('decor-picnic-plot', {
+    radius: PICNIC_R, tessellation: 48,
+  }, scene);
+  picnicPlot.rotation.x = Math.PI / 2;
+  picnicPlot.position.set(PICNIC_CX, 0.018, PICNIC_CZ);
+  picnicPlot.material = picnicStoneMat;
+  picnicPlot.isPickable = false;
+  meshes.push(picnicPlot);
+  const picnicRim = MeshBuilder.CreateDisc('decor-picnic-rim', {
+    radius: PICNIC_R + 0.35, tessellation: 48,
+  }, scene);
+  picnicRim.rotation.x = Math.PI / 2;
+  picnicRim.position.set(PICNIC_CX, 0.014, PICNIC_CZ);
+  picnicRim.material = picnicRimMat;
+  picnicRim.isPickable = false;
+  meshes.push(picnicRim);
+
   const buildPicnicTable = (cx: number, cz: number, rot: number) => {
     const root = new TransformNode(`decor-picnic-root-${cx}-${cz}`, scene);
     root.position.set(cx, 0, cz);
@@ -2053,10 +2571,53 @@ function buildFestiveDecor(scene: Scene): Mesh[] {
       place(leg);
     }
   };
-  buildPicnicTable(135, 25, 0);
-  buildPicnicTable(150, 40, Math.PI / 4);
-  buildPicnicTable( 88, 12, -Math.PI / 6);
-  buildPicnicTable(170, 30, Math.PI / 3);
+  // 4 tables arranged on the plot in a windmill pattern — each table
+  // sits off the centre on one of the cardinal axes, rotated so the
+  // long side faces tangentially. Leaves a 2.5-unit open area at the
+  // exact centre for a parasol / centerpiece.
+  const TABLE_OFFSET = 3.2;
+  buildPicnicTable(PICNIC_CX - TABLE_OFFSET, PICNIC_CZ, 0);            // W table, long side N-S
+  buildPicnicTable(PICNIC_CX + TABLE_OFFSET, PICNIC_CZ, 0);            // E table
+  buildPicnicTable(PICNIC_CX, PICNIC_CZ - TABLE_OFFSET, Math.PI / 2);  // S table, long side E-W
+  buildPicnicTable(PICNIC_CX, PICNIC_CZ + TABLE_OFFSET, Math.PI / 2);  // N table
+
+  // Central parasol — a single pole + a tilted square top that reads as
+  // a beach umbrella from any angle. Anchors the cluster visually.
+  const parasolPoleMat = createStandardMaterial(scene, 'decor-picnic-pole', Color3.FromHexString('#3a3a3a'));
+  const parasolTopMat = createStandardMaterial(scene, 'decor-picnic-parasol-top', Color3.FromHexString('#e8c64a'));
+  const parasolTopAltMat = createStandardMaterial(scene, 'decor-picnic-parasol-alt', Color3.FromHexString('#c14444'));
+  const parasolPole = MeshBuilder.CreateCylinder('decor-picnic-pole', {
+    height: 2.6, diameter: 0.10, tessellation: 8,
+  }, scene);
+  parasolPole.position.set(PICNIC_CX, 1.3, PICNIC_CZ);
+  parasolPole.material = parasolPoleMat;
+  meshes.push(parasolPole);
+  // Four-slice umbrella canopy: 4 triangles arranged around the pole
+  // (approximated with thin cones / pyramid pairs). Simplest: 4 box
+  // segments tilted down from a top vertex.
+  for (let s = 0; s < 4; s++) {
+    const ang = (s / 4) * Math.PI * 2;
+    const seg = MeshBuilder.CreateBox(`decor-picnic-parasol-${s}`, {
+      width: 1.8, height: 0.08, depth: 1.8,
+    }, scene);
+    seg.scaling.set(0.5, 1, 0.5);
+    seg.position.set(
+      PICNIC_CX + Math.cos(ang) * 0.55,
+      2.55,
+      PICNIC_CZ + Math.sin(ang) * 0.55,
+    );
+    seg.rotation.y = ang;
+    seg.rotation.z = -0.35;  // tilt the outer edge down
+    seg.material = s % 2 === 0 ? parasolTopMat : parasolTopAltMat;
+    meshes.push(seg);
+  }
+  // Small finial sphere at the top of the pole
+  const parasolFinial = MeshBuilder.CreateSphere('decor-picnic-finial', {
+    diameter: 0.18, segments: 10,
+  }, scene);
+  parasolFinial.position.set(PICNIC_CX, 2.75, PICNIC_CZ);
+  parasolFinial.material = parasolPoleMat;
+  meshes.push(parasolFinial);
 
   return meshes;
 }
@@ -2066,11 +2627,18 @@ function buildBench(scene: Scene, x: number, z: number, rotationY: number): Mesh
   const woodMat = createStandardMaterial(scene, `bench-wood-${x}-${z}`, Color3.FromHexString('#8a6435'));
   const legMat = createStandardMaterial(scene, `bench-leg-${x}-${z}`, Color3.FromHexString('#383838'));
 
+  // Root transform — parts live in LOCAL space and the whole bench
+  // rotates as one unit. The previous version hand-rotated each part's
+  // offset with a right-handed formula while Babylon's rotation.y is
+  // left-handed, so the seat / backrest / legs drifted apart at any
+  // non-cardinal angle (fine at 0/π/±π/2, scattered at 0.5, 2.2, …).
+  // Same TransformNode pattern as buildStall and buildPicnicTable.
+  const root = new TransformNode(`bench-root-${x}-${z}`, scene);
+  root.position.set(x, 0, z);
+  root.rotation.y = rotationY;
   const place = (mesh: Mesh, lx: number, ly: number, lz: number): void => {
-    const wx = x + lx * Math.cos(rotationY) - lz * Math.sin(rotationY);
-    const wz = z + lx * Math.sin(rotationY) + lz * Math.cos(rotationY);
-    mesh.position.set(wx, ly, wz);
-    mesh.rotation.y = rotationY;
+    mesh.parent = root;
+    mesh.position.set(lx, ly, lz);
   };
 
   const seat = MeshBuilder.CreateBox(`bench-seat-${x}-${z}`, {
@@ -2106,7 +2674,7 @@ function buildBench(scene: Scene, x: number, z: number, rotationY: number): Mesh
 // Centerpiece: a championship football monument at the plaza center.
 // Stone pedestal (3 stacked cylinders for base / column / cap) topped by
 // a giant gold soccer ball with hex-patch detail.
-function buildCenterpiece(scene: Scene, cx: number, cz: number): Mesh[] {
+function buildCenterpiece(scene: Scene, cx: number, cz: number, baseY = 0): Mesh[] {
   const meshes: Mesh[] = [];
   const stoneMat = createStandardMaterial(scene, 'cp-stone', Color3.FromHexString('#a9a59a'));
   const stoneAccentMat = createStandardMaterial(scene, 'cp-stone-accent', Color3.FromHexString('#7e7a70'));
@@ -2119,7 +2687,7 @@ function buildCenterpiece(scene: Scene, cx: number, cz: number): Mesh[] {
   const base = MeshBuilder.CreateCylinder('cp-base', {
     height: 0.35, diameterTop: 2.4, diameterBottom: 2.8, tessellation: 24,
   }, scene);
-  base.position.set(cx, 0.175, cz);
+  base.position.set(cx, baseY + 0.175, cz);
   base.material = stoneMat;
   meshes.push(base);
 
@@ -2127,7 +2695,7 @@ function buildCenterpiece(scene: Scene, cx: number, cz: number): Mesh[] {
   const trim1 = MeshBuilder.CreateCylinder('cp-trim-1', {
     height: 0.1, diameter: 2.3, tessellation: 24,
   }, scene);
-  trim1.position.set(cx, 0.4, cz);
+  trim1.position.set(cx, baseY + 0.4, cz);
   trim1.material = stoneAccentMat;
   meshes.push(trim1);
 
@@ -2135,7 +2703,7 @@ function buildCenterpiece(scene: Scene, cx: number, cz: number): Mesh[] {
   const column = MeshBuilder.CreateCylinder('cp-column', {
     height: 1.6, diameter: 1.1, tessellation: 24,
   }, scene);
-  column.position.set(cx, 1.25, cz);
+  column.position.set(cx, baseY + 1.25, cz);
   column.material = stoneMat;
   meshes.push(column);
 
@@ -2143,7 +2711,7 @@ function buildCenterpiece(scene: Scene, cx: number, cz: number): Mesh[] {
   const trim2 = MeshBuilder.CreateCylinder('cp-trim-2', {
     height: 0.12, diameter: 1.3, tessellation: 24,
   }, scene);
-  trim2.position.set(cx, 2.11, cz);
+  trim2.position.set(cx, baseY + 2.11, cz);
   trim2.material = stoneAccentMat;
   meshes.push(trim2);
 
@@ -2151,13 +2719,13 @@ function buildCenterpiece(scene: Scene, cx: number, cz: number): Mesh[] {
   const cap = MeshBuilder.CreateCylinder('cp-cap', {
     height: 0.3, diameterTop: 1.6, diameterBottom: 1.3, tessellation: 24,
   }, scene);
-  cap.position.set(cx, 2.32, cz);
+  cap.position.set(cx, baseY + 2.32, cz);
   cap.material = stoneMat;
   meshes.push(cap);
 
   // Gold ball
   const ball = MeshBuilder.CreateSphere('cp-ball', { diameter: 1.5, segments: 24 }, scene);
-  ball.position.set(cx, 3.3, cz);
+  ball.position.set(cx, baseY + 3.3, cz);
   ball.material = goldMat;
   meshes.push(ball);
 
@@ -2174,15 +2742,16 @@ function buildCenterpiece(scene: Scene, cx: number, cz: number): Mesh[] {
   ];
   const ballRadius = 0.75;
   const patchOffset = ballRadius + 0.005;
+  const ballY = baseY + 3.3;
   for (let i = 0; i < patchPositions.length; i++) {
     const [longitude, latitude] = patchPositions[i];
     const px = cx + Math.cos(latitude) * Math.cos(longitude) * patchOffset;
-    const py = 3.3 + Math.sin(latitude) * patchOffset;
+    const py = ballY + Math.sin(latitude) * patchOffset;
     const pz = cz + Math.cos(latitude) * Math.sin(longitude) * patchOffset;
     const patch = MeshBuilder.CreateDisc(`cp-patch-${i}`, { radius: 0.18, tessellation: 6 }, scene);
     patch.position.set(px, py, pz);
     // Make the disc face outward from the ball center.
-    patch.lookAt(new Vector3(cx + (px - cx) * 100, 3.3 + (py - 3.3) * 100, cz + (pz - cz) * 100));
+    patch.lookAt(new Vector3(cx + (px - cx) * 100, ballY + (py - ballY) * 100, cz + (pz - cz) * 100));
     patch.material = darkMat;
     meshes.push(patch);
   }
@@ -2191,7 +2760,7 @@ function buildCenterpiece(scene: Scene, cx: number, cz: number): Mesh[] {
   const plaque = MeshBuilder.CreateBox('cp-plaque', {
     width: 0.8, height: 0.5, depth: 0.05,
   }, scene);
-  plaque.position.set(cx, 1.25, cz - 0.58);
+  plaque.position.set(cx, baseY + 1.25, cz - 0.58);
   plaque.material = stoneAccentMat;
   meshes.push(plaque);
 
@@ -2202,7 +2771,13 @@ function buildCenterpiece(scene: Scene, cx: number, cz: number): Mesh[] {
 // Soccer practice field — a striped grass pitch with two goalposts. The
 // pitch surface is just a flat box; the goals are simple frame meshes
 // at each short end. Centered on (cx, cz). Pitch span: ~20 × 28 units.
-function buildSoccerField(scene: Scene, cx: number, cz: number): Mesh[] {
+interface SoccerFieldResult {
+  meshes: Mesh[];
+  /** Root transform driving the soccer ball — game.ts moves this each
+   *  frame to follow the server's authoritative ball state. */
+  ballRoot: TransformNode;
+}
+function buildSoccerField(scene: Scene, cx: number, cz: number): SoccerFieldResult {
   const meshes: Mesh[] = [];
   const turfMat = createStandardMaterial(scene, 'soccer-turf-mat', Color3.FromHexString('#3e8a3a'));
   const lineMat = createStandardMaterial(scene, 'soccer-line-mat', Color3.FromHexString('#f4f4ee'));
@@ -2247,17 +2822,23 @@ function buildSoccerField(scene: Scene, cx: number, cz: number): Mesh[] {
   meshes.push(centerCircle);
 
   // Two goals — one on each short end (+Z and -Z from center).
+  // The earlier AI-generated GLB came back with stretched proportions
+  // and thin black net-strand spikes that read as visual noise — we've
+  // reverted to the clean procedural frame (white box crossbar + post
+  // cylinders + back depth posts), which still does the job for both
+  // gameplay (goal scoring) and visual identity.
+  const GOAL_WIDTH = 5;
   for (const sign of [1, -1] as const) {
     const goalZ = cz + sign * 13.4;
     // Crossbar
     const crossbar = MeshBuilder.CreateBox(`soccer-goal-${sign}-crossbar`, {
-      width: 5, height: 0.15, depth: 0.15,
+      width: GOAL_WIDTH, height: 0.15, depth: 0.15,
     }, scene);
     crossbar.position.set(cx, 2.2, goalZ);
     crossbar.material = goalMat;
     meshes.push(crossbar);
 
-    // Left + right posts
+    // Left + right front posts
     for (const px of [-2.4, 2.4]) {
       const post = MeshBuilder.CreateCylinder(`soccer-goal-${sign}-post-${px}`, {
         height: 2.3, diameter: 0.18, tessellation: 8,
@@ -2277,31 +2858,32 @@ function buildSoccerField(scene: Scene, cx: number, cz: number): Mesh[] {
     }
     // Back crossbar
     const backCrossbar = MeshBuilder.CreateBox(`soccer-goal-${sign}-back-crossbar`, {
-      width: 5, height: 0.12, depth: 0.12,
+      width: GOAL_WIDTH, height: 0.12, depth: 0.12,
     }, scene);
     backCrossbar.position.set(cx, 2.2, goalZ + sign * 1.0);
     backCrossbar.material = goalMat;
     meshes.push(backCrossbar);
   }
 
-  // ─── Soccer ball at the center spot ──────────────────────────────────
-  // Static visual for now — a small black-and-white football sitting at
-  // the kickoff circle. Players walk through it (no physics body). True
-  // multiplayer-kickable would need server-authoritative ball state and
-  // collision impulses, which is a follow-up.
+  // ─── Soccer ball — KICKABLE multiplayer ball ─────────────────────────
+  // Render position is driven by the server (game.ts reads net.ballState
+  // each frame and writes the root's position). The root mesh below is a
+  // procedural fallback football; if the AI-generated GLB
+  // ASSETS.field_soccer_ball loads successfully, the model is parented
+  // here too and the procedural shell is hidden — so we render either
+  // the prettier model or the fallback without ever showing nothing.
+  const ballRadius = 0.28;
+  const ballRoot = new TransformNode('soccer-ball-root', scene);
+  ballRoot.position.set(cx, ballRadius, cz);
+
   const ballWhiteMat = createStandardMaterial(scene, 'soccer-ball-white-mat', Color3.FromHexString('#f8f8f4'));
   const ballDarkMat = createStandardMaterial(scene, 'soccer-ball-dark-mat', Color3.FromHexString('#222020'));
-  const ballRadius = 0.28;
-  const ballY = ballRadius;
-  const ball = MeshBuilder.CreateSphere('soccer-ball', {
+  const fallbackBall = MeshBuilder.CreateSphere('soccer-ball-fallback', {
     diameter: ballRadius * 2, segments: 20,
   }, scene);
-  ball.position.set(cx, ballY, cz);
-  ball.material = ballWhiteMat;
-  meshes.push(ball);
-
-  // Six dark hex patches around the ball surface — same technique as
-  // the centerpiece monument football.
+  fallbackBall.parent = ballRoot;
+  fallbackBall.material = ballWhiteMat;
+  meshes.push(fallbackBall);
   const patchPositions: Array<[number, number]> = [
     [0,                  0],
     [Math.PI / 3,        Math.PI / 4],
@@ -2310,20 +2892,77 @@ function buildSoccerField(scene: Scene, cx: number, cz: number): Mesh[] {
     [-2 * Math.PI / 3,  -Math.PI / 4],
     [Math.PI,            0],
   ];
-  const patchOffset = ballRadius + 0.005;
   for (let i = 0; i < patchPositions.length; i++) {
     const [lon, lat] = patchPositions[i];
-    const px = cx + Math.cos(lat) * Math.cos(lon) * patchOffset;
-    const py = ballY + Math.sin(lat) * patchOffset;
-    const pz = cz + Math.cos(lat) * Math.sin(lon) * patchOffset;
+    const r = ballRadius + 0.005;
+    const px = Math.cos(lat) * Math.cos(lon) * r;
+    const py = Math.sin(lat) * r;
+    const pz = Math.cos(lat) * Math.sin(lon) * r;
     const patch = MeshBuilder.CreateDisc(`soccer-ball-patch-${i}`, { radius: 0.07, tessellation: 6 }, scene);
+    patch.parent = ballRoot;
     patch.position.set(px, py, pz);
-    patch.lookAt(new Vector3(cx + (px - cx) * 100, ballY + (py - ballY) * 100, cz + (pz - cz) * 100));
+    patch.lookAt(new Vector3(px * 100, py * 100, pz * 100));
     patch.material = ballDarkMat;
     meshes.push(patch);
   }
 
-  return meshes;
+  // Track the procedural patches so we can hide them once the GLB loads.
+  const fallbackPatches: Mesh[] = [];
+  for (const m of meshes) {
+    if (m.name.startsWith('soccer-ball-patch-')) fallbackPatches.push(m);
+  }
+
+  // Try to upgrade the visual to the AI-generated football GLB. If it
+  // loads, hide the fallback shell. Errors swallowed — fallback stays.
+  const soccerBallAssetUrl = ASSETS['field_soccer_ball'];
+  if (soccerBallAssetUrl) {
+    ImportMeshAsync(soccerBallAssetUrl, scene)
+      .then((res) => {
+        const modelRoot = new TransformNode('soccer-ball-model-root', scene);
+        modelRoot.parent = ballRoot;
+        // Parent imported meshes to a centering pivot first so we can
+        // measure + recentre. We then size the pivot to match the
+        // gameplay ball radius regardless of Tripo's mesh scale.
+        const pivot = new TransformNode('soccer-ball-pivot', scene);
+        pivot.parent = modelRoot;
+        for (const im of res.meshes) {
+          if (!im.parent) im.parent = pivot;
+          im.isPickable = false;
+        }
+        // Compute hierarchical bounding box on the pivot (in its local
+        // space — its parent modelRoot is still identity at this point).
+        scene.onBeforeRenderObservable.addOnce(() => {
+          const bb = pivot.getHierarchyBoundingVectors(true);
+          const sx = bb.max.x - bb.min.x;
+          const sy = bb.max.y - bb.min.y;
+          const sz = bb.max.z - bb.min.z;
+          const longest = Math.max(sx, sy, sz);
+          if (!Number.isFinite(longest) || longest <= 0.0001) {
+            console.warn('[soccer-ball] GLB has zero bounding box; using fallback scale.');
+            modelRoot.scaling.setAll(ballRadius * 2);
+          } else {
+            // Scale so the longest axis equals one ball diameter.
+            const k = (ballRadius * 2) / longest;
+            modelRoot.scaling.setAll(k);
+            // Re-centre: move the pivot so the bbox centre is at the
+            // ballRoot origin (Y is also offset so the ball sits on
+            // the ground, not floating / sunken).
+            pivot.position.x = -(bb.min.x + bb.max.x) / 2;
+            pivot.position.y = -(bb.min.y + bb.max.y) / 2;
+            pivot.position.z = -(bb.min.z + bb.max.z) / 2;
+          }
+          // Only hide the fallback procedural ball ONCE we've fully
+          // measured + rescaled — avoids a one-frame "huge blob" flash.
+          fallbackBall.setEnabled(false);
+          for (const p of fallbackPatches) p.setEnabled(false);
+        });
+      })
+      .catch((err) => {
+        console.warn('[soccer-ball] GLB load failed; keeping fallback.', err);
+      });
+  }
+
+  return { meshes, ballRoot };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

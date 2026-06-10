@@ -36,7 +36,12 @@ export interface ChatEntry {
   readonly from: string;
   readonly name: string;
   readonly text: string;
+  /** Server wall-clock stamp — display/ordering only. Never compare this
+   *  against the local clock (phone clocks drift by minutes). */
   readonly t: number;
+  /** Client arrival stamp (local Date.now() when the broadcast landed).
+   *  Use THIS for unread/seen comparisons — same clock domain as the HUD. */
+  readonly localT?: number;
 }
 
 export interface GameStoreSnapshot {
@@ -126,6 +131,17 @@ export interface GameStoreSnapshot {
   /** True when the player is standing close enough to the signpost
    *  to read its controls cheat-sheet. */
   readonly nearbySignpost: boolean;
+  /** Most recent soccer-pitch goal, or null. The HUD shows a banner
+   *  for ~3 seconds after `at` and then clears. `mine: true` when the
+   *  scorer was this client (drives the "+coins!" celebration). */
+  readonly lastSoccerGoal: {
+    scorerName: string;
+    side: 'N' | 'S';
+    scoreN: number;
+    scoreS: number;
+    mine: boolean;
+    at: number;
+  } | null;
 }
 
 export interface TeamStandingSnapshot {
@@ -259,6 +275,7 @@ const initialSnapshot: GameStoreSnapshot = {
   bettingMyContribution: 0,
   bettingMyUnlocked: [],
   nearbySignpost: false,
+  lastSoccerGoal: null,
 };
 
 /** SERVER milestone ladder — mirrors SERVER_MILESTONES in
@@ -266,21 +283,21 @@ const initialSnapshot: GameStoreSnapshot = {
 export const BETTING_SERVER_MILESTONES: ReadonlyArray<{
   threshold: number; reward: number; label: string;
 }> = [
-  { threshold:   1000, reward:   30, label: 'First Thousand' },
-  { threshold:   5000, reward:  100, label: 'Five Thousand Pool' },
-  { threshold:  15000, reward:  200, label: 'Fifteen K Mark' },
-  { threshold:  40000, reward:  500, label: 'Forty K Tier' },
-  { threshold: 100000, reward: 1500, label: 'Hundred K Champion' },
+  { threshold:   1000, reward:  150, label: 'First Thousand' },
+  { threshold:   5000, reward:  500, label: 'Five Thousand Pool' },
+  { threshold:  15000, reward: 1200, label: 'Fifteen K Mark' },
+  { threshold:  40000, reward: 3000, label: 'Forty K Tier' },
+  { threshold: 100000, reward: 8000, label: 'Hundred K Champion' },
 ];
 /** PERSONAL milestone ladder — mirrors PERSONAL_MILESTONES on the server. */
 export const BETTING_PERSONAL_MILESTONES: ReadonlyArray<{
   threshold: number; reward: number; label: string;
 }> = [
-  { threshold:   50, reward:  10, label: 'Backer' },
-  { threshold:  200, reward:  30, label: 'Supporter' },
-  { threshold:  500, reward:  75, label: 'Patron' },
-  { threshold: 1500, reward: 200, label: 'Champion' },
-  { threshold: 5000, reward: 500, label: 'Legend' },
+  { threshold:   50, reward:   50, label: 'Backer' },
+  { threshold:  200, reward:  150, label: 'Supporter' },
+  { threshold:  500, reward:  400, label: 'Patron' },
+  { threshold: 1500, reward: 1000, label: 'Champion' },
+  { threshold: 5000, reward: 3000, label: 'Legend' },
 ];
 
 let snapshot: GameStoreSnapshot = initialSnapshot;
@@ -327,6 +344,12 @@ export function setChatMessages(chat: readonly ChatEntry[]): void {
   setGameSnapshot({ chat });
 }
 
+export function setLastSoccerGoal(
+  lastSoccerGoal: GameStoreSnapshot['lastSoccerGoal'],
+): void {
+  setGameSnapshot({ lastSoccerGoal });
+}
+
 // ─── Outfit mutators (called from the HUD) ──────────────────────────────────
 
 function bumpedOutfit(textureItemIds: readonly string[], accessoryItemIds: readonly string[]): OutfitState {
@@ -363,6 +386,15 @@ export function toggleTextureItem(id: string): void {
     next = [...equipped.filter((i) => !sameSlotIds.includes(i)), id];
   }
   setOutfit(next, snapshot.outfit.accessoryItemIds);
+}
+
+/** Set the avatar's facial expression. Implemented as a `face-<expr>`
+ * token in the accessory CSV so it syncs to other players through the
+ * normal equip → roster-update pipeline. 'neutral' removes the token. */
+export function setAvatarExpression(expr: 'neutral' | 'happy' | 'surprised' | 'wink' | 'cool'): void {
+  const withoutFace = snapshot.outfit.accessoryItemIds.filter((id) => !id.startsWith('face-'));
+  const next = expr === 'neutral' ? withoutFace : [...withoutFace, `face-${expr}`];
+  setOutfit(snapshot.outfit.textureItemIds, next);
 }
 
 export function toggleAccessoryItem(id: string): void {

@@ -42,24 +42,26 @@ const MIN_PLAYERS = 1;  // Phase 1: keep low so it's testable solo
  *  long-tail collective contribution — players bring large coin
  *  balances; the old 100-6000 ladder ate through in minutes. */
 const SERVER_MILESTONES = [
-  { threshold:   1000, reward:   30, label: "First Thousand" },
-  { threshold:   5000, reward:  100, label: "Five Thousand Pool" },
-  { threshold:  15000, reward:  200, label: "Fifteen K Mark" },
-  { threshold:  40000, reward:  500, label: "Forty K Tier" },
-  { threshold: 100000, reward: 1500, label: "Hundred K Champion" },
+  { threshold:   1000, reward:  150, label: "First Thousand" },
+  { threshold:   5000, reward:  500, label: "Five Thousand Pool" },
+  { threshold:  15000, reward: 1200, label: "Fifteen K Mark" },
+  { threshold:  40000, reward: 3000, label: "Forty K Tier" },
+  { threshold: 100000, reward: 8000, label: "Hundred K Champion" },
 ] as const;
 
 /** PERSONAL milestone ladder — your individual contribution to the
  *  pool across the session. Smaller thresholds with smaller rewards,
  *  so each player has their own incremental progression on top of
  *  the shared server ladder. Each player's contribution is the sum
- *  of every bet they've placed (regardless of outcome). */
+ *  of every bet they've placed (regardless of outcome). Rewards
+ *  raised so betting feels meaningfully rewarding even when the
+ *  server pool is just starting to fill. */
 const PERSONAL_MILESTONES = [
-  { threshold:   50, reward:  10, label: "Backer" },
-  { threshold:  200, reward:  30, label: "Supporter" },
-  { threshold:  500, reward:  75, label: "Patron" },
-  { threshold: 1500, reward: 200, label: "Champion" },
-  { threshold: 5000, reward: 500, label: "Legend" },
+  { threshold:   50, reward:   50, label: "Backer" },
+  { threshold:  200, reward:  150, label: "Supporter" },
+  { threshold:  500, reward:  400, label: "Patron" },
+  { threshold: 1500, reward: 1000, label: "Champion" },
+  { threshold: 5000, reward: 3000, label: "Legend" },
 ] as const;
 
 // ─── Bet types ─────────────────────────────────────────────────────────────
@@ -115,13 +117,16 @@ export function registerBettingEvent(
     matchId: string; camp: Camp; teamName: string; teamCode: string;
   }>();
 
-  function broadcastTopVoters(): void {
-    // Sort by contribution DESC, take top 10. Look up name from state
-    // at broadcast time so renames flow through correctly.
-    const entries: Array<{
-      sid: string; name: string; contribution: number;
-      team: string; teamCode: string; camp: string;
-    }> = [];
+  // Shape of a single top-voter row sent to clients. Includes outfit so
+  // the in-world podium can render a statue of each top voter wearing
+  // exactly what they wear in-game.
+  type TopVoterEntry = {
+    sid: string; name: string; contribution: number;
+    team: string; teamCode: string; camp: string;
+    color: string; textureItems: string; accessoryItems: string;
+  };
+  function buildTopVoterEntries(): TopVoterEntry[] {
+    const entries: TopVoterEntry[] = [];
     for (const [sid, contribution] of playerContribution) {
       const p = state.players.get(sid);
       if (!p) continue;
@@ -133,31 +138,19 @@ export function registerBettingEvent(
         team: recent?.teamName ?? "",
         teamCode: recent?.teamCode ?? "",
         camp: recent?.camp ?? "",
+        color: p.color,
+        textureItems: p.textureItems,
+        accessoryItems: p.accessoryItems,
       });
     }
     entries.sort((a, b) => b.contribution - a.contribution);
-    room.broadcast("event:top-voters", { entries: entries.slice(0, 10) });
+    return entries.slice(0, 10);
+  }
+  function broadcastTopVoters(): void {
+    room.broadcast("event:top-voters", { entries: buildTopVoterEntries() });
   }
   function sendTopVoters(client: { send(t: string, m: unknown): void }): void {
-    const entries: Array<{
-      sid: string; name: string; contribution: number;
-      team: string; teamCode: string; camp: string;
-    }> = [];
-    for (const [sid, contribution] of playerContribution) {
-      const p = state.players.get(sid);
-      if (!p) continue;
-      const recent = playerMostRecentBet.get(sid);
-      entries.push({
-        sid,
-        name: p.username,
-        contribution,
-        team: recent?.teamName ?? "",
-        teamCode: recent?.teamCode ?? "",
-        camp: recent?.camp ?? "",
-      });
-    }
-    entries.sort((a, b) => b.contribution - a.contribution);
-    client.send("event:top-voters", { entries: entries.slice(0, 10) });
+    client.send("event:top-voters", { entries: buildTopVoterEntries() });
   }
 
   function broadcastPool(): void {

@@ -1,0 +1,52 @@
+{
+  "key": "field_soccer_goal",
+  "kind": "prop",
+  "provider": "tripo",
+  "model": "v2.5-20250123",
+  "prompt": "soccer goalpost frame with white net, regulation football goal, isolated white background, simple clean geometry",
+  "negative": null,
+  "seed": null,
+  "face_limit": 3000,
+  "face_count": null,
+  "file_size_bytes": 598540,
+  "optimization": {
+    "applied": false,
+    "before_bytes": 598540,
+    "after_bytes": 598540,
+    "texture_size": 1024,
+    "texture_format": "jpeg",
+    "quantize": true,
+    "reason": "optimization deps unavailable (ERR_MODULE_NOT_FOUND); run `npm install` in the skill dir to enable. Returning raw mesh."
+  },
+  "texture": true,
+  "pbr": true,
+  "rigged": false,
+  "rig_type": null,
+  "t_pose": false,
+  "animations": [],
+  "stage_history": [
+    {
+      "stage": "text_to_model",
+      "task_id": "4dea710f-5e85-4335-9d1e-f93d8e3b914a",
+      "status": "success"
+    }
+  ],
+  "mesh_task_id": "4dea710f-5e85-4335-9d1e-f93d8e3b914a",
+  "final_task_id": "4dea710f-5e85-4335-9d1e-f93d8e3b914a",
+  "base_url": "https://api.tripo3d.ai/v2/openapi",
+  "original_prompt": "soccer goalpost frame with white net, regulation football goal, isolated white background, simple clean geometry",
+  "effective_prompt": "soccer goalpost frame with white net, regulation football goal, isolated white background, simple clean geometry",
+  "prompt_was_rewritten": false,
+  "original_negative": null,
+  "effective_negative": null,
+  "input_mode": "text_to_model",
+  "image_hash": null,
+  "image_url": null,
+  "multiview_hash": null,
+  "multiview_views": null,
+  "image_type": null,
+  "auto_reference": {
+    "used": false
+  },
+  "generated_at": "2026-06-10T03:47:12.005Z"
+}

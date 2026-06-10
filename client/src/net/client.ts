@@ -34,6 +34,11 @@ export interface TopVoterSnapshot {
   readonly team: string;
   readonly teamCode: string;
   readonly camp: string;  // 'HOME' | 'DRAW' | 'AWAY' | ''
+  /** Player's avatar tint + outfit at broadcast time. Drives the
+   *  podium statue's appearance. */
+  readonly color: string;
+  readonly textureItems: string;
+  readonly accessoryItems: string;
 }
 
 export interface TeamStandingSnapshot {
@@ -179,6 +184,23 @@ export class NetClient {
    *  Render loop credits coins + shows the result toast. */
   readonly pendingBetResults: Array<{
     matchId: string; result: string; payout: number; profit: number; camp: string;
+  }> = [];
+  /** Soccer ball server-authoritative state. Server broadcasts 'ball:state'
+   *  on every kick + every motion tick (~20Hz while moving, 0Hz at rest).
+   *  Render loop reads `ballState` each frame and lerps the ball mesh
+   *  toward the target. `ballRecvAt` is wall-clock ms of receipt for
+   *  interpolation delay. */
+  ballState: {
+    x: number; z: number; vx: number; vy: number;
+    kicker: string; kickerName: string;
+    scoreN: number; scoreS: number;
+  } = { x: 158, z: 32, vx: 0, vy: 0, kicker: '', kickerName: '', scoreN: 0, scoreS: 0 };
+  ballRecvAt = 0;
+  /** Goal events queued for the render loop to drain — show banner +
+   *  if this client was the kicker, award the goal-reward coins. */
+  readonly pendingBallGoals: Array<{
+    scorerSid: string; scorerName: string;
+    side: 'N' | 'S'; scoreN: number; scoreS: number; reward: number;
   }> = [];
   private inputSeq = 0;
 
@@ -458,6 +480,9 @@ export class NetClient {
             team: typeof r.team === 'string' ? r.team : '',
             teamCode: typeof r.teamCode === 'string' ? r.teamCode : '',
             camp: typeof r.camp === 'string' ? r.camp : '',
+            color: typeof r.color === 'string' ? r.color : '#7bb6e8',
+            textureItems: typeof r.textureItems === 'string' ? r.textureItems : '',
+            accessoryItems: typeof r.accessoryItems === 'string' ? r.accessoryItems : '',
           });
         }
         this.bettingTopVoters = out;
@@ -475,6 +500,41 @@ export class NetClient {
       });
       // Ask for the initial snapshot.
       room.send('event:request-fixtures');
+
+      // ─── Soccer ball — server-authoritative position + kicks ──────────
+      room.onMessage('ball:state', (m: {
+        x?: unknown; z?: unknown; vx?: unknown; vy?: unknown;
+        kicker?: unknown; kickerName?: unknown;
+        scoreN?: unknown; scoreS?: unknown;
+      } | undefined) => {
+        if (!m) return;
+        this.ballState = {
+          x: Number(m.x) || 158,
+          z: Number(m.z) || 32,
+          vx: Number(m.vx) || 0,
+          vy: Number(m.vy) || 0,
+          kicker: typeof m.kicker === 'string' ? m.kicker : '',
+          kickerName: typeof m.kickerName === 'string' ? m.kickerName : '',
+          scoreN: Number(m.scoreN) || 0,
+          scoreS: Number(m.scoreS) || 0,
+        };
+        this.ballRecvAt = Date.now();
+      });
+      room.onMessage('ball:goal', (m: {
+        scorerSid?: unknown; scorerName?: unknown;
+        side?: unknown; scoreN?: unknown; scoreS?: unknown; reward?: unknown;
+      } | undefined) => {
+        if (!m) return;
+        this.pendingBallGoals.push({
+          scorerSid: typeof m.scorerSid === 'string' ? m.scorerSid : '',
+          scorerName: typeof m.scorerName === 'string' ? m.scorerName : '',
+          side: m.side === 'N' || m.side === 'S' ? m.side : 'N',
+          scoreN: Number(m.scoreN) || 0,
+          scoreS: Number(m.scoreS) || 0,
+          reward: Number(m.reward) || 0,
+        });
+      });
+      room.send('ball:request');
 
       room.onLeave(() => this.setStatus('disconnected'));
       room.onError(() => this.setStatus('error'));

@@ -1,0 +1,52 @@
+{
+  "key": "field_soccer_ball",
+  "kind": "prop",
+  "provider": "tripo",
+  "model": "v2.5-20250123",
+  "prompt": "a classic black and white pentagon-hexagon paneled football, soccer ball, clean studio lighting",
+  "negative": null,
+  "seed": null,
+  "face_limit": 2000,
+  "face_count": null,
+  "file_size_bytes": 483772,
+  "optimization": {
+    "applied": false,
+    "before_bytes": 483772,
+    "after_bytes": 483772,
+    "texture_size": 1024,
+    "texture_format": "jpeg",
+    "quantize": true,
+    "reason": "optimization deps unavailable (ERR_MODULE_NOT_FOUND); run `npm install` in the skill dir to enable. Returning raw mesh."
+  },
+  "texture": true,
+  "pbr": true,
+  "rigged": false,
+  "rig_type": null,
+  "t_pose": false,
+  "animations": [],
+  "stage_history": [
+    {
+      "stage": "text_to_model",
+      "task_id": "0dabc95d-b977-4ae8-912f-43c47f8707cf",
+      "status": "success"
+    }
+  ],
+  "mesh_task_id": "0dabc95d-b977-4ae8-912f-43c47f8707cf",
+  "final_task_id": "0dabc95d-b977-4ae8-912f-43c47f8707cf",
+  "base_url": "https://api.tripo3d.ai/v2/openapi",
+  "original_prompt": "a classic black and white pentagon-hexagon paneled football, soccer ball, clean studio lighting",
+  "effective_prompt": "a classic black and white pentagon-hexagon paneled football, soccer ball, clean studio lighting",
+  "prompt_was_rewritten": false,
+  "original_negative": null,
+  "effective_negative": null,
+  "input_mode": "text_to_model",
+  "image_hash": null,
+  "image_url": null,
+  "multiview_hash": null,
+  "multiview_views": null,
+  "image_type": null,
+  "auto_reference": {
+    "used": false
+  },
+  "generated_at": "2026-06-10T03:14:04.407Z"
+}

@@ -84,6 +84,64 @@ function makePatternMaterial(scene: Scene, name: string, pattern: Pattern): Stan
   return makeDesignMaterial(scene, name, uniformDesign(pattern));
 }
 
+// ─── Shared scarf builder ───────────────────────────────────────────────────
+// Both scarf catalog entries call this. The previous per-entry code wrapped
+// the neck in 0.6-diameter torus rings — WIDER than the 0.62 head — so the
+// scarf floated as fat blobs around the thin neck. This builds a snug wrap
+// (≈0.34 across, hugging the neck) of a few stacked knit bands, plus a flat
+// tail that drapes down the chest front and ends in tassels — reading as an
+// actual worn scarf. matA = primary color, matB = accent stripe.
+// Parented to the neck_front socket (world ≈ (0, 2.05, 0)); all coords local.
+function buildScarf(
+  scene: Scene, parent: TransformNode, label: string,
+  matA: StandardMaterial, matB: StandardMaterial,
+): Mesh[] {
+  const meshes: Mesh[] = [];
+  // Neck wrap — 3 stacked bands, snug to the neck. Torus axis is Y by
+  // default, so the ring lies horizontal and wraps a vertical neck.
+  const bandMats = [matA, matB, matA];
+  for (let i = 0; i < bandMats.length; i++) {
+    const band = MeshBuilder.CreateTorus(`${label}-band-${i}`, {
+      diameter: 0.34, thickness: 0.10, tessellation: 20,
+    }, scene);
+    band.parent = parent;
+    band.position.set(0, 0.08 - i * 0.08, 0);
+    band.material = bandMats[i];
+    meshes.push(band);
+  }
+  // Tail — a flat ribbon draping straight down the chest front, offset
+  // to one side so it reads as a loose end, not a bib.
+  const tail = MeshBuilder.CreateBox(`${label}-tail`, {
+    width: 0.16, height: 0.46, depth: 0.05,
+  }, scene);
+  tail.parent = parent;
+  tail.position.set(0.07, -0.30, 0.16);
+  tail.rotation.x = 0.12;  // hangs slightly forward off the chest
+  tail.material = matA;
+  meshes.push(tail);
+  // A second, shorter accent stripe near the tail's bottom.
+  const tailStripe = MeshBuilder.CreateBox(`${label}-tail-stripe`, {
+    width: 0.165, height: 0.07, depth: 0.052,
+  }, scene);
+  tailStripe.parent = parent;
+  tailStripe.position.set(0.07, -0.46, 0.18);
+  tailStripe.rotation.x = 0.12;
+  tailStripe.material = matB;
+  meshes.push(tailStripe);
+  // Tassels — three short fringe cylinders hanging off the tail's end.
+  const tasselMats = [matA, matB, matA];
+  for (let i = 0; i < 3; i++) {
+    const tassel = MeshBuilder.CreateCylinder(`${label}-tassel-${i}`, {
+      height: 0.09, diameter: 0.02, tessellation: 6,
+    }, scene);
+    tassel.parent = parent;
+    tassel.position.set(0.02 + i * 0.05, -0.55, 0.19);
+    tassel.material = tasselMats[i];
+    meshes.push(tassel);
+  }
+  return meshes;
+}
+
 // ─── Sewing-pattern UV regions ──────────────────────────────────────────────
 // Every garment texture is laid out as a 2×2 grid of cloth panels (see
 // textures.ts header). Each Vector4 is (u_start, v_start, u_end, v_end)
@@ -1195,24 +1253,39 @@ export const WARDROBE_ACCESSORY_ITEMS: AccessoryItemDef[] = [
       const brimMat = createStandardMaterial(scene, 'hat-cap-brim-mat', Color3.FromHexString('#7a1f1f'));
       const buttonMat = createStandardMaterial(scene, 'hat-cap-btn-mat', Color3.FromHexString('#f5f5f5'));
 
-      const crown = MeshBuilder.CreateSphere('hat-cap-crown', { diameter: 0.74, segments: 16, slice: 0.55 }, scene);
+      // Crown — a hemisphere that HUGS the 0.62 head dome (head_top socket
+      // sits at world y=2.65; head centre 2.5, radius 0.31). Diameter 0.66
+      // (just over the head) and slid down so the dome caps the skull
+      // instead of ballooning above it.
+      const crown = MeshBuilder.CreateSphere('hat-cap-crown', { diameter: 0.66, segments: 18, slice: 0.52 }, scene);
       crown.parent = parent;
-      crown.position.set(0, -0.02, 0);
+      crown.position.set(0, -0.06, 0);
       crown.material = crownMat;
 
-      const brim = MeshBuilder.CreateCylinder('hat-cap-brim', { height: 0.04, diameterTop: 0.66, diameterBottom: 0.86, tessellation: 18 }, scene);
-      brim.parent = parent;
-      brim.position.set(0, -0.05, 0.22);
-      brim.rotation.x = -0.18;
-      brim.material = brimMat;
+      // Peak — a flat tongue projecting FORWARD only (a baseball bill),
+      // not a full ring. Thin box, slightly down-tilted, sitting at brow
+      // height in front of the crown.
+      const peak = MeshBuilder.CreateBox('hat-cap-peak', { width: 0.36, height: 0.035, depth: 0.30 }, scene);
+      peak.parent = parent;
+      peak.position.set(0, -0.10, 0.30);
+      peak.rotation.x = -0.16;
+      peak.material = brimMat;
+      // Rounded front lip on the peak so its leading edge doesn't read as
+      // a hard rectangle.
+      const peakTip = MeshBuilder.CreateCylinder('hat-cap-peak-tip', { height: 0.36, diameter: 0.05, tessellation: 12 }, scene);
+      peakTip.parent = parent;
+      peakTip.rotation.z = Math.PI / 2;
+      peakTip.position.set(0, -0.125, 0.45);
+      peakTip.rotation.x = -0.16;
+      peakTip.material = brimMat;
 
       // Tiny apex button.
-      const button = MeshBuilder.CreateSphere('hat-cap-btn', { diameter: 0.06, segments: 10 }, scene);
+      const button = MeshBuilder.CreateSphere('hat-cap-btn', { diameter: 0.055, segments: 10 }, scene);
       button.parent = parent;
-      button.position.set(0, 0.18, 0);
+      button.position.set(0, 0.13, 0);
       button.material = buttonMat;
 
-      return [crown, brim, button];
+      return [crown, peak, peakTip, button];
     },
   },
   {
@@ -1250,19 +1323,30 @@ export const WARDROBE_ACCESSORY_ITEMS: AccessoryItemDef[] = [
     swatch: { kind: 'hStripes', colors: ['#3a6ea5', '#2c557d'], thickness: 10 },
     build: (scene, parent) => {
       const pattern: Pattern = { kind: 'hStripes', colors: ['#3a6ea5', '#2c557d'], thickness: 10 };
-      const beanie = MeshBuilder.CreateSphere('hat-beanie', { diameter: 0.7, segments: 18, slice: 0.5 }, scene);
+      const knitMat = makePatternMaterial(scene, 'hat-beanie-mat', pattern);
+      // Snug dome over the head (0.66 just clears the 0.62 head), pulled
+      // down so it covers the upper skull like a worn beanie.
+      const beanie = MeshBuilder.CreateSphere('hat-beanie', { diameter: 0.66, segments: 20, slice: 0.58 }, scene);
       beanie.parent = parent;
-      beanie.position.set(0, -0.05, 0);
-      beanie.material = makePatternMaterial(scene, 'hat-beanie-mat', pattern);
+      beanie.position.set(0, -0.09, 0);
+      beanie.material = knitMat;
+
+      // Folded knit cuff — a torus around the bottom rim that gives the
+      // beanie its characteristic rolled brim (was missing → read as a
+      // plain ball).
+      const cuff = MeshBuilder.CreateTorus('hat-beanie-cuff', { diameter: 0.6, thickness: 0.09, tessellation: 22 }, scene);
+      cuff.parent = parent;
+      cuff.position.set(0, -0.12, 0);
+      cuff.material = knitMat;
 
       // Pom-pom on top.
       const pomMat = createStandardMaterial(scene, 'hat-beanie-pom-mat', Color3.FromHexString('#f5f5f5'));
       const pom = MeshBuilder.CreateSphere('hat-beanie-pom', { diameter: 0.16, segments: 12 }, scene);
       pom.parent = parent;
-      pom.position.set(0, 0.18, 0);
+      pom.position.set(0, 0.14, 0);
       pom.material = pomMat;
 
-      return [beanie, pom];
+      return [beanie, cuff, pom];
     },
   },
   {
@@ -1379,44 +1463,7 @@ export const WARDROBE_ACCESSORY_ITEMS: AccessoryItemDef[] = [
     build: (scene, parent) => {
       const matA = makePatternMaterial(scene, 'scarf-red-a-mat', solid('#c14444'));
       const matB = makePatternMaterial(scene, 'scarf-red-b-mat', solid('#f5f5f5'));
-      const meshes: Mesh[] = [];
-      const bandColors = [matA, matB, matA, matB, matA];
-      const bandSpacing = 0.05;
-      const startY = bandSpacing * 2; // centred around y=0 — bands lie HORIZONTAL (XZ plane), stacked vertically.
-      for (let i = 0; i < bandColors.length; i++) {
-        const band = MeshBuilder.CreateTorus(`scarf-red-band-${i}`, {
-          diameter: 0.6, thickness: 0.07, tessellation: 24,
-        }, scene);
-        band.parent = parent;
-        // No rotation: default torus is in XZ plane (axis = Y), so it wraps a
-        // vertical neck — exactly what we want.
-        band.position.set(0, startY - i * bandSpacing, 0);
-        band.material = bandColors[i];
-        meshes.push(band);
-      }
-      // Short horizontal flap draped across the chest front.
-      const flap = MeshBuilder.CreateBox('scarf-red-flap', {
-        width: 0.34, height: 0.06, depth: 0.14,
-      }, scene);
-      flap.parent = parent;
-      flap.position.set(0.08, -0.1, 0.28);
-      flap.rotation.y = -0.25;
-      flap.material = matA;
-      meshes.push(flap);
-      // Tassels — three thin cylinders hanging from the leading edge of
-      // the flap. Alternate the scarf colours so the tassels read as part
-      // of the scarf's fabric.
-      const tasselMats = [matA, matB, matA];
-      for (let i = 0; i < 3; i++) {
-        const tassel = MeshBuilder.CreateCylinder(`scarf-red-tassel-${i}`, {
-          height: 0.08, diameter: 0.018, tessellation: 8,
-        }, scene);
-        tassel.parent = parent;
-        tassel.position.set(-0.02 + i * 0.06, -0.18, 0.34);
-        tassel.material = tasselMats[i];
-        meshes.push(tassel);
-      }
-      return meshes;
+      return buildScarf(scene, parent, 'scarf-red', matA, matB);
     },
   },
   {
@@ -1427,38 +1474,7 @@ export const WARDROBE_ACCESSORY_ITEMS: AccessoryItemDef[] = [
     build: (scene, parent) => {
       const matA = makePatternMaterial(scene, 'scarf-m-a-mat', solid('#e8c84a'));
       const matB = makePatternMaterial(scene, 'scarf-m-b-mat', solid('#a8893a'));
-      const meshes: Mesh[] = [];
-      const bandColors = [matA, matB, matA, matB, matA];
-      const bandSpacing = 0.05;
-      const startY = bandSpacing * 2;
-      for (let i = 0; i < bandColors.length; i++) {
-        const band = MeshBuilder.CreateTorus(`scarf-m-band-${i}`, {
-          diameter: 0.6, thickness: 0.07, tessellation: 24,
-        }, scene);
-        band.parent = parent;
-        band.position.set(0, startY - i * bandSpacing, 0);
-        band.material = bandColors[i];
-        meshes.push(band);
-      }
-      const flap = MeshBuilder.CreateBox('scarf-m-flap', {
-        width: 0.34, height: 0.06, depth: 0.14,
-      }, scene);
-      flap.parent = parent;
-      flap.position.set(0.08, -0.1, 0.28);
-      flap.rotation.y = -0.25;
-      flap.material = matA;
-      meshes.push(flap);
-      const tasselMats = [matA, matB, matA];
-      for (let i = 0; i < 3; i++) {
-        const tassel = MeshBuilder.CreateCylinder(`scarf-m-tassel-${i}`, {
-          height: 0.08, diameter: 0.018, tessellation: 8,
-        }, scene);
-        tassel.parent = parent;
-        tassel.position.set(-0.02 + i * 0.06, -0.18, 0.34);
-        tassel.material = tasselMats[i];
-        meshes.push(tassel);
-      }
-      return meshes;
+      return buildScarf(scene, parent, 'scarf-m', matA, matB);
     },
   },
   {

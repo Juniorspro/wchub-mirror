@@ -24,11 +24,20 @@ export interface AvatarUpdateContext {
   deltaSeconds: number;
 }
 
+/** Facial expression presets. Synced between players as a `face-<expr>`
+ * token riding the accessoryItems CSV (validated server-side like any
+ * accessory id); 'neutral' is the default and is never sent. */
+export type AvatarExpression = 'neutral' | 'happy' | 'surprised' | 'wink' | 'cool';
+
 export interface CharacterAvatar {
   root: TransformNode;
   /** Backwards-compat handle used by other modules — the torso mesh. */
   mesh: Mesh;
   applyOutfit(textureItemIds: readonly string[], accessoryItemIds: readonly string[]): void;
+  /** Set the avatar's facial expression (reshapes the eye + mouth
+   * meshes). Also applied automatically by applyOutfit when the
+   * accessory list carries a face-<expr> token. */
+  setExpression(expr: AvatarExpression): void;
   setPosition(x: number, y: number, z: number): void;
   setRotationY(rad: number): void;
   /** Trigger a one-shot visual jump (gravity-driven Y offset). No-op if
@@ -318,6 +327,46 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
   mouth.position.set(0, 2.37, 0.292);
   mouth.material = faceDetailMat;
 
+  // ─── Expressions — reshape the eye + mouth meshes ─────────────────────────
+  // Cheap parametric presets: scaling + small position/rotation nudges on
+  // the existing face meshes (no extra geometry, no texture work). Reset
+  // to neutral first so presets don't compound.
+  function setExpression(expr: AvatarExpression): void {
+    eyeL.scaling.set(1, 1, 1);
+    eyeR.scaling.set(1, 1, 1);
+    mouth.scaling.set(1, 1, 1);
+    mouth.position.set(0, 2.37, 0.292);
+    mouth.rotation.z = 0;
+    switch (expr) {
+      case 'happy':
+        // Wide grin, slightly raised.
+        mouth.scaling.set(1.7, 2.4, 1);
+        mouth.position.y = 2.385;
+        break;
+      case 'surprised':
+        // Tall "O" mouth + wide eyes.
+        mouth.scaling.set(0.85, 5.0, 1);
+        eyeL.scaling.set(1.35, 1.35, 1.35);
+        eyeR.scaling.set(1.35, 1.35, 1.35);
+        break;
+      case 'wink':
+        // Right eye squeezed shut + cheeky tilted smile.
+        eyeR.scaling.set(1.2, 0.18, 1);
+        mouth.scaling.set(1.45, 1.7, 1);
+        mouth.rotation.z = -0.14;
+        break;
+      case 'cool':
+        // Relaxed half-lidded eyes, easy smile.
+        eyeL.scaling.set(1.2, 0.4, 1);
+        eyeR.scaling.set(1.2, 0.4, 1);
+        mouth.scaling.set(1.3, 1.4, 1);
+        break;
+      case 'neutral':
+      default:
+        break;
+    }
+  }
+
   // Sockets
   const headTop = new TransformNode(`socket-head-top-${id}`, scene);
   headTop.parent = root;
@@ -361,15 +410,34 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
   function clearGarments(): void {
     // mesh.dispose(doNotRecurse=false, disposeMaterialAndTextures=true).
     // Default args leave materials hanging on scene.materials forever;
-    // every outfit re-equip would otherwise leak ~5-10 per change. Per-
-    // outfit textures created by makeDesignMaterial (DynamicTexture in
-    // some paths, Texture in image-pattern paths) are also dropped.
-    for (const m of attachedGarmentMeshes) m.dispose(false, true);
+    // every outfit re-equip would otherwise leak ~5-10 per change.
+    //
+    // CRITICAL: garment textures are SHARED + owned by the texture cache
+    // (getPatternTexture / getImageTexture). disposeMaterialAndTextures
+    // would kill the shared texture out from under any OTHER avatar
+    // wearing the same design — and even under THIS avatar on an
+    // identical re-equip — leaving the garment invisible ("the avatar
+    // got stripped" bug). So we detach every texture from the material
+    // FIRST, then dispose. The material dies; the cached texture lives
+    // until disposePatternTextureCache() at scene teardown.
+    for (const m of attachedGarmentMeshes) detachAndDispose(m);
     attachedGarmentMeshes = [];
   }
   function clearAccessories(): void {
-    for (const m of attachedAccessoryMeshes) m.dispose(false, true);
+    for (const m of attachedAccessoryMeshes) detachAndDispose(m);
     attachedAccessoryMeshes = [];
+  }
+  function detachAndDispose(m: Mesh): void {
+    const mat = m.material as StandardMaterial | null;
+    if (mat) {
+      // Null the texture slots so dispose(…, true) can't free the
+      // cache-owned textures. Assigning null is the documented way to
+      // detach without disposing.
+      mat.diffuseTexture = null;
+      mat.emissiveTexture = null;
+      mat.bumpTexture = null;
+    }
+    m.dispose(false, true);
   }
 
   function paintRegion(material: StandardMaterial, regionKey: BodyRegion, pattern: Pattern): void {
@@ -500,8 +568,15 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
       }
     }
 
+    // Expression token — `face-<expr>` rides the accessory CSV but is
+    // not a mesh accessory; it reshapes the face features instead.
+    // Absent token = neutral, so removing it resets the face.
+    const faceToken = accessoryItemIds.find((aid) => aid.startsWith('face-'));
+    setExpression((faceToken ? faceToken.slice(5) : 'neutral') as AvatarExpression);
+
     clearAccessories();
     for (const accessoryId of accessoryItemIds) {
+      if (accessoryId.startsWith('face-')) continue;  // handled above
       const def = getAccessoryItem(accessoryId);
       if (!def) continue;
       const socket = sockets[def.socket as AccessorySocket];
@@ -954,7 +1029,7 @@ export function createCharacterAvatar(scene: Scene, opts: CharacterAvatarOptions
   }
 
   return {
-    root, mesh: torso, applyOutfit, setPosition, setRotationY,
+    root, mesh: torso, applyOutfit, setExpression, setPosition, setRotationY,
     triggerJump, triggerCompliment, triggerWave, triggerChat,
     update, dispose,
   };

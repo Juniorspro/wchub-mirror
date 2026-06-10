@@ -11,8 +11,9 @@
 // the fixed STALL_LAYOUT below.
 // ══════════════════════════════════════════════
 
-import { Color3, MeshBuilder, TransformNode, type Mesh, type Scene } from '@babylonjs/core';
+import { Color3, DynamicTexture, MeshBuilder, StandardMaterial, TransformNode, type Mesh, type Scene, type Texture } from '@babylonjs/core';
 import { createStandardMaterial } from './helpers';
+import { applyMapTexture } from './world';
 
 // A stall sells either a TextureSlot ('bodypaint' | 'shirt' | 'pants' | 'shoes')
 // OR an AccessorySocket-grouped category ('hat' | 'glasses' | 'scarf' | 'bag')
@@ -95,6 +96,7 @@ export function createSceneEntities(scene: Scene): SceneEntities {
   // LLM-EXTENSION:ENTITIES — Multiplayer fairground stalls: six clothing booths arranged in a ring around the central plaza (Shirts, Pants, Shoes, Hats, Glasses+Bags, Scarves). Each booth = counter box + striped awning + small flag. STALL_LAYOUT is the static catalog; findNearestStall does a flat-distance test for HUD proximity. Stalls don't sync over the network — client builds them deterministically from the constant layout so all players see the same fair.
   // DO NOT REMOVE the LLM-EXTENSION:ENTITIES tag — scripts/check-architecture.mjs requires it to appear exactly once across the src tree.
   const meshes: Mesh[] = [];
+  const mapTextures: Texture[] = [];
 
   // Sentinel mesh kept so SceneEntities.marker still resolves to a Mesh (the
   // pre-multiplayer contract). We use it as a hidden ground anchor that
@@ -105,7 +107,7 @@ export function createSceneEntities(scene: Scene): SceneEntities {
   marker.isPickable = false;
 
   for (const stall of STALL_LAYOUT) {
-    buildStall(scene, stall, meshes);
+    buildStall(scene, stall, meshes, mapTextures);
   }
 
   function findNearestStall(x: number, z: number): StallDef | null {
@@ -132,12 +134,13 @@ export function createSceneEntities(scene: Scene): SceneEntities {
     },
     dispose() {
       for (const m of meshes) m.dispose();
+      for (const t of mapTextures) t.dispose();
       marker.dispose();
     },
   };
 }
 
-function buildStall(scene: Scene, stall: StallDef, meshes: Mesh[]): void {
+function buildStall(scene: Scene, stall: StallDef, meshes: Mesh[], mapTextures: Texture[]): void {
   // Materials shared per-stall (one set per booth so colors don't bleed
   // between stalls).
   const counterMat = createStandardMaterial(scene, `${stall.id}-counter-mat`, Color3.FromHexString('#d8b88a'));
@@ -145,6 +148,14 @@ function buildStall(scene: Scene, stall: StallDef, meshes: Mesh[]): void {
   const postMat = createStandardMaterial(scene, `${stall.id}-post-mat`, Color3.FromHexString('#7a5430'));
   const awningMat = createStandardMaterial(scene, `${stall.id}-awning-mat`, Color3.FromHexString(stall.color));
   const awningTrimMat = createStandardMaterial(scene, `${stall.id}-awning-trim-mat`, Color3.FromHexString('#f3ecd9'));
+  // AI tileable-texture skin (guarded no-ops when the asset isn't
+  // registered). keepTint everywhere: the near-white awning cloth picks up
+  // each stall's color via diffuseColor multiply, and the wood surfaces
+  // keep their designed light/dark tone variation under the plank grain.
+  applyMapTexture(scene, awningMat, 'tex_awning_cloth', mapTextures, { repeat: 2, keepTint: true });
+  applyMapTexture(scene, counterMat, 'tex_wood_planks', mapTextures, { repeat: 2, keepTint: true });
+  applyMapTexture(scene, counterTopMat, 'tex_wood_planks', mapTextures, { repeat: 2, keepTint: true });
+  applyMapTexture(scene, postMat, 'tex_wood_planks', mapTextures, { repeat: 1, keepTint: true });
   const backWallMat = createStandardMaterial(scene, `${stall.id}-back-wall-mat`, Color3.FromHexString('#e7d6b3'));
   const lanternMat = createStandardMaterial(scene, `${stall.id}-lantern-mat`, Color3.FromHexString('#f6d76a'));
   lanternMat.emissiveColor = Color3.FromHexString('#5b3a00');
@@ -214,6 +225,53 @@ function buildStall(scene: Scene, stall: StallDef, meshes: Mesh[]): void {
   banner.material = bannerMat;
   meshes.push(banner);
 
+  // ─── Painted shop sign — name + category on the banner ───────────────────
+  // First of two purpose cues (the other is the 3D merchandise icon on
+  // the roof): a DynamicTexture plane over the banner with the stall's
+  // name and WHAT IT SELLS in plain words, so a player reads the
+  // purpose from the approach without opening the browse panel.
+  const CATEGORY_WORD: Record<StallCategory, string> = {
+    bodypaint: 'BODY PAINT',
+    shirt: 'SHIRTS & JERSEYS',
+    pants: 'PANTS & SHORTS',
+    shoes: 'SHOES',
+    hat: 'HATS',
+    glasses: 'GLASSES & BAGS',
+    scarf: 'SCARVES',
+    bag: 'BAGS',
+    customize: 'DESIGN YOUR OWN',
+  };
+  const labelTex = new DynamicTexture(`${stall.id}-label-tex`, { width: 512, height: 256 }, scene, true);
+  const lctx = labelTex.getContext() as unknown as CanvasRenderingContext2D;
+  lctx.fillStyle = stall.color;
+  lctx.fillRect(0, 0, 512, 256);
+  // Darker strip behind the category line for contrast
+  lctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+  lctx.fillRect(0, 152, 512, 104);
+  lctx.fillStyle = '#ffffff';
+  lctx.textAlign = 'center';
+  lctx.textBaseline = 'middle';
+  lctx.font = 'bold 58px Inter, system-ui, sans-serif';
+  lctx.fillText(stall.label, 256, 84, 470);
+  lctx.font = 'bold 44px Inter, system-ui, sans-serif';
+  lctx.fillText(CATEGORY_WORD[stall.category], 256, 204, 470);
+  labelTex.update();
+  const labelMat = new StandardMaterial(`${stall.id}-label-mat`, scene);
+  labelMat.diffuseTexture = labelTex;
+  labelMat.emissiveTexture = labelTex;
+  labelMat.emissiveColor = new Color3(0.6, 0.6, 0.6);
+  labelMat.specularColor = new Color3(0, 0, 0);
+  const labelPlane = MeshBuilder.CreatePlane(`${stall.id}-label`, {
+    width: 2.2, height: 1.1,
+  }, scene);
+  labelPlane.parent = root;
+  // Plane's front face looks down local -Z; the stall front (counter
+  // side) is local +Z, so flip it to face approaching players.
+  labelPlane.rotation.y = Math.PI;
+  labelPlane.position.set(0, 1.5, -0.46);
+  labelPlane.material = labelMat;
+  meshes.push(labelPlane);
+
   // ─── Peaked awning — two slanted roof panels meeting at a ridge ───────────
   const roofPitch = 0.5;
   const roofWidth = 3.0;
@@ -274,6 +332,9 @@ function buildStall(scene: Scene, stall: StallDef, meshes: Mesh[]): void {
     meshes.push(side);
   }
 
+  // ─── Merchandise icon — the second purpose cue ────────────────────────────
+  buildMerchandiseIcon(scene, stall, root, meshes);
+
   // Push the TransformNode last as a Mesh-like reference for cleanup —
   // it isn't a Mesh, but disposing it via dispose() recursively cleans
   // the children too, which is a no-op since we already dispose them.
@@ -281,6 +342,123 @@ function buildStall(scene: Scene, stall: StallDef, meshes: Mesh[]): void {
   // honest; the node leaks at scene tear-down only if the SceneEntities
   // wrapper is itself disposed — acceptable since the scene is recreated
   // on a full reload.
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Oversized 3D icon of the merchandise, mounted on a short pole above the
+// roof ridge — the medieval-shop-sign trick. A giant shirt / boot / hat
+// silhouette reads from across the park, before any text is legible.
+// Built from a handful of primitives per category, parented to an icon
+// root so the whole sign inherits the stall's facing.
+function buildMerchandiseIcon(scene: Scene, stall: StallDef, root: TransformNode, meshes: Mesh[]): void {
+  const primary = createStandardMaterial(scene, `${stall.id}-icon-primary`, Color3.FromHexString(stall.color));
+  const accent = createStandardMaterial(scene, `${stall.id}-icon-accent`, Color3.FromHexString('#f3ecd9'));
+  const dark = createStandardMaterial(scene, `${stall.id}-icon-dark`, Color3.FromHexString('#2c2c30'));
+
+  // Mounting pole from the roof ridge up to the icon.
+  const pole = MeshBuilder.CreateCylinder(`${stall.id}-icon-pole`, {
+    height: 0.75, diameter: 0.07, tessellation: 8,
+  }, scene);
+  pole.parent = root;
+  pole.position.set(0, 3.55, 0);
+  pole.material = dark;
+  meshes.push(pole);
+
+  const iconRoot = new TransformNode(`${stall.id}-icon-root`, scene);
+  iconRoot.parent = root;
+  iconRoot.position.set(0, 4.25, 0);
+
+  const add = (mesh: Mesh, lx: number, ly: number, lz: number, mat = primary): void => {
+    mesh.parent = iconRoot;
+    mesh.position.set(lx, ly, lz);
+    mesh.material = mat;
+    mesh.isPickable = false;
+    meshes.push(mesh);
+  };
+
+  switch (stall.category) {
+    case 'shirt': {
+      // T-shirt: torso + two angled sleeves + white collar notch.
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-body`, { width: 0.85, height: 0.95, depth: 0.2 }, scene), 0, -0.05, 0);
+      for (const sign of [-1, 1] as const) {
+        const sleeve = MeshBuilder.CreateBox(`${stall.id}-icon-sleeve-${sign}`, { width: 0.42, height: 0.5, depth: 0.2 }, scene);
+        sleeve.rotation.z = sign * 0.55;
+        add(sleeve, sign * 0.58, 0.22, 0);
+      }
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-collar`, { width: 0.38, height: 0.1, depth: 0.22 }, scene), 0, 0.43, 0, accent);
+      break;
+    }
+    case 'pants': {
+      // Trousers: waistband + two legs.
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-waist`, { width: 0.78, height: 0.26, depth: 0.2 }, scene), 0, 0.42, 0);
+      for (const sign of [-1, 1] as const) {
+        add(MeshBuilder.CreateBox(`${stall.id}-icon-leg-${sign}`, { width: 0.32, height: 0.85, depth: 0.2 }, scene), sign * 0.22, -0.14, 0);
+      }
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-belt`, { width: 0.8, height: 0.07, depth: 0.21 }, scene), 0, 0.55, 0, dark);
+      break;
+    }
+    case 'shoes': {
+      // Side-profile sneaker: sole + heel block + toe block + lace patch.
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-sole`, { width: 1.0, height: 0.16, depth: 0.36 }, scene), 0, -0.32, 0, accent);
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-heel`, { width: 0.5, height: 0.45, depth: 0.34 }, scene), -0.22, -0.02, 0);
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-toe`, { width: 0.45, height: 0.24, depth: 0.34 }, scene), 0.26, -0.12, 0);
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-lace`, { width: 0.22, height: 0.18, depth: 0.36 }, scene), 0.06, 0.05, 0, accent);
+      break;
+    }
+    case 'hat': {
+      // Sun hat: wide brim + crown + dark band.
+      add(MeshBuilder.CreateCylinder(`${stall.id}-icon-brim`, { diameter: 1.1, height: 0.08, tessellation: 24 }, scene), 0, -0.18, 0);
+      add(MeshBuilder.CreateCylinder(`${stall.id}-icon-crown`, { diameter: 0.6, height: 0.5, tessellation: 24 }, scene), 0, 0.1, 0);
+      add(MeshBuilder.CreateCylinder(`${stall.id}-icon-band`, { diameter: 0.64, height: 0.12, tessellation: 24 }, scene), 0, -0.08, 0, dark);
+      break;
+    }
+    case 'glasses':
+    case 'bag': {
+      // Spectacles: two lens rings + bridge.
+      for (const sign of [-1, 1] as const) {
+        const lens = MeshBuilder.CreateTorus(`${stall.id}-icon-lens-${sign}`, { diameter: 0.5, thickness: 0.08, tessellation: 20 }, scene);
+        lens.rotation.x = Math.PI / 2;  // face the approach
+        add(lens, sign * 0.33, 0, 0, dark);
+      }
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-bridge`, { width: 0.18, height: 0.07, depth: 0.07 }, scene), 0, 0.06, 0, dark);
+      break;
+    }
+    case 'scarf': {
+      // Hanging scarf: knot at top, two draped tails, fringe stubs.
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-knot`, { width: 0.55, height: 0.28, depth: 0.2 }, scene), 0, 0.4, 0);
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-tail-l`, { width: 0.34, height: 0.85, depth: 0.18 }, scene), -0.16, -0.12, 0);
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-tail-r`, { width: 0.34, height: 0.62, depth: 0.18 }, scene), 0.2, -0.02, 0);
+      for (const [fx, fy] of [[-0.26, -0.6], [-0.06, -0.6], [0.12, -0.38], [0.3, -0.38]] as Array<[number, number]>) {
+        add(MeshBuilder.CreateBox(`${stall.id}-icon-fringe-${fx}`, { width: 0.07, height: 0.16, depth: 0.16 }, scene), fx, fy, 0, accent);
+      }
+      break;
+    }
+    case 'customize': {
+      // Painter's palette facing the approach + three paint dabs + brush.
+      const palette = MeshBuilder.CreateCylinder(`${stall.id}-icon-palette`, { diameter: 1.0, height: 0.08, tessellation: 24 }, scene);
+      palette.rotation.x = Math.PI / 2;
+      add(palette, 0, 0, 0, accent);
+      const dabColors = ['#c14444', '#3a6ea5', '#9bd96b'];
+      for (let i = 0; i < dabColors.length; i++) {
+        const dabMat = createStandardMaterial(scene, `${stall.id}-icon-dab-${i}`, Color3.FromHexString(dabColors[i]));
+        const dab = MeshBuilder.CreateCylinder(`${stall.id}-icon-dab-${i}`, { diameter: 0.18, height: 0.05, tessellation: 12 }, scene);
+        dab.rotation.x = Math.PI / 2;
+        const a = -0.6 + i * 0.75;
+        add(dab, Math.cos(a) * 0.3, Math.sin(a) * 0.3 + 0.05, -0.06, dabMat);
+      }
+      const brush = MeshBuilder.CreateCylinder(`${stall.id}-icon-brush`, { diameter: 0.06, height: 0.7, tessellation: 8 }, scene);
+      brush.rotation.z = 0.65;
+      add(brush, 0.3, -0.18, -0.1, dark);
+      break;
+    }
+    case 'bodypaint':
+    default: {
+      // Generic swatch stack.
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-swatch-1`, { width: 0.7, height: 0.35, depth: 0.18 }, scene), 0, 0.2, 0);
+      add(MeshBuilder.CreateBox(`${stall.id}-icon-swatch-2`, { width: 0.7, height: 0.35, depth: 0.18 }, scene), 0, -0.2, 0, accent);
+      break;
+    }
+  }
 }
 
 // Re-export helpers some callers may use directly.

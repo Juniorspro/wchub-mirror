@@ -8,6 +8,8 @@ export type AssetMeta = {
 };
 
 export const ASSETS: Record<string, string> = {
+  "field_soccer_ball": new URL("./assets/models/prop_field-soccer-ball_be41c5.glb", import.meta.url).href,
+  "field_soccer_goal": new URL("./assets/models/prop_field-soccer-goal_3a2403.glb", import.meta.url).href,
   "grass-tuft": new URL("./assets/sprite/sprite_grass-tuft_665842.png", import.meta.url).href,
   "ground-grass": new URL("./assets/sprite/sprite_ground-grass_1813ec.png", import.meta.url).href,
   "ground-path": new URL("./assets/sprite/sprite_ground-path_d62b30.png", import.meta.url).href,
@@ -27,6 +29,10 @@ export const ASSETS: Record<string, string> = {
   "shoes-leather": new URL("./assets/sprite/sprite_shoes-leather_232d06.png", import.meta.url).href,
   "stadium-crowd": new URL("./assets/sprite/sprite_stadium-crowd_1c49a4.png", import.meta.url).href,
   "stadium-turf": new URL("./assets/sprite/sprite_stadium-turf_f0a345.png", import.meta.url).href,
+  "tex_awning_cloth": new URL("./assets/sprite/sprite_tex-awning-cloth_4334ea.webp", import.meta.url).href,
+  "tex_cut_stone": new URL("./assets/sprite/sprite_tex-cut-stone_525147.webp", import.meta.url).href,
+  "tex_flagstone": new URL("./assets/sprite/sprite_tex-flagstone_14c15b.webp", import.meta.url).href,
+  "tex_wood_planks": new URL("./assets/sprite/sprite_tex-wood-planks_656cc1.webp", import.meta.url).href,
 };
 
 export const ASSET_META: Record<string, AssetMeta> = {};

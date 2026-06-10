@@ -39,22 +39,26 @@ export const PLAYER_RADIUS = 0.4;
  *  the north fence. */
 export const STADIUM_KEEPOUT = {
   cx: 110,
-  cy: 150,
-  // Outer wall — matches the visual stadium cylinder (diameter 140
-  // × oval ratio 1.4 = ax 98, bz 70).
-  ax: 98,
-  bz: 70,
+  // Stadium shrunk + pulled south 2026-06-10: diameter 140 → 105
+  // (25% reduction). Center z then pulled 130 → 120 so the full oval
+  // fits INSIDE the 175-deep fence (at cy=130 the north wall reached
+  // z=182.5 and the fence rail sliced through the stadium band).
+  cy: 120,
+  // Outer wall — matches the visual stadium cylinder (diameter 105
+  // × oval ratio 1.4 = ax 73.5, bz 52.5).
+  ax: 73.5,
+  bz: 52.5,
   // Inner field boundary — wall + stands take ~10 units on each
   // axis, so the walkable interior is the inner ellipse.
-  innerAx: 88,
-  innerBz: 60,
-  /** Entrance sector half-angle (radians). Sized to exactly frame the
-   *  gate's pylons (outer pylon edges at cx ± 5.9, so the chord at the
-   *  outer wall ax=98 needs angle ≈ asin(5.9/98) ≈ 0.060 rad). Visible
-   *  GATE_HALF_ANGLE in world.ts is set slightly larger (0.063) so the
-   *  visible gap is wider than the collision gap — players never bump
-   *  an invisible wall before the visible one runs out. */
-  entranceHalfAngle: 0.060,
+  innerAx: 63.5,
+  innerBz: 42.5,
+  /** Entrance sector half-angle (radians). Sized so the angular gap
+   *  matches the gate's pylon-to-pylon chord (pylons span cx ± 5.9 at
+   *  outer wall ax=73.5 → angle ≈ asin(5.9/73.5) ≈ 0.080 rad). Visible
+   *  GATE_HALF_ANGLE in world.ts is set slightly larger so the visible
+   *  gap is wider than the collision gap — players never bump an
+   *  invisible wall before the visible one runs out. */
+  entranceHalfAngle: 0.080,
 };
 
 /** Solid scenery hitboxes. Coordinates match the client's world.ts /
@@ -77,9 +81,25 @@ export const OBSTACLES: CircleObstacle[] = [
   // ─── Plaza centerpiece — championship football monument ─────────────────
   { cx: 110, cy: 24, radius: 1.6 },  // (was 24)
 
-  // ─── Stadium entrance gate pylons (at south wall of enlarged stadium, z=80) ──
-  { cx: 105, cy: 80, radius: 0.9 },
-  { cx: 115, cy: 80, radius: 0.9 },
+  // ─── Stadium entrance gate pylons (south wall,
+  //     z = STADIUM_KEEPOUT.cy - STADIUM_KEEPOUT.bz = 120 - 52.5 = 67.5).
+  { cx: 105, cy: 67.5, radius: 0.9 },
+  { cx: 115, cy: 67.5, radius: 0.9 },
+
+  // ─── Top-up monument stepped base (west meadow at 98, 50 — moved off
+  //     the gate approach; display face aimed at spawn) ───────────────────
+  { cx:  98, cy: 50, radius: 2.2 },
+
+  // ─── Top-voters podium central plinth (statues stand on it; players
+  //     can walk on the outer tiers but not through the centre) ──────────
+  { cx:  50, cy: 50, radius: 2.0 },
+
+  // ─── Picnic-area tables (4 around the parasol at 162, 56 — moved
+  //     south-east, clear of the amphitheater stage disc) ────────────────
+  { cx: 158.8, cy: 56,   radius: 1.2 },
+  { cx: 165.2, cy: 56,   radius: 1.2 },
+  { cx: 162,   cy: 52.8, radius: 1.2 },
+  { cx: 162,   cy: 59.2, radius: 1.2 },
 
   // ─── Concession-stand cluster, 4 carts around (146, 12) ─────────────────
   { cx: 146,   cy: 16.5, radius: 1.1 },  // N cart

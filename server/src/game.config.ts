@@ -30,7 +30,7 @@ export const gameConfig = {
    *  midline), so the east and west fences are equidistant from it.
    *  Old layout had x=400 east boundary with stadium at x=24 — wildly
    *  asymmetric, with empty grass east of the content. */
-  world: { width: 220, height: 220 },
+  world: { width: 200, height: 175 },
 
   /** Where new players spawn — a few units south of the plaza
    *  centerpiece monument (which is at (110, 24) with a 1.6-unit

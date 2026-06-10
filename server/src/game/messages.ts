@@ -17,6 +17,7 @@ import { gameConfig } from "../game.config";
 import { TICK_HZ, MAP_W, MAP_H, PLAYER_SPEED } from "../shared/constants";
 import { movePlayer, normalizeInput, clamp } from "../shared/math";
 import { registerBettingEvent } from "./event";
+import { registerSoccerBall } from "./soccer";
 
 const DT = 1 / TICK_HZ;
 
@@ -36,14 +37,22 @@ const LEGAL_TEXTURE_ITEM_IDS = new Set<string>([
 // `look:<slot>:<base64url payload>`. The server doesn't decode them — the
 // client encodes + decodes — but it gatekeeps the syntax and a hard length
 // cap so a malformed payload can't blow up the schema or hog memory.
-const LOOK_ID_RE = /^look:(shirt|pants|shoes):[A-Za-z0-9_\-]{8,900}$/;
-const MAX_LOOK_LEN = 920;
+// Cap raised 900 → 2560 (2026-06-10) for the Design Bench pixel-art
+// layer: a 24×24 grid is 576 hex nibbles inside the design JSON, which
+// pushes the b64url payload past the old 900-char limit. Worst-case id
+// is ~1.6 KB — broadcast only on equip, so bandwidth cost is negligible.
+const LOOK_ID_RE = /^look:(shirt|pants|shoes):[A-Za-z0-9_\-]{8,2560}$/;
+const MAX_LOOK_LEN = 2600;
 
 const LEGAL_ACCESSORY_ITEM_IDS = new Set<string>([
   "hat-cap", "hat-top-hat", "hat-beanie", "hat-wizard",
   "glasses-round", "glasses-shades",
   "scarf-red", "scarf-mustard",
   "backpack-standard",
+  // Facial-expression tokens — not mesh accessories; the client's
+  // applyOutfit reshapes the face when one is present. 'neutral' is
+  // the absent-token default and never rides the wire.
+  "face-happy", "face-surprised", "face-wink", "face-cool",
 ]);
 
 const MAX_CHAT_LEN = 200;
@@ -74,6 +83,9 @@ export function registerMessages(room: Room<GameState>, state: GameState): void 
   const lastComplimentReceivedAt = new Map<string, number>();
   const lastWaveAt = new Map<string, number>();
 
+  // Soccer ball — see ./soccer.ts. Sets up the tick + 'ball:request' handler.
+  const soccerBall = registerSoccerBall(room, state);
+
   room.onMessage<InputMsg>("input", (client, msg) => {
     const p = state.players.get(client.sessionId);
     if (!p) return;
@@ -88,6 +100,17 @@ export function registerMessages(room: Room<GameState>, state: GameState): void 
     if (next.y !== p.y) p.y = next.y;
     const aim = toNum(msg?.aim);
     if (Number.isFinite(aim) && aim !== p.aim) p.aim = aim;
+    // Soccer ball — if the player walked onto the ball this tick, apply
+    // a kick impulse based on their input direction. No-op when player
+    // isn't on the pitch / isn't moving / isn't near the ball.
+    soccerBall.maybeKickBall(
+      client.sessionId,
+      p.username,
+      next.x,
+      next.y,
+      vx,
+      vy,
+    );
     // Targeted ack — only the sender's reconciliation cares about its
     // own input-seq. Replaces the old `p.ack` schema field that fan'd
     // out to every peer on every tick (~7× wasted bytes per tick in a
