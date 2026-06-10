@@ -23,6 +23,29 @@ html, body, #root {
   background: var(--bg-color, #cfd8e6);
 }
 
+/* ── Landscape-in-portrait ──
+   PHONE-ONLY game, played HORIZONTALLY. The host App webview is
+   portrait-locked, so on ANY portrait viewport we rotate the entire game
+   shell 90° clockwise: the player holds the phone sideways and gets
+   horizontal gameplay. Layout (clientWidth/Height, ResizeObserver,
+   Babylon's engine.resize) sees the UNtransformed landscape box, so the 3D
+   framebuffer + HUD lay out in landscape for free.
+   The `game-rotated` class on <html> is owned by the rotation store in
+   src/babylon/touch.tsx (portrait viewport, with soft-keyboard hysteresis
+   and a ?rotate=1/0 QA override) — keep CSS keyed to the class, NOT to a
+   raw media query, so CSS and the JS pointer remapping can never disagree. */
+html.game-rotated .game-shell {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vh;
+  width: 100dvh;
+  height: 100vw;
+  height: 100dvw;
+  transform-origin: top left;
+  transform: rotate(90deg) translateY(-100%);
+}
+
 .game-canvas {
   display: block;
   width: 100%;
@@ -33,6 +56,10 @@ html, body, #root {
 
 /* ── Preset animations ── */
 
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
 @keyframes shake {
   0%, 100% { transform: translate(0, 0); }
   10% { transform: translate(-4px, 2px); }

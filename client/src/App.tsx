@@ -11,6 +11,7 @@ import { useGameConfig, useInput, useScreen, type Input, type Phase, type Screen
 import { SCHEMA, type Config } from './game/schema';
 import { startGame, type GameRuntimeHandle } from './babylon/game';
 import { Hud } from './babylon/hud';
+import { CameraDragZone, VirtualJoystick } from './babylon/touch';
 import { NetClient } from './net';
 
 export interface GameRuntimeContext {
@@ -91,29 +92,18 @@ export default function App() {
   return (
     <div ref={containerRef} className="game-shell">
       <canvas ref={canvasRef} className="game-canvas" aria-label="Dressup Lounge viewport" />
-      {/* Mobile virtual-joystick zone — input.handlers (touch/pointer) used
-          to cover the entire container, which swallowed mouse-drag on the
-          canvas and prevented ArcRotateCamera from orbiting. Confining the
-          handlers to a bottom-left square lets the rest of the canvas
-          receive pointer-drag events for free camera look-around, while
-          mobile players still get a touch joystick in the corner.
-          On desktop the keyboard listener (auto-attached by useInput at
-          document level) is unaffected — WASD continues to work. */}
-      <div
-        {...input.handlers}
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          left: 0,
-          bottom: 0,
-          width: 'min(240px, 38vw)',
-          height: 'min(240px, 38vw)',
-          touchAction: 'none',
-          pointerEvents: 'auto',
-          // Invisible — purely an input target.
-          background: 'transparent',
-        }}
-      />
+      {/* Touch layers (DOM order = stacking order, no z-index anywhere):
+          CameraDragZone first so ANY surface no later element claims orbits
+          the camera (rotated-portrait mode only — Babylon's own pointer
+          input misreads axes under the CSS rotation, see touch.tsx), then
+          the visible joystick, then the HUD so its buttons stay tappable.
+          The old invisible {...input.handlers} corner zone is gone: those
+          handlers never produced movement (nothing called setMobileMove) —
+          the joystick drives input.setMobileMove directly, which is the
+          same path WASD takes. Desktop keyboard (useInput's document-level
+          listener) is unaffected. */}
+      <CameraDragZone />
+      <VirtualJoystick input={input} />
       <Hud phaseRef={phaseRef} net={netState ?? undefined} />
     </div>
   );

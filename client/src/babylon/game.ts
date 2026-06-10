@@ -41,6 +41,7 @@ import {
   setBettingStandings,
   setChatMessages,
   setGameSnapshot,
+  setLastSoccerGoal,
   setNearbyStall,
   setOutfit,
   setRoomCode,
@@ -61,6 +62,7 @@ import {
   type GameWorldObjects,
 } from './world';
 import { advanceSelfPrediction, getInterpolatedPlayers, type NetClient } from '../net';
+import { cameraDragBus, isPortraitRotated, subscribeRotated } from './touch';
 import { normalizeInput } from '@shared';
 
 export interface GameRuntimeHandle {
@@ -121,6 +123,21 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
   // Top-voters list — reference compare.
   let lastTopVotersRef: unknown = null;
 
+  // ─── Soccer-ball render state ─────────────────────────────────────────────
+  // Server broadcasts authoritative ball position at ~20Hz when moving.
+  // We track the smoothed render position separately so the visual
+  // follows the server target with a short lerp (60Hz render frames →
+  // 20Hz updates → ~3 frames between updates, so a moderate lerp factor
+  // keeps motion fluid without visible lag).
+  let ballRenderX = 158;
+  let ballRenderZ = 32;
+  // Accumulated spin angle (radians). Increments by velocity * dt each
+  // frame so the ball texture rolls realistically.
+  let ballSpinAngle = 0;
+  // Last spin axis (perpendicular to ball velocity in the XZ plane).
+  let ballSpinAxisX = 1;
+  let ballSpinAxisZ = 0;
+
   // ─── Portal-gate state ────────────────────────────────────────────────────
   // G key triggers redirect to the nearby portal's URL. Edge-detect so
   // holding G doesn't fire repeatedly, plus a guard so we never redirect
@@ -180,10 +197,51 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
   const scene = new Scene(engine);
   const objects = createRuntimeObjects(scene, canvas);
 
+  // ─── Landscape-in-portrait camera control ─────────────────────────────────
+  // On portrait touch devices the rotation store (touch.tsx) rotates
+  // .game-shell 90° clockwise. Babylon's ArcRotateCameraPointersInput reads
+  // raw SCREEN deltas, so under that rotation its orbit axes are swapped
+  // (verified: a physically-horizontal swipe changed beta, not alpha). In
+  // rotated mode we detach Babylon's pointer control entirely and drive the
+  // camera from the cameraDragBus filled by <CameraDragZone> (touch.tsx),
+  // whose deltas are already remapped into game-local axes. On real
+  // landscape (desktop or auto-rotated devices) Babylon's native control —
+  // including mouse-wheel zoom — stays attached.
+  // attachControl is NOT idempotent (it re-registers pointer observers), so
+  // track the state and only flip on real transitions.
+  let cameraPointerControlAttached = true; // helpers.ts attaches at creation
+  const applyCameraControlMode = () => {
+    const wantDetached = isPortraitRotated();
+    if (wantDetached && cameraPointerControlAttached) {
+      objects.world.camera.detachControl();
+      cameraPointerControlAttached = false;
+    } else if (!wantDetached && !cameraPointerControlAttached) {
+      objects.world.camera.attachControl(canvas, true);
+      cameraPointerControlAttached = true;
+    }
+  };
+  applyCameraControlMode();
+  const unsubRotation = subscribeRotated(applyCameraControlMode);
+  // Inertial offsets are amplified ~×10 by Babylon's inertia decay
+  // (total = offset / (1 - inertia), inertia 0.9), so these divisors are
+  // ~10× the per-event feel. 8500 was calibrated against the native
+  // pointers input: ~0.0011 rad per pixel of drag, measured both ways.
+  const CAM_DRAG_SENSITIVITY = 8500;
+  const CAM_PINCH_PRECISION = 400;
+
   // ─── Multi-avatar registry ────────────────────────────────────────────────
   const avatars = new Map<string, CharacterAvatar>();
   const appliedOutfitFor = new Map<string, string>(); // sessionId → cached "textureCSV|accessoryCSV"
   let localAvatar: CharacterAvatar | null = null;
+  // Dev-only inspection hook for driving the scene from automated tests.
+  // Pushed (not assigned) because React StrictMode double-mounts the
+  // world — tests scan all registered maps for the live one.
+  if (import.meta.env.DEV) {
+    const w = window as unknown as { __avatarMaps?: unknown[]; __nets?: unknown[]; __inputs?: unknown[] };
+    (w.__avatarMaps ??= []).push(avatars);
+    (w.__nets ??= []).push(net);
+    (w.__inputs ??= []).push(runtimeContext?.input);
+  }
 
   function ensureAvatar(sid: string, isSelf: boolean): CharacterAvatar {
     let a = avatars.get(sid);
@@ -270,7 +328,10 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
       if (room && !room._chatHooked) {
         room._chatHooked = true;
         room.onMessage('chat', (msg) => {
-          chatHistory.push(msg);
+          // Stamp local arrival time — msg.t is the SERVER clock, which can
+          // be minutes off the phone's; the HUD's unread comparison must
+          // stay in one clock domain (see ChatEntry.localT).
+          chatHistory.push({ ...msg, localT: Date.now() });
           while (chatHistory.length > CHAT_HISTORY_CAP) chatHistory.shift();
           setChatMessages([...chatHistory]);
           // Trigger a floating speech bubble above the sender's avatar.
@@ -349,6 +410,22 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
     }
 
     if (input?.consumeTap()) audio.unlock();
+
+    // ── Rotated-mode camera orbit/zoom: drain the touch bus into Babylon's
+    //    inertial offsets so damping and the alpha/beta/radius limits (incl.
+    //    world.ts's per-frame ground guard + stadium keep-out) apply as-is.
+    if (cameraDragBus.dx !== 0 || cameraDragBus.dy !== 0 || cameraDragBus.pinch !== 0) {
+      const cam = objects.world.camera;
+      cam.inertialAlphaOffset -= cameraDragBus.dx / CAM_DRAG_SENSITIVITY;
+      cam.inertialBetaOffset -= cameraDragBus.dy / CAM_DRAG_SENSITIVITY;
+      // += here, not -=: Babylon applies radius -= inertialRadiusOffset, so
+      // a positive pinch delta (fingers spreading) must yield a POSITIVE
+      // offset to shrink the radius (zoom in) — the universal convention.
+      cam.inertialRadiusOffset += cameraDragBus.pinch / CAM_PINCH_PRECISION;
+      cameraDragBus.dx = 0;
+      cameraDragBus.dy = 0;
+      cameraDragBus.pinch = 0;
+    }
 
     // ── Jump: spacebar edge OR cooldown trigger. The server validates +
     //    rate-limits + broadcasts back to all clients; the broadcast
@@ -482,6 +559,48 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
         const r = net.pendingBetResults.shift();
         if (!r) continue;
         settleBet(r.matchId, r.payout, r.profit);
+      }
+
+      // ── Soccer ball — smoothed follow of the server's authoritative pos.
+      const ball = net.ballState;
+      // Lerp toward the target. Coefficient k≈0.25 → ~63% of distance
+      // closed per 60Hz frame; ball reaches target within 100ms which
+      // matches the 50ms server tick + 1-frame network jitter buffer.
+      const k = 0.25;
+      ballRenderX += (ball.x - ballRenderX) * k;
+      ballRenderZ += (ball.z - ballRenderZ) * k;
+      // Rolling: spin axis is perpendicular to velocity in XZ plane.
+      // Linear speed (m/s) divided by ball radius gives angular speed
+      // (rad/s); accumulate over dt.
+      const ballSpeed = Math.hypot(ball.vx, ball.vy);
+      if (ballSpeed > 0.05) {
+        ballSpinAxisX = ball.vx;
+        ballSpinAxisZ = ball.vy;
+        ballSpinAngle += (ballSpeed / 0.28) * dt;  // 0.28 = ball radius
+      }
+      objects.world.updateSoccerBall(
+        ballRenderX, ballRenderZ,
+        ballSpinAngle, ballSpinAxisX, ballSpinAxisZ,
+      );
+
+      // Drain goal events — show banner + award reward to scorer.
+      const ownSid = net.meta?.selfId ?? '';
+      while (net.pendingBallGoals.length > 0) {
+        const g = net.pendingBallGoals.shift();
+        if (!g) continue;
+        // Coin reward goes to the scorer (and only the scorer's
+        // client awards the local balance — server doesn't track coins).
+        if (g.scorerSid && g.scorerSid === ownSid && g.reward > 0) {
+          settleBet(`goal:${g.side}`, g.reward, g.reward);
+        }
+        setLastSoccerGoal({
+          scorerName: g.scorerName || 'Someone',
+          side: g.side,
+          scoreN: g.scoreN,
+          scoreS: g.scoreS,
+          mine: g.scorerSid === ownSid,
+          at: now,
+        });
       }
 
       // Compute nearest other player + count nearby for the crowd bonus
@@ -706,6 +825,7 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
       if (disposed) return;
       disposed = true;
       window.removeEventListener('resize', onResize);
+      unsubRotation();
       engine.stopRenderLoop();
       unsubOutfit();
       const netRef = (net as unknown as { _attachInterval?: ReturnType<typeof setInterval> });

@@ -27,6 +27,7 @@ import {
   priceFor,
   purchaseItem,
   saveLook,
+  setAvatarExpression,
   subscribeGameStore,
   toggleAccessoryItem,
   toggleTextureItem,
@@ -43,6 +44,7 @@ import {
 } from './items';
 import { drawDesignPanelsSync, patternSwatchCss, uniformDesign, type GarmentDesign, type Pattern } from './textures';
 import { STALL_LAYOUT, type StallCategory, type StallDef } from './entities';
+import { isPortraitRotated } from './touch';
 import type { NetClient } from '../net';
 
 interface HudProps {
@@ -85,26 +87,80 @@ export function Hud({ phaseRef: _phaseRef, net }: HudProps) {
     else toggleAccessoryItem(item.id);
   };
 
-  // LLM-EXTENSION:HUD — Fairground multiplayer overlay. Top-left badge shows the room code + nearby-stall hint. The stall-scoped browser only appears when the local avatar is within STALL_INTERACT_RADIUS of a stall — it filters the wardrobe to that stall's category (Skin / Shirts / Pants / Shoes / Hats / Glasses / Scarves / Bags) and toggles items on the local outfit, which game.ts forwards to net.send('equip'). Bottom-left chat panel renders ChatEntry feed from store + a text input that calls net.send('chat'). All multiplayer interaction is funneled through this component.
+  // ── Exclusive drawer state — at most ONE heavy panel open at a time, so
+  //    panels can never overlap each other or the touch controls.
+  const [openDrawer, setOpenDrawer] = useState<DrawerKey | null>(null);
+  const toggleDrawer = (key: DrawerKey) => setOpenDrawer((v) => (v === key ? null : key));
+
+  // Unread-chat badge: count messages from OTHERS newer than the last one
+  // seen with the chat drawer open. Timestamp-based (not length-based) so
+  // the capped/trimmed history can't desync the counter. Compares localT
+  // (client arrival clock) — NOT the server-stamped m.t, which lives in a
+  // different clock domain and goes permanently quiet when the phone's
+  // clock runs ahead of the server's.
+  const seenAt = (m: { t: number; localT?: number }) => m.localT ?? m.t;
+  const [chatSeenT, setChatSeenT] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (openDrawer !== 'chat' || snap.chat.length === 0) return;
+    const lastT = seenAt(snap.chat[snap.chat.length - 1]);
+    setChatSeenT((prev) => (lastT > prev ? lastT : prev));
+  }, [openDrawer, snap.chat]);
+  const unreadChat = openDrawer === 'chat'
+    ? 0
+    : snap.chat.filter((m) => seenAt(m) > chatSeenT && m.from !== snap.selfId).length;
+
+  // Walking away from a stall closes its browser (can't shop from afar).
+  useEffect(() => {
+    if (!snap.nearbyStallId && openDrawer === 'stall') setOpenDrawer(null);
+  }, [snap.nearbyStallId, openDrawer]);
+
+  // Keyboard-verb hint cards only make sense with a fine pointer and a
+  // viewport tall enough to keep them out of the action.
+  const desktopHints = useDesktopHints();
+
+  // LLM-EXTENSION:HUD — Fairground multiplayer overlay, landscape-phone-first. A compact top-left chip shows coins + room. Every heavy panel (chat / betting / standings / expressions / stall browser) hides behind a top-right toggle rail and opens as an EXCLUSIVE right-side drawer — opening one closes the rest, so panels can never overlap each other, the left-thumb joystick, or the bottom-right touch action buttons (jump / wave / compliment / browse / portal — these send the same net messages the keyboard verbs in game.ts use). The stall browser no longer auto-opens on proximity; proximity surfaces a Browse action button instead. All multiplayer interaction is funneled through this component.
   // DO NOT REMOVE the LLM-EXTENSION:HUD tag — scripts/check-architecture.mjs requires it to appear exactly once across the src tree.
   return (
     <>
       <div style={topBadgeStyle}>
-        <strong>Fairground</strong>
         <span style={coinBadgeStyle} title="Coins — earn the daily bonus by checking in every 24h">
           🪙 {snap.balance}
         </span>
-        <span style={{ opacity: 0.75, fontSize: '0.72rem' }}>
-          {snap.roomCode ? `Room: ${snap.roomCode}` : snap.message}
+        <span style={{ opacity: 0.75, fontSize: '0.7rem' }}>
+          {snap.roomCode ? `Room ${snap.roomCode}` : snap.message}
         </span>
-        {stall ? (
-          <span style={stallHintStyle}>📦 {stall.label} — browse →</span>
-        ) : (
-          <span style={hintStyle}>Walk to a stall to browse</span>
-        )}
       </div>
 
-      {stall ? (
+      <ToggleRail
+        open={openDrawer}
+        onToggle={toggleDrawer}
+        unreadChat={unreadChat}
+        fixtures={snap.bettingFixtures}
+        myBets={snap.myBets}
+        hasStandings={snap.bettingStandings.length > 0}
+      />
+
+      {openDrawer === 'chat' ? (
+        <div style={{ ...drawerStyle, width: 'min(320px, 44vw)', height: 'calc(100% - 92px)' }}>
+          <ChatPanel net={net} chat={snap.chat} selfId={snap.selfId} />
+        </div>
+      ) : null}
+      {openDrawer === 'betting' ? (
+        <div style={{ ...drawerStyle, width: 292 }}>
+          <BettingPanel net={net} fixtures={snap.bettingFixtures} myBets={snap.myBets} balance={snap.balance} />
+        </div>
+      ) : null}
+      {openDrawer === 'standings' ? (
+        <div style={{ ...drawerStyle, width: 'min(560px, 70vw)' }}>
+          <LeaderboardPanel standings={snap.bettingStandings} onClose={() => setOpenDrawer(null)} />
+        </div>
+      ) : null}
+      {openDrawer === 'emotes' ? (
+        <div style={drawerStyle}>
+          <ExpressionBar />
+        </div>
+      ) : null}
+      {openDrawer === 'stall' && stall ? (
         <StallPanel
           stall={stall}
           items={stallItems.items}
@@ -117,25 +173,254 @@ export function Hud({ phaseRef: _phaseRef, net }: HudProps) {
         />
       ) : null}
 
-      <SocialPanel
-        nearestName={snap.nearestOtherName}
-        crowdCount={snap.crowdCount}
-        crowdTimer={snap.crowdTimer}
-      />
-
-      {snap.nearbyPortalLabel ? (
-        <PortalPrompt label={snap.nearbyPortalLabel} />
-      ) : null}
+      {desktopHints && openDrawer === null ? (
+        <SocialPanel
+          nearestName={snap.nearestOtherName}
+          crowdCount={snap.crowdCount}
+          crowdTimer={snap.crowdTimer}
+        />
+      ) : (
+        <CrowdPill crowdCount={snap.crowdCount} crowdTimer={snap.crowdTimer} />
+      )}
       {snap.nearbySignpost ? <SignpostPanel /> : null}
 
-      <BettingPanel net={net} fixtures={snap.bettingFixtures} myBets={snap.myBets} balance={snap.balance} />
-      <LeaderboardWidget standings={snap.bettingStandings} />
+      <ActionCluster
+        net={net}
+        stallLabel={stall ? stall.label : ''}
+        browseOpen={openDrawer === 'stall'}
+        onBrowse={() => toggleDrawer('stall')}
+        nearestOtherId={snap.nearestOtherId}
+        nearestOtherName={snap.nearestOtherName}
+        portalLabel={snap.nearbyPortalLabel}
+        portalUrl={snap.nearbyPortalUrl}
+      />
+
       {snap.lastBetResult ? (
         <BetResultToast result={snap.lastBetResult} fixtures={snap.bettingFixtures} />
       ) : null}
-
-      <ChatPanel net={net} chat={snap.chat} selfId={snap.selfId} />
+      <SoccerScoreboard goal={snap.lastSoccerGoal} />
+      <SoccerGoalBanner goal={snap.lastSoccerGoal} />
     </>
+  );
+}
+
+// ─── Drawer chrome: toggle rail + touch action buttons ──────────────────────
+
+type DrawerKey = 'chat' | 'betting' | 'standings' | 'emotes' | 'stall';
+
+// True on mouse-driven, reasonably tall viewports — gates the keyboard-verb
+// hint cards that are useless (and in the way) on a landscape phone. The
+// rotated check matters because under rotation window.innerHeight is the
+// PORTRAIT height (tall) while the game lays out at phone height.
+function computeDesktopHints(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (isPortraitRotated()) return false;
+  return window.matchMedia('(pointer: fine)').matches && window.innerHeight >= 500;
+}
+function useDesktopHints(): boolean {
+  const [v, setV] = useState(computeDesktopHints);
+  useEffect(() => {
+    const onResize = () => setV(computeDesktopHints());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return v;
+}
+
+// Top-right column of 44px toggle buttons. Each badge keeps the collapsed
+// panel's one load-bearing live datum visible: unread count for chat, the
+// bet-window countdown / LIVE / ✓-bet-placed for betting.
+function ToggleRail({
+  open,
+  onToggle,
+  unreadChat,
+  fixtures,
+  myBets,
+  hasStandings,
+}: {
+  open: DrawerKey | null;
+  onToggle: (key: DrawerKey) => void;
+  unreadChat: number;
+  fixtures: ReadonlyArray<import('./store').BettingFixtureSnapshot>;
+  myBets: ReadonlyMap<string, { camp: 'HOME' | 'DRAW' | 'AWAY'; amount: number }>;
+  hasStandings: boolean;
+}) {
+  // 1s tick keeps the betting badge countdown live while the panel itself
+  // is unmounted (the collapsed state must not freeze the bet window).
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (fixtures.length === 0) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [fixtures.length]);
+
+  const primary = fixtures.find((f) => f.phase !== 'RESOLVED') ?? fixtures[0];
+  let betBadge = '';
+  if (primary) {
+    const dt = primary.kickoffMs - Date.now();
+    if (primary.phase === 'LIVE') {
+      betBadge = 'LIVE';
+    } else if (primary.phase === 'BET_WINDOW') {
+      const mins = Math.max(0, Math.floor(dt / 60000));
+      const secs = Math.max(0, Math.floor((dt % 60000) / 1000));
+      betBadge = myBets.get(primary.id) ? '✓' : `${mins}:${secs.toString().padStart(2, '0')}`;
+    } else if (primary.phase === 'AWAIT_BET') {
+      const hours = Math.floor(dt / 3600000);
+      betBadge = hours > 0 ? `${hours}h` : `${Math.max(0, Math.floor(dt / 60000))}m`;
+    }
+  }
+
+  return (
+    <div style={railStyle}>
+      <RailButton
+        emoji="💬" label="Chat" active={open === 'chat'}
+        badge={unreadChat > 0 ? (unreadChat > 9 ? '9+' : String(unreadChat)) : ''}
+        onClick={() => onToggle('chat')}
+      />
+      {fixtures.length > 0 ? (
+        <RailButton
+          emoji="🎲" label="Match bets" active={open === 'betting'}
+          badge={betBadge}
+          onClick={() => onToggle('betting')}
+        />
+      ) : null}
+      {hasStandings ? (
+        <RailButton
+          emoji="🏆" label="World Cup standings" active={open === 'standings'}
+          badge=""
+          onClick={() => onToggle('standings')}
+        />
+      ) : null}
+      <RailButton
+        emoji="😊" label="Expressions" active={open === 'emotes'}
+        badge=""
+        onClick={() => onToggle('emotes')}
+      />
+    </div>
+  );
+}
+
+function RailButton({
+  emoji,
+  label,
+  badge,
+  active,
+  onClick,
+}: {
+  emoji: string;
+  label: string;
+  badge: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button" className="btn-press"
+      onClick={onClick}
+      title={label} aria-label={label} aria-pressed={active}
+      style={active ? { ...railButtonStyle, ...railButtonActiveStyle } : railButtonStyle}
+    >
+      {emoji}
+      {badge ? <span style={railBadgeStyle}>{badge}</span> : null}
+    </button>
+  );
+}
+
+// Bottom-right touch verbs. Each sends the SAME net message its keyboard
+// twin in game.ts sends (Space/F/E/G stay live for desktop) — the server
+// rate-limits all of them, so button mashing is safe.
+function ActionCluster({
+  net,
+  stallLabel,
+  browseOpen,
+  onBrowse,
+  nearestOtherId,
+  nearestOtherName,
+  portalLabel,
+  portalUrl,
+}: {
+  net: NetClient | undefined;
+  stallLabel: string;
+  browseOpen: boolean;
+  onBrowse: () => void;
+  nearestOtherId: string | null;
+  nearestOtherName: string;
+  portalLabel: string;
+  portalUrl: string;
+}) {
+  const send = (type: string, payload?: unknown) => {
+    if (net?.isOpen()) net.send(type, payload);
+  };
+  return (
+    <div style={actionClusterStyle}>
+      {portalUrl ? (
+        <ActionButton
+          emoji="🌀" label="Play" title={`Play ${portalLabel}`} accent
+          onClick={() => { try { window.location.href = portalUrl; } catch { /* ignore */ } }}
+        />
+      ) : null}
+      {stallLabel ? (
+        <ActionButton
+          emoji="🛍️" label={browseOpen ? 'Close' : 'Browse'} title={`Browse ${stallLabel}`}
+          active={browseOpen} onClick={onBrowse}
+        />
+      ) : null}
+      {nearestOtherId ? (
+        <ActionButton
+          emoji="💝" label="Praise" title={`Compliment ${nearestOtherName} (+5🪙 to them)`}
+          onClick={() => send('compliment', { to: nearestOtherId })}
+        />
+      ) : null}
+      <ActionButton emoji="👋" label="Wave" title="Wave at everyone" onClick={() => send('wave')} />
+      <ActionButton emoji="⬆️" label="Jump" title="Jump" onClick={() => send('jump')} />
+    </div>
+  );
+}
+
+function ActionButton({
+  emoji,
+  label,
+  title,
+  onClick,
+  active = false,
+  accent = false,
+}: {
+  emoji: string;
+  label: string;
+  title: string;
+  onClick: () => void;
+  active?: boolean;
+  accent?: boolean;
+}) {
+  return (
+    <button
+      type="button" className="btn-press"
+      title={title} aria-label={title}
+      onClick={onClick}
+      style={{
+        ...actionButtonStyle,
+        ...(accent ? actionButtonAccentStyle : {}),
+        ...(active ? actionButtonActiveStyle : {}),
+      }}
+    >
+      <span style={{ fontSize: '1.25rem', lineHeight: 1 }}>{emoji}</span>
+      <span style={{ fontSize: '0.55rem', opacity: 0.9 }}>{label}</span>
+    </button>
+  );
+}
+
+// Touch-mode stand-in for SocialPanel's crowd-bonus bar: a slim bottom-center
+// pill that only appears while ≥2 other players are in range.
+function CrowdPill({ crowdCount, crowdTimer }: { crowdCount: number; crowdTimer: number }) {
+  if (crowdCount < 2) return null;
+  const pct = Math.min(100, Math.round((crowdTimer / 30) * 100));
+  return (
+    <div style={crowdPillStyle} title="+50🪙 when this bar fills">
+      <span style={{ fontSize: '0.7rem' }}>👥 Crowd bonus</span>
+      <div style={crowdBarOuterStyle}>
+        <div style={{ ...crowdBarFillStyle, width: `${pct}%` }} />
+      </div>
+    </div>
   );
 }
 
@@ -343,6 +628,88 @@ function CustomizePanel({ slot, savedLooks }: { slot: CustomSlot; savedLooks: re
     drawDesignPanelsSync(ctx, design, c.width);
   }, [design]);
 
+  // LIVE APPLY — any design change (typing a number/name, picking a
+  // color or pattern, drawing pixels) equips automatically after a
+  // 350ms settle, so the avatar updates as you type without pressing
+  // Equip. Guards: skip the initial mount, and skip slot-only changes
+  // (switching tabs at the Design Bench must not stamp the previous
+  // slot's design onto the new slot).
+  const lastAppliedDesignRef = useRef<GarmentDesign | null>(null);
+  useEffect(() => {
+    if (lastAppliedDesignRef.current === design) return;  // slot switch only
+    if (lastAppliedDesignRef.current === null) {
+      lastAppliedDesignRef.current = design;              // mount
+      return;
+    }
+    lastAppliedDesignRef.current = design;
+    const t = setTimeout(() => equipCustomDesign(slot, design), 350);
+    return () => clearTimeout(t);
+  }, [design, slot]);
+
+  // ─── Pixel-draw editor state ────────────────────────────────────────────
+  // 24×24 grid, palette-indexed nibbles ('f' = transparent). The grid
+  // lives INSIDE design.pixelArt so it round-trips through the look: id
+  // and other players see the drawing.
+  const DRAW_N = 24;
+  const ERASER = -1;
+  const [drawOpen, setDrawOpen] = useState(false);
+  const [drawColor, setDrawColor] = useState(2);
+  const drawCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const paintingRef = useRef(false);
+
+  const paintAt = (clientX: number, clientY: number) => {
+    const c = drawCanvasRef.current;
+    if (!c) return;
+    const r = c.getBoundingClientRect();
+    // clientX/Y are viewport coords and are NOT inverse-mapped through the
+    // shell's landscape-in-portrait rotation (only offsetX/Y would be).
+    // Under rotate(90deg) the canvas-local axes are: u = screen-down,
+    // v = screen-left — remap so strokes land under the finger.
+    const rot = isPortraitRotated();
+    const u = rot ? clientY - r.top : clientX - r.left;
+    const v = rot ? r.right - clientX : clientY - r.top;
+    const gx = Math.min(DRAW_N - 1, Math.floor((u / r.width) * DRAW_N));
+    const gy = Math.min(DRAW_N - 1, Math.floor((v / r.height) * DRAW_N));
+    if (gx < 0 || gy < 0) return;
+    setDesign((prev) => {
+      const cur = prev.pixelArt && prev.pixelArt.w === DRAW_N
+        ? prev.pixelArt.data
+        : 'f'.repeat(DRAW_N * DRAW_N);
+      const idx = gy * DRAW_N + gx;
+      const nib = drawColor === ERASER ? 'f' : drawColor.toString(16);
+      if (cur[idx] === nib) return prev;
+      const data = cur.slice(0, idx) + nib + cur.slice(idx + 1);
+      return { ...prev, pixelArt: { palette: PALETTE, data, w: DRAW_N, h: DRAW_N } };
+    });
+  };
+
+  // Redraw the editor grid whenever the pixel data changes.
+  useEffect(() => {
+    if (!drawOpen) return;
+    const c = drawCanvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    const cell = c.width / DRAW_N;
+    for (let y = 0; y < DRAW_N; y++) {
+      for (let x = 0; x < DRAW_N; x++) {
+        ctx.fillStyle = (x + y) % 2 === 0 ? '#e8e4da' : '#dcd6c8';
+        ctx.fillRect(x * cell, y * cell, cell, cell);
+      }
+    }
+    const art = design.pixelArt;
+    if (art && art.w === DRAW_N) {
+      for (let i = 0; i < art.data.length; i++) {
+        const ch = art.data[i];
+        if (ch === 'f') continue;
+        const nib = parseInt(ch, 16);
+        if (!Number.isFinite(nib) || nib >= PALETTE.length) continue;
+        ctx.fillStyle = PALETTE[nib];
+        ctx.fillRect((i % DRAW_N) * cell, Math.floor(i / DRAW_N) * cell, cell, cell);
+      }
+    }
+  }, [design.pixelArt, drawOpen]);
+
   // For shoes, hide the per-panel diagram and apply the active pattern to
   // ALL four panels — the shoe sphere UV doesn't split into quadrants.
   const isShoes = slot === 'shoes';
@@ -507,6 +874,61 @@ function CustomizePanel({ slot, savedLooks }: { slot: CustomSlot; savedLooks: re
         </div>
       ) : null}
 
+      {!isShoes ? (
+        <div style={{ marginTop: 6 }}>
+          <button type="button" onClick={() => setDrawOpen((v) => !v)} style={drawToggleStyle}>
+            ✏️ {drawOpen ? 'Hide drawing' : 'Draw on the cloth'}
+          </button>
+          {drawOpen ? (
+            <>
+              <canvas
+                ref={drawCanvasRef}
+                width={240} height={240}
+                style={drawCanvasStyle}
+                onPointerDown={(e) => {
+                  paintingRef.current = true;
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  paintAt(e.clientX, e.clientY);
+                }}
+                onPointerMove={(e) => { if (paintingRef.current) paintAt(e.clientX, e.clientY); }}
+                onPointerUp={() => { paintingRef.current = false; }}
+              />
+              <div style={paletteRowStyle}>
+                <span style={paletteLabelStyle}>✏️</span>
+                {PALETTE.map((c, i) => (
+                  <button
+                    key={`d-${c}`} type="button"
+                    onClick={() => setDrawColor(i)}
+                    style={{ ...swatchDotStyle, background: c, outline: i === drawColor ? '2px solid #1a1a1d' : 'none' }}
+                    aria-label={`draw color ${c}`}
+                  />
+                ))}
+                <button
+                  type="button" onClick={() => setDrawColor(ERASER)}
+                  style={{
+                    ...swatchDotStyle,
+                    background: 'repeating-linear-gradient(45deg, #fff, #fff 3px, #ccc 3px, #ccc 6px)',
+                    outline: drawColor === ERASER ? '2px solid #1a1a1d' : 'none',
+                  }}
+                  aria-label="eraser" title="Eraser"
+                />
+                <button
+                  type="button"
+                  onClick={() => setDesign((prev) => {
+                    const { pixelArt: _drop, ...rest } = prev;
+                    return rest as GarmentDesign;
+                  })}
+                  style={drawClearStyle}
+                >Clear</button>
+              </div>
+              <small style={{ opacity: 0.55, display: 'block', marginTop: 2 }}>
+                Your drawing prints on the chest + back. Applies live.
+              </small>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
       <div style={customActionsRowStyle}>
         <button type="button" onClick={onEquip} style={customPrimaryButtonStyle}>Equip</button>
         <input
@@ -595,47 +1017,32 @@ function SocialPanel({
   );
 }
 
-// ─── Leaderboard widget ─────────────────────────────────────────────────────
-// A small "🏆 Standings" button on the right edge. Click to expand a
-// full-height panel listing every group of the 2026 World Cup with each
-// team's MP / W / D / L / GD / Pts. Daily-refreshed on the server.
-function LeaderboardWidget({
+// ─── Leaderboard panel ──────────────────────────────────────────────────────
+// Full standings table for every group of the 2026 World Cup (MP / W / D /
+// L / GD / Pts, daily-refreshed on the server). The open/close toggle lives
+// in ToggleRail; this is just the drawer content.
+function LeaderboardPanel({
   standings,
+  onClose,
 }: {
   standings: ReadonlyArray<import('./store').GroupStandingSnapshot>;
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  if (standings.length === 0) {
-    // Hide the button entirely until the first standings broadcast lands —
-    // avoids showing an empty panel during connect.
-    return null;
-  }
   return (
-    <>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        style={{ ...leaderboardButtonStyle, ...(open ? leaderboardButtonActiveStyle : {}) }}
-        title="World Cup standings (daily)"
-      >
-        🏆 Standings
-      </button>
-      {open ? (
-        <div style={leaderboardPanelStyle}>
-          <div style={leaderboardHeaderStyle}>
-            <strong>2026 FIFA World Cup — Group Stage</strong>
-            <button onClick={() => setOpen(false)} style={leaderboardCloseStyle} title="Close">✕</button>
-          </div>
-          <div style={leaderboardGroupsStyle}>
-            {standings.map((g) => (
-              <LeaderboardGroupTable key={g.group} group={g} />
-            ))}
-          </div>
-          <div style={leaderboardFooterStyle}>
-            Standings refresh once per day from Football-Data.org.
-          </div>
-        </div>
-      ) : null}
-    </>
+    <div style={leaderboardPanelStyle}>
+      <div style={leaderboardHeaderStyle}>
+        <strong>2026 FIFA World Cup — Group Stage</strong>
+        <button onClick={onClose} style={leaderboardCloseStyle} title="Close">✕</button>
+      </div>
+      <div style={leaderboardGroupsStyle}>
+        {standings.map((g) => (
+          <LeaderboardGroupTable key={g.group} group={g} />
+        ))}
+      </div>
+      <div style={leaderboardFooterStyle}>
+        Standings refresh once per day from Football-Data.org.
+      </div>
+    </div>
   );
 }
 
@@ -732,10 +1139,24 @@ function BettingPanel({
   }
 
   const totalPool = primary.poolHome + primary.poolDraw + primary.poolAway;
+  const oddsMult = (campPool: number): number => {
+    if (campPool <= 0 || totalPool <= 0) return 0;
+    return totalPool / campPool;
+  };
   const odds = (campPool: number): string => {
-    if (campPool <= 0 || totalPool <= 0) return '—';
-    const mult = totalPool / campPool;
-    return `×${mult.toFixed(2)}`;
+    const m = oddsMult(campPool);
+    return m > 0 ? `×${m.toFixed(2)}` : '—';
+  };
+  // Pari-mutuel payout estimate IF you bet `stake` on this camp AND it
+  // wins. The pool grows by your stake first; payout = (total + stake) /
+  // (campPool + stake) × stake. Reads as "win this many coins". Shown
+  // in big bold text on each camp button so the value is obvious.
+  const winIfBet = (campPool: number): number => {
+    if (stake <= 0) return 0;
+    const newTotal = totalPool + stake;
+    const newCamp = campPool + stake;
+    if (newCamp <= 0) return 0;
+    return Math.floor((newTotal / newCamp) * stake);
   };
 
   const placeBet = (camp: 'HOME' | 'DRAW' | 'AWAY') => {
@@ -762,6 +1183,16 @@ function BettingPanel({
           {primary.scoreHome} – {primary.scoreAway}
         </div>
       ) : null}
+      {primary.phase === 'BET_WINDOW' && !myBet ? (
+        <div style={{
+          fontSize: '0.72rem', opacity: 0.78, textAlign: 'center',
+          padding: '4px 8px 0', lineHeight: 1.35,
+        }}>
+          Pari-mutuel: every bet on the winning side splits the WHOLE pool
+          (in proportion to its stake). Big numbers below = what you win
+          if you put <strong>{stake}</strong> 🪙 on that side and it wins.
+        </div>
+      ) : null}
       <div style={bettingCampsStyle}>
         {(['HOME', 'DRAW', 'AWAY'] as const).map((camp) => {
           const label = camp === 'HOME' ? primary.homeCode : camp === 'AWAY' ? primary.awayCode : 'DRAW';
@@ -770,6 +1201,7 @@ function BettingPanel({
           const isMine = myBet?.camp === camp;
           const disabled = primary.phase !== 'BET_WINDOW' || !!myBet || balance < stake;
           const won = primary.phase === 'RESOLVED' && primary.result === camp;
+          const projectedWin = winIfBet(pool);
           return (
             <button
               key={camp}
@@ -784,8 +1216,16 @@ function BettingPanel({
               }}
             >
               <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>{label}</div>
-              <div style={{ fontSize: '0.7rem', opacity: 0.85 }}>{odds(pool)}</div>
-              <div style={{ fontSize: '0.65rem', opacity: 0.7 }}>{count} 🪙{pool}</div>
+              {primary.phase === 'BET_WINDOW' && !myBet && projectedWin > 0 ? (
+                <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#e6c34a' }}>
+                  WIN +{projectedWin} 🪙
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.72rem', opacity: 0.85 }}>{odds(pool)}</div>
+              )}
+              <div style={{ fontSize: '0.62rem', opacity: 0.65 }}>
+                {count} bets · pool {pool} 🪙
+              </div>
             </button>
           );
         })}
@@ -858,31 +1298,110 @@ function SignpostPanel() {
       <div style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: 6 }}>
         🗺️ Park guide
       </div>
-      <div style={signpostRowStyle}><kbd style={kbdStyle}>WASD</kbd><span>walk</span></div>
-      <div style={signpostRowStyle}><kbd style={kbdStyle}>Space</kbd><span>jump</span></div>
-      <div style={signpostRowStyle}><kbd style={kbdStyle}>E</kbd><span>compliment nearest player (+5 🪙 to them)</span></div>
-      <div style={signpostRowStyle}><kbd style={kbdStyle}>F</kbd><span>wave 👋</span></div>
+      <div style={signpostRowStyle}><span>🕹️</span><span>stick walks · drag elsewhere orbits</span></div>
+      <div style={signpostRowStyle}><span>⬆️👋💝</span><span>bottom-right buttons: jump · wave · praise</span></div>
+      <div style={signpostRowStyle}><kbd style={kbdStyle}>WASD</kbd><span>walk · <kbd style={kbdStyle}>Space</kbd> jump</span></div>
+      <div style={signpostRowStyle}><kbd style={kbdStyle}>E</kbd><span>compliment (+5 🪙) · <kbd style={kbdStyle}>F</kbd> wave</span></div>
       <div style={signpostRowStyle}><kbd style={kbdStyle}>G</kbd><span>enter portal (when near one)</span></div>
-      <div style={signpostRowStyle}><kbd style={kbdStyle}>Enter</kbd><span>open chat (drag mouse to orbit camera)</span></div>
     </div>
   );
 }
 
-// ─── Portal prompt ──────────────────────────────────────────────────────────
-// Center-screen call to action when the player stands near a stadium
-// portal gate. Press G to leave this game and jump to the linked one.
-// game.ts wires the actual redirect — this just paints the prompt.
-function PortalPrompt({ label }: { label: string }) {
+// ─── Expression bar ─────────────────────────────────────────────────────────
+// Always-visible vertical strip of face buttons on the left edge. The
+// selection rides the accessory CSV as a face-<expr> token through the
+// normal equip pipeline, so every other player sees the new face.
+type ExpressionKey = 'neutral' | 'happy' | 'surprised' | 'wink' | 'cool';
+const EXPRESSION_OPTIONS: Array<{ key: ExpressionKey; emoji: string; label: string }> = [
+  { key: 'neutral',   emoji: '😐', label: 'Neutral' },
+  { key: 'happy',     emoji: '😄', label: 'Happy' },
+  { key: 'surprised', emoji: '😮', label: 'Surprised' },
+  { key: 'wink',      emoji: '😉', label: 'Wink' },
+  { key: 'cool',      emoji: '😎', label: 'Cool' },
+];
+function ExpressionBar() {
+  const [active, setActive] = useState<ExpressionKey>('neutral');
   return (
-    <div style={portalPromptStyle}>
-      <div style={portalPromptLabelStyle}>🎮 {label}</div>
-      <div style={portalPromptCtaStyle}>
-        <kbd style={kbdStyle}>G</kbd>
-        <span>play this game</span>
+    <div style={expressionBarStyle}>
+      {EXPRESSION_OPTIONS.map((e) => (
+        <button
+          key={e.key} type="button" title={e.label}
+          onClick={() => { setActive(e.key); setAvatarExpression(e.key); }}
+          style={e.key === active
+            ? { ...expressionButtonStyle, ...expressionButtonActiveStyle }
+            : expressionButtonStyle}
+        >{e.emoji}</button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Soccer scoreboard ──────────────────────────────────────────────────────
+// Always-visible scoreboard chip showing the current "North vs South"
+// soccer-pitch tally. The score lives on the server (broadcast inside
+// the `ball:state` channel); the HUD reads the latest values from the
+// last goal event (server resets on every goal so scoreN/scoreS arrive
+// fresh in each ball:goal). Hidden until the first goal is scored.
+function SoccerScoreboard({
+  goal,
+}: {
+  goal: GameStoreSnapshot['lastSoccerGoal'];
+}) {
+  if (!goal) return null;
+  return (
+    <div style={soccerScoreboardStyle}>
+      <span style={soccerScoreboardLabelStyle}>⚽ Pitch</span>
+      <span style={soccerScoreboardTallyStyle}>
+        <span style={soccerScoreboardSideStyle}>N {goal.scoreN}</span>
+        <span style={{ opacity: 0.4 }}>·</span>
+        <span style={soccerScoreboardSideStyle}>{goal.scoreS} S</span>
+      </span>
+    </div>
+  );
+}
+
+// ─── Goal banner ───────────────────────────────────────────────────────────
+// Big "GOAL!" banner that fades in for ~2.6s after a goal is scored,
+// then fades out. Different copy if YOU scored vs someone else.
+function SoccerGoalBanner({
+  goal,
+}: {
+  goal: GameStoreSnapshot['lastSoccerGoal'];
+}) {
+  const [, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!goal) return;
+    const id = setInterval(() => setNow(Date.now()), 50);
+    return () => clearInterval(id);
+  }, [goal?.at]);
+  if (!goal) return null;
+  const age = Date.now() - goal.at;
+  const lifetimeMs = 2600;
+  if (age > lifetimeMs) return null;
+  // Fade-in 200ms / hold / fade-out last 500ms.
+  const fadeIn = Math.min(1, age / 200);
+  const fadeOut = Math.min(1, (lifetimeMs - age) / 500);
+  const opacity = Math.min(fadeIn, fadeOut);
+  return (
+    <div style={{ ...soccerGoalBannerStyle, opacity }}>
+      <div style={soccerGoalBannerTitleStyle}>
+        ⚽ GOAL!
+      </div>
+      <div style={soccerGoalBannerSubtitleStyle}>
+        {goal.mine
+          ? <>Nice strike!</>
+          : <><strong>{goal.scorerName}</strong> scored on the {goal.side === 'N' ? 'north' : 'south'} goal</>}
+      </div>
+      <div style={soccerGoalBannerScoreStyle}>
+        N {goal.scoreN} · {goal.scoreS} S
       </div>
     </div>
   );
 }
+
+// (The old center-screen PortalPrompt is gone — portal proximity now
+// surfaces the 🌀 Play button in ActionCluster, which performs the same
+// redirect on tap; the G key in game.ts still works for desktop.)
 
 function ChatPanel({
   net,
@@ -987,20 +1506,95 @@ function categoryLabel(c: StallCategory): string {
 
 // ─── Styles ─────────────────────────────────────────────────────────────────
 
+// Compact single-row status chip — the only always-on element top-left.
 const topBadgeStyle: CSSProperties = {
-  position: 'absolute', top: 12, left: 12,
-  display: 'flex', flexDirection: 'column', gap: 2,
-  padding: '0.55rem 0.8rem', borderRadius: 12,
+  position: 'absolute', top: 10, left: 12,
+  display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8,
+  padding: '0.3rem 0.6rem', borderRadius: 999,
   background: 'rgba(255, 255, 255, 0.82)',
   color: '#1a1a1d', fontFamily: 'Inter, system-ui, sans-serif',
-  fontSize: '0.8rem', lineHeight: 1.3,
+  fontSize: '0.78rem', lineHeight: 1.2,
   pointerEvents: 'none', userSelect: 'none',
   backdropFilter: 'blur(8px)',
   border: '1px solid rgba(0,0,0,0.06)',
 };
 
-const hintStyle: CSSProperties = { opacity: 0.55, fontSize: '0.7rem', marginTop: 4 };
-const stallHintStyle: CSSProperties = { color: '#1a5a1a', fontSize: '0.78rem', marginTop: 4, fontWeight: 600 };
+// ─── Toggle rail + drawers + touch actions ──────────────────────────────────
+const railStyle: CSSProperties = {
+  position: 'absolute', top: 10, right: 10,
+  display: 'flex', flexDirection: 'column', gap: 8,
+  pointerEvents: 'auto',
+};
+const railButtonStyle: CSSProperties = {
+  position: 'relative',
+  width: 44, height: 44, borderRadius: 14,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  background: 'rgba(255,255,255,0.9)',
+  border: '1px solid rgba(0,0,0,0.08)',
+  backdropFilter: 'blur(8px)',
+  boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+  fontSize: '1.2rem', lineHeight: 1, padding: 0,
+  cursor: 'pointer',
+};
+const railButtonActiveStyle: CSSProperties = {
+  background: '#1a1a1d',
+  borderColor: '#1a1a1d',
+  boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
+};
+const railBadgeStyle: CSSProperties = {
+  position: 'absolute', top: -5, right: -5,
+  minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  background: '#c14444', color: '#fff',
+  fontFamily: 'Inter, system-ui, sans-serif',
+  fontSize: '0.56rem', fontWeight: 700, whiteSpace: 'nowrap',
+  pointerEvents: 'none',
+};
+// Drawer container left of the rail. bottom reserve (92px) keeps every
+// drawer clear of the ActionCluster row. Scrolls when content is taller
+// than a 375px-high phone allows (e.g. BettingPanel in BET_WINDOW phase).
+const drawerStyle: CSSProperties = {
+  position: 'absolute', top: 10, right: 62,
+  maxHeight: 'calc(100% - 92px)',
+  display: 'flex', flexDirection: 'column',
+  overflowY: 'auto',
+  touchAction: 'pan-y',
+  pointerEvents: 'auto',
+};
+const actionClusterStyle: CSSProperties = {
+  position: 'absolute', right: 12, bottom: 14,
+  display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: 10,
+  pointerEvents: 'auto',
+};
+const actionButtonStyle: CSSProperties = {
+  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2,
+  width: 54, height: 54, borderRadius: 16,
+  background: 'rgba(20,24,36,0.62)', color: '#fff',
+  border: '1px solid rgba(255,255,255,0.22)',
+  backdropFilter: 'blur(6px)',
+  boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
+  fontFamily: 'Inter, system-ui, sans-serif',
+  cursor: 'pointer', userSelect: 'none', padding: 0,
+  touchAction: 'none',
+};
+const actionButtonActiveStyle: CSSProperties = {
+  background: 'rgba(230, 195, 74, 0.9)', color: '#1a1a1d',
+  borderColor: '#e6c34a',
+};
+const actionButtonAccentStyle: CSSProperties = {
+  background: 'linear-gradient(135deg, rgba(58,134,52,0.92), rgba(34,98,30,0.92))',
+  borderColor: 'rgba(255,255,255,0.35)',
+};
+const crowdPillStyle: CSSProperties = {
+  position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+  display: 'flex', alignItems: 'center', gap: 8,
+  padding: '0.35rem 0.7rem', borderRadius: 999,
+  background: 'rgba(255,255,255,0.85)',
+  color: '#1a1a1d', fontFamily: 'Inter, system-ui, sans-serif',
+  pointerEvents: 'none', userSelect: 'none',
+  backdropFilter: 'blur(8px)',
+  border: '1px solid rgba(0,0,0,0.06)',
+};
 
 // Social prompts cluster — bottom-center, above chat. Non-interactive
 // (pointerEvents: none) so it doesn't block clicks on stalls behind it.
@@ -1028,27 +1622,10 @@ const kbdStyle: CSSProperties = {
   boxShadow: 'inset 0 -2px 0 rgba(0,0,0,0.35)',
 };
 // ─── Leaderboard styles ─────────────────────────────────────────────────────
-const leaderboardButtonStyle: CSSProperties = {
-  position: 'absolute', top: 70, right: 12,
-  padding: '8px 12px', borderRadius: 12,
-  background: 'rgba(255,255,255,0.92)',
-  color: '#1a1a1d',
-  fontFamily: 'Inter, system-ui, sans-serif', fontSize: '0.82rem', fontWeight: 700,
-  border: '1px solid rgba(0,0,0,0.08)',
-  backdropFilter: 'blur(8px)',
-  boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
-  cursor: 'pointer',
-  pointerEvents: 'auto',
-};
-const leaderboardButtonActiveStyle: CSSProperties = {
-  background: '#1a1a1d',
-  color: '#fff',
-  borderColor: '#1a1a1d',
-};
+// Drawer content — the wrapper in Hud owns position/width; this fills it.
 const leaderboardPanelStyle: CSSProperties = {
-  position: 'absolute', top: 116, right: 12,
-  width: 'min(680px, 92vw)',
-  maxHeight: 'calc(100vh - 200px)',
+  width: '100%',
+  maxHeight: '100%',
   display: 'flex', flexDirection: 'column',
   padding: '0.8rem 1rem',
   borderRadius: 14,
@@ -1077,6 +1654,7 @@ const leaderboardGroupsStyle: CSSProperties = {
   gap: 12,
   padding: '10px 0',
   overflowY: 'auto',
+  touchAction: 'pan-y',
 };
 const leaderboardGroupCardStyle: CSSProperties = {
   background: '#f7f4ee',
@@ -1134,9 +1712,9 @@ const leaderboardFooterStyle: CSSProperties = {
 };
 
 // ─── Betting panel styles ───────────────────────────────────────────────────
+// Drawer content — wrapper owns position/width.
 const bettingPanelStyle: CSSProperties = {
-  position: 'absolute', bottom: 12, right: 12,
-  width: 280,
+  width: '100%',
   display: 'flex', flexDirection: 'column', gap: 8,
   padding: '0.7rem 0.85rem', borderRadius: 14,
   background: 'rgba(255,255,255,0.92)',
@@ -1200,8 +1778,11 @@ const bettingMyBetStyle: CSSProperties = {
   paddingTop: 4,
   borderTop: '1px dashed rgba(0,0,0,0.15)',
 };
+// Toast slots are staggered fixed offsets (goal banner at 44, bet toast at
+// 170) so simultaneous toasts stack instead of covering each other on a
+// 375px-tall landscape phone.
 const betToastStyle: CSSProperties = {
-  position: 'absolute', top: '20%', left: '50%', transform: 'translate(-50%, -50%)',
+  position: 'absolute', top: 170, left: '50%', transform: 'translateX(-50%)',
   display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
   padding: '1.1rem 1.6rem', borderRadius: 18,
   color: '#fff', fontFamily: 'Inter, system-ui, sans-serif',
@@ -1221,40 +1802,111 @@ const betToastEvenStyle: CSSProperties = {
   background: 'rgba(60, 60, 80, 0.92)',
 };
 
+// Compact controls cheat-sheet, anchored top-left under the status chip —
+// the only free corner at 375px height (joystick owns bottom-left, drawers
+// own the right, toasts own top-center).
 const signpostPanelStyle: CSSProperties = {
-  position: 'absolute', bottom: 200, left: '50%', transform: 'translateX(-50%)',
-  display: 'flex', flexDirection: 'column', gap: 4,
-  padding: '0.75rem 1rem', borderRadius: 12,
+  position: 'absolute', top: 52, left: 12,
+  display: 'flex', flexDirection: 'column', gap: 3,
+  padding: '0.5rem 0.7rem', borderRadius: 12,
   background: 'rgba(244, 235, 214, 0.96)',
   color: '#3a2410', fontFamily: 'Inter, system-ui, sans-serif',
-  fontSize: '0.82rem',
+  fontSize: '0.72rem',
   pointerEvents: 'none', userSelect: 'none',
   border: '2px solid #7a5836',
   boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
-  minWidth: 280,
+  maxWidth: 250,
 };
 const signpostRowStyle: CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 8,
 };
 
-const portalPromptStyle: CSSProperties = {
-  position: 'absolute', top: '32%', left: '50%', transform: 'translate(-50%, -50%)',
-  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-  padding: '0.9rem 1.4rem', borderRadius: 16,
-  background: 'rgba(20, 24, 36, 0.86)',
+// Horizontal emote strip — drawer content (wrapper owns position).
+const expressionBarStyle: CSSProperties = {
+  display: 'flex', flexDirection: 'row', gap: 6,
+  padding: '0.4rem', borderRadius: 999,
+  background: 'rgba(20, 24, 36, 0.62)',
+  backdropFilter: 'blur(8px)',
+  border: '1px solid rgba(255,255,255,0.16)',
+  boxShadow: '0 6px 18px rgba(0,0,0,0.3)',
+  pointerEvents: 'auto',
+};
+const expressionButtonStyle: CSSProperties = {
+  width: 38, height: 38, borderRadius: '50%',
+  border: '1px solid rgba(255,255,255,0.2)',
+  background: 'rgba(255,255,255,0.08)',
+  fontSize: '1.15rem', cursor: 'pointer', lineHeight: 1,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  padding: 0,
+};
+const expressionButtonActiveStyle: CSSProperties = {
+  background: 'rgba(230, 195, 74, 0.85)',
+  border: '1px solid #e6c34a',
+};
+const drawToggleStyle: CSSProperties = {
+  padding: '0.35rem 0.7rem', borderRadius: 8, cursor: 'pointer',
+  border: '1px solid rgba(0,0,0,0.25)', background: '#f3ecd9',
+  fontSize: '0.78rem', fontWeight: 700,
+};
+const drawCanvasStyle: CSSProperties = {
+  width: 240, height: 240, display: 'block', marginTop: 6,
+  borderRadius: 8, border: '1px solid rgba(0,0,0,0.3)',
+  cursor: 'crosshair', touchAction: 'none',
+  imageRendering: 'pixelated',
+};
+const drawClearStyle: CSSProperties = {
+  marginLeft: 6, padding: '0.2rem 0.55rem', borderRadius: 6,
+  border: '1px solid rgba(0,0,0,0.25)', background: '#fff',
+  fontSize: '0.7rem', cursor: 'pointer',
+};
+
+const soccerScoreboardStyle: CSSProperties = {
+  position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+  display: 'flex', alignItems: 'center', gap: 14,
+  padding: '0.45rem 1.0rem', borderRadius: 999,
+  background: 'rgba(20, 24, 36, 0.78)',
   color: '#fff', fontFamily: 'Inter, system-ui, sans-serif',
   pointerEvents: 'none', userSelect: 'none',
   backdropFilter: 'blur(10px)',
   border: '1px solid rgba(255,255,255,0.18)',
-  boxShadow: '0 10px 32px rgba(0,0,0,0.35)',
+  boxShadow: '0 6px 18px rgba(0,0,0,0.32)',
+  fontSize: '0.85rem',
 };
-const portalPromptLabelStyle: CSSProperties = {
-  fontSize: '1.05rem', fontWeight: 700, letterSpacing: '0.01em',
+const soccerScoreboardLabelStyle: CSSProperties = {
+  fontWeight: 700, opacity: 0.85, fontSize: '0.78rem',
 };
-const portalPromptCtaStyle: CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 8,
-  fontSize: '0.82rem', opacity: 0.9,
+const soccerScoreboardTallyStyle: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 10,
 };
+const soccerScoreboardSideStyle: CSSProperties = {
+  fontWeight: 800, color: '#e6c34a',
+};
+
+const soccerGoalBannerStyle: CSSProperties = {
+  position: 'absolute', top: 44, left: '50%', transform: 'translateX(-50%)',
+  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+  padding: '1.1rem 1.8rem', borderRadius: 20,
+  background: 'linear-gradient(135deg, rgba(58,134,52,0.92), rgba(34,98,30,0.92))',
+  color: '#fff', fontFamily: 'Inter, system-ui, sans-serif',
+  pointerEvents: 'none', userSelect: 'none',
+  backdropFilter: 'blur(12px)',
+  border: '2px solid rgba(255,255,255,0.35)',
+  boxShadow: '0 16px 42px rgba(0,0,0,0.45)',
+  transition: 'opacity 0.18s ease',
+  textAlign: 'center',
+};
+const soccerGoalBannerTitleStyle: CSSProperties = {
+  fontSize: '2.4rem', fontWeight: 900, letterSpacing: '0.08em',
+  textShadow: '0 2px 8px rgba(0,0,0,0.5)',
+};
+const soccerGoalBannerSubtitleStyle: CSSProperties = {
+  fontSize: '0.95rem', opacity: 0.95,
+};
+const soccerGoalBannerScoreStyle: CSSProperties = {
+  fontSize: '0.82rem', opacity: 0.85,
+  letterSpacing: '0.1em', fontWeight: 700,
+};
+
 const crowdBarOuterStyle: CSSProperties = {
   width: 140, height: 6, borderRadius: 3,
   background: 'rgba(0,0,0,0.12)', overflow: 'hidden',
@@ -1265,9 +1917,11 @@ const crowdBarFillStyle: CSSProperties = {
   transition: 'width 0.2s linear',
 };
 
+// Opens via the 🛍️ Browse action button (drawer-exclusive). Anchored left
+// of the toggle rail, stopping above the ActionCluster row.
 const stallPanelStyle: CSSProperties = {
-  position: 'absolute', top: 12, right: 12, bottom: '40%',
-  width: 'min(340px, 42vw)',
+  position: 'absolute', top: 10, right: 62, bottom: 78,
+  width: 'min(340px, 48vw)',
   display: 'flex', flexDirection: 'column', gap: 10,
   padding: '0.75rem',
   borderRadius: 16,
@@ -1290,6 +1944,7 @@ const stallGridStyle: CSSProperties = {
   flex: 1,
   display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(108px, 1fr))',
   gap: 8, overflowY: 'auto', paddingRight: 4,
+  touchAction: 'pan-y',
 };
 
 const itemTileStyle: CSSProperties = {
@@ -1339,9 +1994,9 @@ const coinBadgeStyle: CSSProperties = {
   letterSpacing: '0.02em',
 };
 
+// Drawer content — wrapper owns position/size; feed flexes to fill.
 const chatPanelStyle: CSSProperties = {
-  position: 'absolute', bottom: 12, left: 12,
-  width: 'min(340px, 42vw)',
+  width: '100%', height: '100%',
   display: 'flex', flexDirection: 'column', gap: 6,
   padding: '0.6rem',
   borderRadius: 12,
@@ -1356,7 +2011,10 @@ const chatPanelStyle: CSSProperties = {
 };
 
 const chatFeedStyle: CSSProperties = {
-  maxHeight: 160, minHeight: 60, overflowY: 'auto',
+  flex: 1, minHeight: 60, overflowY: 'auto',
+  // The shell sets touch-action:none globally; re-enable vertical pan so
+  // thumb-scrolling the feed works on phones.
+  touchAction: 'pan-y',
   display: 'flex', flexDirection: 'column', gap: 2,
   paddingBottom: 4, borderBottom: '1px solid rgba(0,0,0,0.06)',
 };
