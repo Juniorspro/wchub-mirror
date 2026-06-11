@@ -1627,26 +1627,31 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   // ─── PUERTAS-PORTAL del estadio (como el original: te llevan a otros
   // juegos de Rezona). Tocá la puerta para abrir el link. Las dos sin
   // gameId todavía quedan como "COMING SOON" (igual que en world.ts).
-  const PORTALES: Array<{ url: string; label: string; cover: string }> = [
-    { url: '', label: 'Festejo GOTY', cover: coverCardsUrl },
-    { url: 'https://web.rezona.ai/share/game/OTMzMzI4NA', label: 'Ball Juggler', cover: coverJugglerUrl },
-    { url: 'https://web.rezona.ai/share/game/OTMzMjQ5NA', label: 'Catching These Balls', cover: coverGoalieUrl },
-    { url: 'https://web.rezona.ai/share/game/OTMzMTc0NQ', label: 'Master Dribbler', cover: coverDribblerUrl },
-    { url: '', label: 'Coming Soon', cover: coverRacingUrl },
+  // ADENTRO del estadio, rodeando el campo como los túneles del original
+  // (mismos ángulos de _stadiumPortalSpec: SE, E-NE, N, W-NW, SW; el arco
+  // sur queda libre para el portón). Miran al centro de la cancha.
+  const PORTALES: Array<{ url: string; label: string; cover: string; angle: number }> = [
+    { url: 'https://web.rezona.ai/share/game/OTMzMjQ5NA', label: 'Catching These Balls', cover: coverGoalieUrl, angle: -Math.PI / 4 },
+    { url: 'https://web.rezona.ai/share/game/OTMzMTc0NQ', label: 'Master Dribbler', cover: coverDribblerUrl, angle: Math.PI / 6 },
+    { url: '', label: 'Coming Soon', cover: coverRacingUrl, angle: Math.PI / 2 },
+    { url: 'https://web.rezona.ai/share/game/OTMzMzI4NA', label: 'Ball Juggler', cover: coverJugglerUrl, angle: Math.PI - Math.PI / 6 },
+    { url: '', label: 'Festejo GOTY', cover: coverCardsUrl, angle: Math.PI + Math.PI / 4 },
   ];
-  const coverOffs = [-1.55, -1.0, -0.5, 0.5, 1.0];
+  const IN_A = EST_A - 6.4; // borde interior de las tribunas (4 niveles × 1.5)
+  const IN_B = EST_B - 6.4;
   for (let i = 0; i < PORTALES.length; i++) {
-    const a = -Math.PI / 2 + coverOffs[i];
-    let nx = Math.cos(a) / EST_A;
-    let nz = Math.sin(a) / EST_B;
+    const a = PORTALES[i].angle;
+    const px = ESTADIO.x + Math.cos(a) * IN_A;
+    const pz = ESTADIO.z + Math.sin(a) * IN_B;
+    // mirando al centro del campo
+    let nx = ESTADIO.x - px;
+    let nz = ESTADIO.z - pz;
     const nl = Math.hypot(nx, nz) || 1;
     nx /= nl;
     nz /= nl;
-    const px = ESTADIO.x + Math.cos(a) * EST_A + nx * 0.3;
-    const pz = ESTADIO.z + Math.sin(a) * EST_B + nz * 0.3;
     const root = new TransformNode(`portal-${i}`, scene);
     root.position.set(px, 0, pz);
-    root.rotation.y = Math.atan2(nx, nz); // +Z local hacia AFUERA de la pared
+    root.rotation.y = Math.atan2(nx, nz); // +Z local hacia el campo
     // marco de puerta: jambas + dintel + fondo oscuro
     for (const sx of [-1.25, 1.25]) {
       const jamb = MeshBuilder.CreateBox('portal-jamb', { width: 0.3, height: 3.5, depth: 0.5 }, scene);
