@@ -138,4 +138,132 @@ export const OBSTACLES: CircleObstacle[] = [
   { cx: 160.4, cy: 18.6, radius: 0.2 },
   { cx: 155.6, cy: 17.6, radius: 0.2 },
   { cx: 160.4, cy: 17.6, radius: 0.2 },
+
+  // ═══ Hitbox pass 2026-06-11 — every remaining solid POI that players ═══
+  // ═══ could previously walk straight through.                         ═══
+
+  // ─── Top-voters podium statue plinths @ (50, 50) — the central plinth
+  //     (r 2.0 above) only covered rank #1; the four outer plinths
+  //     (r 1.1, ring radius 3.7) stand on the walkable tier-2 surface.
+  { cx: 53.7, cy: 50,   radius: 1.15 },
+  { cx: 46.3, cy: 50,   radius: 1.15 },
+  { cx: 50,   cy: 53.7, radius: 1.15 },
+  { cx: 50,   cy: 46.3, radius: 1.15 },
+
+  // ─── Fixture board @ (140, 50) — two support posts (cx ± 4.35) plus a
+  //     row of circles under the 7.6-wide display panel (its bottom edge
+  //     is at y 0.9, well below avatar head height — walking "through"
+  //     the board clipped the avatar into the canvas).
+  { cx: 135.65, cy: 50, radius: 0.35 },
+  { cx: 144.35, cy: 50, radius: 0.35 },
+  { cx: 137.5,  cy: 50, radius: 1.3 },
+  { cx: 140,    cy: 50, radius: 1.3 },
+  { cx: 142.5,  cy: 50, radius: 1.3 },
+
+  // ─── Mascot statue @ (195, 40) — stone pedestal drum d3.4 ──────────────
+  { cx: 195, cy: 40, radius: 1.8 },
+
+  // ─── Trophy replica tent @ (180, 45) — central pedestal + 4 corner posts
+  { cx: 180, cy: 45, radius: 0.8 },
+  { cx: 178, cy: 43, radius: 0.2 },
+  { cx: 182, cy: 43, radius: 0.2 },
+  { cx: 178, cy: 47, radius: 0.2 },
+  { cx: 182, cy: 47, radius: 0.2 },
+
+  // ─── Lampposts (buildFestiveDecor lampPositions — base drum d 0.36) ────
+  { cx: 102, cy: 16, radius: 0.25 },
+  { cx: 118, cy: 17, radius: 0.25 },
+  { cx: 103, cy: 33, radius: 0.25 },
+  { cx: 118, cy: 31, radius: 0.25 },
+  { cx: 109, cy: 44, radius: 0.25 },
+  { cx: 119, cy: 61, radius: 0.25 },
+  { cx:  91, cy: 21, radius: 0.25 },
+  { cx:  68, cy: 36, radius: 0.25 },
+  { cx: 137, cy: 15, radius: 0.25 },
+  { cx: 137, cy: 38, radius: 0.25 },
+
+  // ─── Flag-banner poles framing the gate approach (z = 65) ──────────────
+  { cx: 100, cy: 65, radius: 0.2 },
+  { cx: 120, cy: 65, radius: 0.2 },
+
+  // ─── Picnic parasol pole @ plot center (162, 56) ───────────────────────
+  { cx: 162, cy: 56, radius: 0.15 },
+
+  // ─── Amphitheater stage flagpole @ (148+2.5, 70-4) ─────────────────────
+  { cx: 150.5, cy: 66, radius: 0.15 },
+
+  // ─── Park benches (world.ts benchSpec — seat 1.6×0.5, one circle each) ─
+  { cx: 107, cy:  9, radius: 0.8 },
+  { cx: 113, cy:  9, radius: 0.8 },
+  { cx: 105, cy: 42, radius: 0.8 },
+  { cx: 120, cy: 47, radius: 0.8 },
+  { cx:  92, cy: 30, radius: 0.8 },
+  { cx:  56, cy: 40, radius: 0.8 },
+  { cx: 146, cy: 51, radius: 0.8 },
+  { cx: 172, cy: 30, radius: 0.8 },
+
+  // ─── Hero banner posts @ (110, 41) — face bottom is at y 3.2 so players
+  //     walk UNDER the banner; only the two posts (cx ± 5.0) are solid.
+  { cx: 105, cy: 41, radius: 0.3 },
+  { cx: 115, cy: 41, radius: 0.3 },
+
+  // ─── Small mascot posters (posterSpots) — 1.7-wide framed sign on two
+  //     posts, face bottom at y 1.7 (head height) → one solid circle each.
+  { cx:  88, cy: 30, radius: 1.1 },
+  { cx: 132, cy: 30, radius: 1.1 },
+  { cx: 118, cy: 64, radius: 1.1 },
+  { cx:  60, cy: 46, radius: 1.1 },
 ];
+
+// ─── Trees — crossed-billboard sprites (world.ts treeSpec). Only the
+//     trunk blocks (canopy is well above head height): radius scales with
+//     the sprite scale. The south-fringe trees at z < 0 sit outside the
+//     playable rectangle and are skipped. Keep in sync with treeSpec.
+const TREE_SPEC: ReadonlyArray<readonly [number, number, number]> = [
+  // [x, z, sprite scale]
+  [ 15,  18, 2.0], [ 22,  40, 2.2], [ 14,  60, 2.0], [ 25,  82, 2.1],
+  [ 10, 130, 2.2], [  8, 160, 2.4],
+  [192,  20, 2.1], [195,  48, 2.0], [188, 100, 2.2], [195, 130, 2.1],
+  [188, 160, 2.3],
+  [ 80,   6, 1.7], [130,   8, 1.6], [140,   6, 1.8], [ 70,  10, 1.8],
+  [ 62,  16, 1.6], [176,  16, 1.9],
+  [ 70,  53, 1.9], [ 78,  46, 1.7], [ 88,  46, 1.8], [ 64,  30, 1.7],
+  [ 55,  60, 2.0],
+  [ 38,  68, 2.1], [ 46,  77, 1.9],
+  [174,  60, 1.9],
+];
+for (const [x, z, scale] of TREE_SPEC) {
+  OBSTACLES.push({ cx: x, cy: z, radius: Math.min(1.0, Math.max(0.6, 0.4 * scale)) });
+}
+
+// ─── Stadium portal gates — 5 flat-frame portals on the field edge
+//     (world.ts STADIUM_PORTAL_GATES). Same placement math as the client:
+//     point on the stand-inner ellipse (= keep-out inner ellipse) pushed
+//     1.2 units toward the field center along the inward normal. Each
+//     portal is ~7 wide: one circle for the cover/backdrop span + one per
+//     stone pillar (local ±3.0 along the tangent). Effective coverage with
+//     PLAYER_RADIUS leaves no walk-through gap. Interact radius (3.5) is
+//     larger than every circle, so the HUD prompt still triggers.
+const PORTAL_ANGLES = [
+  -Math.PI / 4,             // SE — Pixel Quest
+  Math.PI / 6,              // E-NE — Bubble Tower
+  Math.PI / 2,              // N (back) — Kart Rush
+  Math.PI - Math.PI / 6,    // W-NW — Sky Defender
+  Math.PI + Math.PI / 4,    // SW — Card Clash
+];
+for (const angle of PORTAL_ANGLES) {
+  const cosA = Math.cos(angle);
+  const sinA = Math.sin(angle);
+  const nx = cosA / STADIUM_KEEPOUT.innerAx;
+  const nz = sinA / STADIUM_KEEPOUT.innerBz;
+  const nLen = Math.hypot(nx, nz);
+  const ux = -(nx / nLen);   // inward unit normal (toward field center)
+  const uz = -(nz / nLen);
+  const px = STADIUM_KEEPOUT.cx + STADIUM_KEEPOUT.innerAx * cosA + ux * 1.2;
+  const pz = STADIUM_KEEPOUT.cy + STADIUM_KEEPOUT.innerBz * sinA + uz * 1.2;
+  const tx = -uz;            // tangent (along the portal's width)
+  const tz = ux;
+  OBSTACLES.push({ cx: px, cy: pz, radius: 1.5 });
+  OBSTACLES.push({ cx: px + tx * 3, cy: pz + tz * 3, radius: 0.7 });
+  OBSTACLES.push({ cx: px - tx * 3, cy: pz - tz * 3, radius: 0.7 });
+}

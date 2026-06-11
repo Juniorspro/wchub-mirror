@@ -63,7 +63,7 @@ import {
 } from './world';
 import { advanceSelfPrediction, getInterpolatedPlayers, type NetClient } from '../net';
 import { cameraDragBus, isPortraitRotated, subscribeRotated } from './touch';
-import { normalizeInput } from '@shared';
+import { groundHeightAt, normalizeInput } from '@shared';
 
 export interface GameRuntimeHandle {
   dispose(): void;
@@ -232,6 +232,11 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
   // ─── Multi-avatar registry ────────────────────────────────────────────────
   const avatars = new Map<string, CharacterAvatar>();
   const appliedOutfitFor = new Map<string, string>(); // sessionId → cached "textureCSV|accessoryCSV"
+  // Smoothed walkable-floor Y per avatar (sessionId → current ground Y).
+  // The shared groundHeightAt() is a hard step function at platform rims;
+  // a short exp-lerp turns the step into a quick "walks up onto it" rise
+  // instead of a teleport pop. Cleared in disposeAvatar.
+  const groundYBySid = new Map<string, number>();
   let localAvatar: CharacterAvatar | null = null;
   // Dev-only inspection hook for driving the scene from automated tests.
   // Pushed (not assigned) because React StrictMode double-mounts the
@@ -247,7 +252,7 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
     let a = avatars.get(sid);
     if (!a) {
       a = createCharacterAvatar(scene, { id: sid });
-      a.setPosition(FAIR_CENTER.x, 0, FAIR_CENTER.z);
+      a.setPosition(FAIR_CENTER.x, groundHeightAt(FAIR_CENTER.x, FAIR_CENTER.z), FAIR_CENTER.z);
       avatars.set(sid, a);
       if (isSelf) {
         localAvatar = a;
@@ -270,6 +275,7 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
       a.dispose();
       avatars.delete(sid);
       appliedOutfitFor.delete(sid);
+      groundYBySid.delete(sid);
       if (localAvatar === a) localAvatar = null;
     }
   }
@@ -748,7 +754,18 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
             const interp = interpById.get(p.id);
             if (interp) { px = interp.x; py = interp.y; pa = interp.aim; }
           }
-          a.setPosition(px, 0, py);
+          // Walkable-floor elevation ("levels"): raised platforms (plaza
+          // plinth, monument plot, podium tiers, amphitheater stage) lift
+          // the avatar. Smoothed so stepping onto a rim reads as a quick
+          // climb, not a pop; same shared data for self + remotes so all
+          // clients agree.
+          const gTarget = groundHeightAt(px, py);
+          const gPrev = groundYBySid.get(p.id);
+          const gy = gPrev === undefined
+            ? gTarget
+            : gPrev + (gTarget - gPrev) * (1 - Math.exp(-dt / 0.08));
+          groundYBySid.set(p.id, gy);
+          a.setPosition(px, gy, py);
           a.setRotationY(pa);
           // Walking animation tick — uses Δpos between setPosition calls to
           // detect motion, so this MUST run after setPosition every frame
@@ -787,7 +804,9 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
             // actually see the sky, the gate top, and tall objects
             // above the avatar without hitting the ground-clamp limit.
             // Capped so it can't run away into orbit.
-            const baseTargetY = 1.2;
+            // Ride the smoothed ground Y so standing on a raised platform
+            // lifts the camera with the avatar instead of aiming at its feet.
+            const baseTargetY = 1.2 + gy;
             const lookUpBoost = Math.min(8, Math.max(0, cam.beta - Math.PI / 2) * 8);
             const targetY = baseTargetY + lookUpBoost;
             if (isMovingInput) {
