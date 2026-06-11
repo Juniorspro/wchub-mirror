@@ -544,6 +544,38 @@ export function decalPositions(J: Joints, out: Float32Array,
   }
 }
 
+// mezcla de poses articulación por articulación
+export function mixJoints(a: Joints, b: Joints, m: number): Joints {
+  const o = J0();
+  for (const k of Object.keys(o) as Array<keyof Joints>) {
+    o[k] = a[k] * (1 - m) + b[k] * m;
+  }
+  return o;
+}
+
+// pose SENTADO (banco ~0.45 de alto): muslos horizontales, canillas
+// abajo, leve reclinado, manos al regazo, mirada paseandera.
+export function poseSit(t: number): Joints {
+  const J = J0();
+  J.breath = 0.5 + 0.5 * Math.sin(t * 1.05);
+  J.hipFwdL = 1.45;
+  J.hipFwdR = 1.45;
+  J.kneeL = 1.5;
+  J.kneeR = 1.5;
+  J.ankleL = 0.15;
+  J.ankleR = 0.15;
+  J.pelvisY = -0.075;
+  J.spineFwd = -0.06;
+  J.shFwdL = 0.3;
+  J.shFwdR = 0.3;
+  J.elbowL = 0.55;
+  J.elbowR = 0.55;
+  J.headTurn = Math.sin(t * 0.3) * 0.25;
+  J.headNod = Math.sin(t * 0.5) * 0.04;
+  J.jaw = 0.04 + 0.03 * Math.sin(t * 1.05);
+  return J;
+}
+
 // outfit por vértice (remera blanca / pantalón negro / zapas verdes)
 export function paintOutfit(colors: Float32Array, remera: V3, pantalon: V3, zapas: V3, piel: V3): void {
   const meta = FIG.meta as number[];

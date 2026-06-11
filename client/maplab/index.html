@@ -78,6 +78,32 @@
       letter-spacing: 0.1em; cursor: pointer;
     }
     #ienter:disabled { background: #4a5068; color: #9aa0b8; cursor: not-allowed; }
+    /* ── sentarse + emotes ── */
+    #sitbtn, #emobtn {
+      position: fixed; z-index: 12; display: none;
+      width: 58px; height: 58px; border-radius: 50%;
+      background: rgba(16, 32, 74, 0.9); border: 2px solid #e8c84a;
+      color: #f3ecd9; font: 700 22px ui-monospace, monospace;
+      align-items: center; justify-content: center; cursor: pointer;
+      touch-action: none; user-select: none; -webkit-user-select: none;
+    }
+    #emobtn { right: 18px; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); }
+    #sitbtn { right: 88px; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); font-size: 24px; }
+    #emopanel {
+      position: fixed; right: 12px; z-index: 13; display: none;
+      bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
+      background: rgba(16, 32, 74, 0.94); border: 2px solid #e8c84a;
+      border-radius: 14px; padding: 10px;
+      grid-template-columns: repeat(6, 44px); gap: 6px;
+      touch-action: none;
+    }
+    .emo {
+      width: 44px; height: 44px; border-radius: 10px; border: 1px solid #ffffff22;
+      background: #0d1220; font-size: 24px; display: flex;
+      align-items: center; justify-content: center; cursor: pointer;
+      user-select: none; -webkit-user-select: none;
+    }
+    .emo:active { background: #e8c84a; }
     /* ── joystick táctil ── */
     #joy {
       position: fixed; left: 18px; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
@@ -99,6 +125,9 @@
   <div id="scan"></div>
   <div id="hint">arrastrá para girar · pellizcá para zoom</div>
   <div id="joy"><div id="knob"></div></div>
+  <div id="sitbtn">🪑</div>
+  <div id="emobtn">😀</div>
+  <div id="emopanel"></div>
   <div id="phint" style="display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 152px);z-index:11;background:#10204aee;border:2px solid #e8c84a;border-radius:10px;padding:8px 14px;font:700 12px/1.3 ui-monospace,'Courier New',monospace;color:#f3ecd9;letter-spacing:0.04em;pointer-events:none;max-width:88vw;text-align:center"></div>
   <div id="intro">
     <div id="ibox">

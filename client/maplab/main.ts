@@ -51,7 +51,7 @@ import coverJugglerUrl from '../src/assets/sprite/sprite_portal-cover-juggler_fe
 import coverRacingUrl from '../src/assets/sprite/sprite_portal-cover-racing_c7b1b5.webp';
 import portraitUrl from '../src/assets/portrait/portrait_poster-worldcup-portrait_69e0b1.webp';
 // el humanoide esculpido del viewer (figlab) porteado: malla por frame
-import { FIG, buildFigure, J0, poseCartoon, paintOutfit, decalPositions, type Joints } from './figura';
+import { FIG, buildFigure, J0, poseCartoon, poseSit, mixJoints, paintOutfit, decalPositions, type Joints } from './figura';
 
 // ─── Constantes del layout (portables a world.ts) ───────────────────────
 const RING_RADIUS = 17.5;        // radio del anillo de tiendas
@@ -227,12 +227,12 @@ function buildNeonIcon(scene: Scene, id: string, spinners: Spinner[], parent: Tr
 
 // Farol de caminito: poste de madera + cabeza cálida que brilla.
 function buildLamp(scene: Scene, x: number, z: number, woodDarkMat: StandardMaterial, warmMat: StandardMaterial): void {
-  const post = MeshBuilder.CreateCylinder('lamp-post', { diameter: 0.14, height: 2.7, tessellation: 8 }, scene);
-  post.position.set(x, 1.35, z);
+  const post = MeshBuilder.CreateCylinder('lamp-post', { diameter: 0.16, height: 3.4, tessellation: 8 }, scene);
+  post.position.set(x, 1.7, z);
   post.material = woodDarkMat;
   post.isPickable = false;
-  const head = MeshBuilder.CreateSphere('lamp-head', { diameter: 0.36, segments: 10 }, scene);
-  head.position.set(x, 2.8, z);
+  const head = MeshBuilder.CreateSphere('lamp-head', { diameter: 0.42, segments: 10 }, scene);
+  head.position.set(x, 3.55, z);
   head.material = warmMat;
   head.isPickable = false;
 }
@@ -380,6 +380,7 @@ function buildCancha(scene: Scene, cx: number, cz: number, woodMat: StandardMate
     tri.isPickable = false;
   }
   for (const bz of [-3.5, 3.5]) {
+    BENCHES.push({ x: cx - W / 2 - 1.6, z: cz + bz, yaw: Math.PI / 2 });
     const seat = MeshBuilder.CreateBox('cancha-bench', { width: 0.5, height: 0.1, depth: 2.4 }, scene);
     seat.position.set(cx - W / 2 - 1.6, 0.45, cz + bz);
     seat.material = woodMat;
@@ -1111,6 +1112,89 @@ const INPUT = { kx: 0, ky: 0, jx: 0, jy: 0 };
 // puertas-portal del estadio (hint de cercanía + pulso)
 const PORTAL_DOORS: Array<{ x: number; z: number; url: string; label: string; mat: StandardMaterial }> = [];
 let PHINT: HTMLElement | null = null;
+// bancos con animación de sentarse
+const BENCHES: Array<{ x: number; z: number; yaw: number }> = [];
+let NEAR_BENCH: { x: number; z: number; yaw: number } | null = null;
+const SIT = { amt: 0, target: 0 };
+// emotes: 24 emojis con gesto + globito sobre la cabeza
+const EMOTES = ['😀','😂','😍','😎','🤔','😭','😡','🥳','👍','👎','👏','🙌','💪','🫡','❤️','🔥','⚽','🏆','🎉','😴','🤯','🙏','💃','🤝'];
+const EMOTE = { start: -10, type: 0 };
+let emoPlane: Mesh | null = null;
+let emoTex: DynamicTexture | null = null;
+
+// gesto del emote sobre la pose (envolvente con entrada/salida suave)
+function applyGesture(J: Joints, type: number, e: number, t: number): void {
+  const env = Math.min(1, e / 0.25, (2.4 - e) / 0.45);
+  if (env <= 0) return;
+  switch (type) {
+    case 0: // saludo
+      J.shAbdR += 2.1 * env;
+      J.elbowR += (0.5 + 0.5 * Math.sin(t * 13)) * env;
+      break;
+    case 1: // salto festejo
+      J.pelvisY += Math.abs(Math.sin(e * 9)) * 0.14 * env;
+      J.shAbdL += 2.2 * env;
+      J.shAbdR += 2.2 * env;
+      break;
+    case 2: // aplauso
+      J.shFwdL += 1.1 * env;
+      J.shFwdR += 1.1 * env;
+      J.elbowL += (0.9 + 0.35 * Math.sin(t * 14)) * env;
+      J.elbowR += (0.9 - 0.35 * Math.sin(t * 14)) * env;
+      break;
+    case 3: // bailecito
+      J.twist += Math.sin(t * 7) * 0.5 * env;
+      J.swayX += Math.sin(t * 7) * 0.05 * env;
+      J.shAbdL += 0.9 * env;
+      J.shAbdR += 0.9 * env;
+      J.elbowL += 0.8 * env;
+      J.elbowR += 0.8 * env;
+      break;
+    case 4: // reverencia
+      J.spineFwd += 0.75 * env;
+      J.headNod += 0.3 * env;
+      break;
+    default: // brazos arriba
+      J.shAbdL += 2.3 * env;
+      J.shAbdR += 2.3 * env;
+      J.headNod -= 0.15 * env;
+      break;
+  }
+}
+
+// globito de emoji sobre la cabeza (textura repintable)
+function showEmote(scene: Scene, idx: number): void {
+  if (!PLAYER) return;
+  if (!emoPlane) {
+    emoTex = new DynamicTexture('emo-tex', { width: 128, height: 128 }, scene, false);
+    emoTex.hasAlpha = true;
+    const m = new StandardMaterial('emo-mat', scene);
+    m.diffuseTexture = emoTex;
+    m.emissiveColor = new Color3(1, 1, 1);
+    m.useAlphaFromDiffuseTexture = true;
+    m.disableLighting = true;
+    m.backFaceCulling = false;
+    emoPlane = MeshBuilder.CreatePlane('emo-plane', { width: 0.85, height: 0.85 }, scene);
+    emoPlane.parent = PLAYER.root;
+    emoPlane.billboardMode = Mesh.BILLBOARDMODE_ALL;
+    emoPlane.material = m;
+    emoPlane.isPickable = false;
+    emoPlane.isVisible = false;
+  }
+  const c = (emoTex as DynamicTexture).getContext() as unknown as CanvasRenderingContext2D;
+  c.save();
+  c.clearRect(0, 0, 128, 128);
+  c.translate(0, 128);
+  c.scale(1, -1); // flip Y de DynamicTexture sin mipmaps
+  c.font = '96px serif';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText(EMOTES[idx], 64, 70);
+  c.restore();
+  (emoTex as DynamicTexture).update(false);
+  EMOTE.start = performance.now() / 1000;
+  EMOTE.type = idx % 6;
+}
 const DEC_U = 32;
 const DEC_V = 24;
 const DEC_PHI = 1.1;
@@ -1338,6 +1422,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const bench = new TransformNode(`bench-${i}`, scene);
     bench.position.set(bx, 0, bz);
     bench.rotation.y = Math.atan2(-bx, -bz);
+    BENCHES.push({ x: bx, z: bz, yaw: Math.atan2(-bx, -bz) });
     const seat = MeshBuilder.CreateBox('bench-seat', { width: 1.8, height: 0.1, depth: 0.45 }, scene);
     seat.parent = bench;
     seat.position.y = 0.45;
@@ -1510,6 +1595,29 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   buildEstadio(scene);
   buildCerca(scene);
 
+  // bancos extra en el césped del patio, mirando al monumento
+  for (const a of [0.35, 1.25, 1.9, 2.8]) {
+    const bx = Math.cos(a) * 10.6;
+    const bz = Math.sin(a) * 10.6;
+    const yaw = Math.atan2(-bx, -bz);
+    BENCHES.push({ x: bx, z: bz, yaw });
+    const node = new TransformNode('bench-lawn', scene);
+    node.position.set(bx, 0, bz);
+    node.rotation.y = yaw;
+    const seat = MeshBuilder.CreateBox('bench-lawn-seat', { width: 1.8, height: 0.1, depth: 0.45 }, scene);
+    seat.parent = node;
+    seat.position.y = 0.45;
+    seat.material = woodMat;
+    seat.isPickable = false;
+    for (const lx of [-0.7, 0.7]) {
+      const leg = MeshBuilder.CreateBox('bench-lawn-leg', { width: 0.12, height: 0.45, depth: 0.4 }, scene);
+      leg.parent = node;
+      leg.position.set(lx, 0.22, 0);
+      leg.material = woodDarkMat;
+      leg.isPickable = false;
+    }
+  }
+
   // ─── Carteles del juego original ──────────────────────────────────────
   // Tablón de fixtures camino a la cancha + láminas del mundial en stands.
   buildFixtureBoard(scene, 28, 11, Math.atan2(-28, -11), woodDarkMat);
@@ -1640,7 +1748,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const tz = Math.sin(a) * r;
     if (Math.abs(tx) < 3.5 && tz < -PROM_INNER) continue; // no tapar el sendero sur
     if (nearPOI(tx, tz)) continue;
-    const s = 4.2 + rand() * 2.2;
+    const s = 7.2 + rand() * 3.8; // robles grandes (piden presencia)
     for (const yaw of [0, Math.PI / 2]) {
       const plane = MeshBuilder.CreatePlane(`oak-${i}-${yaw > 0 ? 'b' : 'a'}`, { width: s, height: s }, scene);
       plane.position.set(tx, s / 2 - 0.05, tz);
@@ -1675,7 +1783,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     if (Math.abs(px) < 2.2 && pz < 0) continue;                 // no en el sendero
     if (r < 7.6) continue;                                      // no entre banderas/monumento
     if (nearPOI(px, pz)) continue;
-    const s = 0.55 + rand() * 0.5;
+    const s = 0.75 + rand() * 0.6;
     const yaw = rand() * Math.PI;
     Quaternion.RotationYawPitchRollToRef(yaw, 0, 0, scratchQ);
     Matrix.ComposeToRef(new Vector3(s, s, s), scratchQ, new Vector3(px, s / 2 - 0.04, pz), scratchM);
@@ -1717,7 +1825,8 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       const len = Math.hypot(dx, dy);
       if (len > 1) { dx /= len; dy /= len; }
       const moving = len > 0.08;
-      if (moving) {
+      if (moving && SIT.target === 1) SIT.target = 0; // moverse = pararse
+      if (moving && SIT.amt < 0.3) {
         const fx = camera.target.x - camera.position.x;
         const fz = camera.target.z - camera.position.z;
         const fl = Math.hypot(fx, fz) || 1;
@@ -1737,9 +1846,43 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         PLAYER.root.rotation.y = PLAYER.yaw;
         PLAYER.walkPh += dt * 7.5 * Math.min(1, len);
       }
+      // bancos: detectar cercanía + botón de sentarse
+      NEAR_BENCH = null;
+      for (const b of BENCHES) {
+        if (Math.hypot(PLAYER.root.position.x - b.x, PLAYER.root.position.z - b.z) < 1.9) {
+          NEAR_BENCH = b;
+          break;
+        }
+      }
+      const sitBtn = document.getElementById('sitbtn');
+      if (sitBtn) sitBtn.style.display = (NEAR_BENCH && SIT.target === 0) ? 'flex' : 'none';
+      // sentarse: imán al asiento + mezcla de pose
+      SIT.amt += (SIT.target - SIT.amt) * Math.min(1, dt * 6);
+      if (SIT.target === 1 && NEAR_BENCH) {
+        const k = Math.min(1, dt * 8);
+        PLAYER.root.position.x += (NEAR_BENCH.x - PLAYER.root.position.x) * k;
+        PLAYER.root.position.z += (NEAR_BENCH.z - PLAYER.root.position.z) * k;
+        let dY = NEAR_BENCH.yaw - PLAYER.yaw;
+        while (dY > Math.PI) dY -= Math.PI * 2;
+        while (dY < -Math.PI) dY += Math.PI * 2;
+        PLAYER.yaw += dY * k;
+        PLAYER.root.rotation.y = PLAYER.yaw;
+      }
       // mezcla idle↔caminata suave + FK → regenerar la malla esculpida
-      PLAYER.moveAmt += ((moving ? Math.min(1, len) : 0) - PLAYER.moveAmt) * Math.min(1, dt * 8);
-      const J: Joints = poseCartoon(t, PLAYER.walkPh, PLAYER.moveAmt);
+      PLAYER.moveAmt += ((moving && SIT.amt < 0.3 ? Math.min(1, len) : 0) - PLAYER.moveAmt) * Math.min(1, dt * 8);
+      let J: Joints = poseCartoon(t, PLAYER.walkPh, PLAYER.moveAmt);
+      if (SIT.amt > 0.01) J = mixJoints(J, poseSit(t), SIT.amt);
+      // emote: gesto + globito sobre la cabeza
+      const eT = t - EMOTE.start;
+      if (eT >= 0 && eT < 2.4) {
+        applyGesture(J, EMOTE.type, eT, t);
+        if (emoPlane) {
+          emoPlane.isVisible = true;
+          emoPlane.position.y = 1.95 + eT * 0.22 - (SIT.amt > 0.5 ? 0.45 : 0);
+        }
+      } else if (emoPlane) {
+        emoPlane.isVisible = false;
+      }
       buildFigure(J);
       PLAYER.mesh.updateVerticesData('position', FIG.pos as Float32Array);
       VertexData.ComputeNormals(FIG.pos, FIG.idx, PLAYER.normals);
@@ -1883,6 +2026,7 @@ function boot(): void {
       PLAYER = buildPlayer(scene, facecv, nombre);
       $id('intro').style.display = 'none';
       $id('joy').style.display = 'block';
+      $id('emobtn').style.display = 'flex';
       const cam = scene.activeCamera as ArcRotateCamera;
       cam.alpha = -Math.PI / 2;
       cam.beta = 1.22;
@@ -1928,6 +2072,34 @@ function boot(): void {
     };
     joy.addEventListener('pointerup', joyEnd);
     joy.addEventListener('pointercancel', joyEnd);
+
+    // ─── sentarse + panel de 24 emotes ──────────────────────────────────
+    const sitBtn = $id('sitbtn');
+    sitBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (NEAR_BENCH) SIT.target = 1;
+      sitBtn.style.display = 'none';
+    });
+    const emoBtn = $id('emobtn');
+    const emoPanel = $id('emopanel');
+    for (let i = 0; i < EMOTES.length; i++) {
+      const b = document.createElement('div');
+      b.className = 'emo';
+      b.textContent = EMOTES[i];
+      b.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showEmote(scene, i);
+        emoPanel.style.display = 'none';
+      });
+      emoPanel.appendChild(b);
+    }
+    emoBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      emoPanel.style.display = emoPanel.style.display === 'grid' ? 'none' : 'grid';
+    });
 
     // ─── teclado (desktop) ──────────────────────────────────────────────
     const keys = new Set<string>();
