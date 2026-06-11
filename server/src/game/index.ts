@@ -23,8 +23,16 @@ export function addPlayer(
   opts: { name?: string; username?: string; textureItems?: string; accessoryItems?: string },
 ): void {
   const p = new Player();
-  // Accept either `name` or `username` from join opts for backward compat.
-  p.username = String(opts?.username ?? opts?.name ?? "anon").slice(0, 16);
+  // Host-App identity (token + platform gameId in join opts, see client
+  // bridge.ts getAccessToken/getGameId). decode-only + per-room WeakMap
+  // registry — the token NEVER enters the schema (it would broadcast to
+  // every client). Browser guests have no token → null → no-op; they play
+  // fine, nothing persists on their behalf.
+  const identity = decodeIdentity(opts);
+  // Display name: the token's userName wins (synced to the real account,
+  // can't drift from what the client claims); plain `name`/`username`
+  // opts cover browser guests and older clients.
+  p.username = String(identity?.userName || opts?.username || opts?.name || "anon").slice(0, 16);
   // Optional initial outfit carried in joinOpts (so a returning player can
   // walk in already wearing what they had). Server still validates on
   // explicit `equip` messages — see messages.ts.
@@ -33,12 +41,7 @@ export function addPlayer(
   // ids carried back in by returning players.
   if (typeof opts?.textureItems === "string") p.textureItems = opts.textureItems.slice(0, 2800);
   if (typeof opts?.accessoryItems === "string") p.accessoryItems = opts.accessoryItems.slice(0, 256);
-  // Host-App identity (token + platform gameId in join opts, see client
-  // bridge.ts getAccessToken/getGameId). decode-only + per-room WeakMap
-  // registry — the token NEVER enters the schema (it would broadcast to
-  // every client). Browser guests have no token → null → no-op; they play
-  // fine, nothing persists on their behalf.
-  attachIdentity(state, sessionId, decodeIdentity(opts));
+  attachIdentity(state, sessionId, identity);
   spawnAt(p);
   state.players.set(sessionId, p);
 }

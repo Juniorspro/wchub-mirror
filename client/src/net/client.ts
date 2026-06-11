@@ -215,12 +215,16 @@ export class NetClient {
   /** 连接 Colyseus 房间。token/gameId 搭车 join opts（服务端 decodeIdentity 用，做身份/存档）。
    *  `outfit` also rides the join opts: server addPlayer accepts
    *  textureItems/accessoryItems so a returning player walks in already
-   *  wearing their persisted outfit instead of flashing the default. */
+   *  wearing their persisted outfit instead of flashing the default.
+   *  `name` is the display name (host-App username when available) — the
+   *  server prefers the token's userName over this when a token decodes,
+   *  so inside the App the name can't drift from the real account. */
   async connect(
     roomCode: string,
     token?: string,
     gameId?: number,
     outfit?: { textureItems: string; accessoryItems: string },
+    name?: string,
   ): Promise<void> {
     this.disconnect();
     this.roomCode = roomCode;
@@ -238,7 +242,8 @@ export class NetClient {
         : `${proto}//${loc.host}/rooms/${encodeURIComponent(roomCode)}`;
 
       const client = new Client(endpoint);
-      const opts: Record<string, unknown> = { code: roomCode, name: 'player' };
+      const displayName = (name ?? '').trim().slice(0, 16) || 'player';
+      const opts: Record<string, unknown> = { code: roomCode, name: displayName };
       if (token) opts.token = token;
       if (gameId != null) opts.gameId = gameId;
       if (outfit) {
@@ -281,7 +286,10 @@ export class NetClient {
       this.meta = {
         selfId: room.sessionId,
         selfColor: '',
-        username: 'player',
+        // Seed with the requested display name; tryFireHello overwrites it
+        // with the server's roster row (authoritative — the server may have
+        // preferred the token's userName over what we sent).
+        username: displayName,
         mapW: MAP_W,
         mapH: MAP_H,
         playerSpeed: PLAYER_SPEED,

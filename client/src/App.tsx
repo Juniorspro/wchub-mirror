@@ -19,7 +19,7 @@ import { startGame, type GameRuntimeHandle } from './babylon/game';
 import { Hud } from './babylon/hud';
 import { CameraDragZone, VirtualJoystick } from './babylon/touch';
 import { Landing, EnteringVeil } from './Landing';
-import { getAccessToken, getGameId } from './babylon/bridge';
+import { getAccessToken, getGameId, identity } from './babylon/bridge';
 import {
   getGameSnapshot,
   hydrateEconomyFromStorage,
@@ -104,16 +104,22 @@ export default function App() {
         accessoryItems: o.accessoryItemIds.join(','),
       };
     };
-    // Host-App identity for server-side persistence (chat log, save games):
-    // token + platform gameId ride the join opts so the server can
-    // decodeIdentity() and write game_storage on our behalf. Fetched ONCE
-    // before the first attempt (the bridge resolves null instantly outside
-    // the App → guest session, nothing persisted) and reused on reconnects.
-    let identityOpts: { token?: string; gameId?: number } | null = null;
+    // Host-App identity for server-side persistence (chat log, save games)
+    // AND the display name: token + platform gameId + username ride the
+    // join opts so the server can decodeIdentity() / show the real account
+    // name instead of the "player" placeholder. Fetched ONCE before the
+    // first attempt (the bridge resolves null instantly outside the App →
+    // guest session named "player", nothing persisted) and reused on
+    // reconnects.
+    let identityOpts: { token?: string; gameId?: number; name?: string } | null = null;
     const fetchIdentityOpts = async () => {
       if (identityOpts) return identityOpts;
-      const [token, gameId] = await Promise.all([getAccessToken(), getGameId()]);
-      identityOpts = { token: token ?? undefined, gameId: gameId ?? undefined };
+      const [token, gameId, card] = await Promise.all([getAccessToken(), getGameId(), identity()]);
+      identityOpts = {
+        token: token ?? undefined,
+        gameId: gameId ?? undefined,
+        name: card?.username || undefined,
+      };
       return identityOpts;
     };
     const connectLoop = async (net: NetClient) => {
@@ -123,7 +129,7 @@ export default function App() {
       for (let attempt = 0; !disposed; attempt++) {
         // Outfit re-read per attempt: a reconnect after the player changed
         // clothes should rejoin wearing the CURRENT outfit.
-        await net.connect(readRoomCode(), ident.token, ident.gameId, currentOutfit());
+        await net.connect(readRoomCode(), ident.token, ident.gameId, currentOutfit(), ident.name);
         if (disposed) {
           net.disconnect();
           break;
