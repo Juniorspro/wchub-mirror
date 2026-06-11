@@ -1,0 +1,51 @@
+{
+  "key": "glasses_browline",
+  "kind": "prop",
+  "provider": "tripo",
+  "model": "v2.5-20250123",
+  "prompt": "a single pair of browline eyeglasses, thick dark top brow bar with thin lower rims, retro clubmaster style, low-poly stylized toon game asset, clean simple geometry",
+  "negative": null,
+  "seed": null,
+  "face_limit": 2000,
+  "face_count": null,
+  "file_size_bytes": 358652,
+  "optimization": {
+    "applied": true,
+    "before_bytes": 641252,
+    "after_bytes": 358652,
+    "texture_size": 1024,
+    "texture_format": "jpeg",
+    "quantize": true
+  },
+  "texture": false,
+  "pbr": true,
+  "rigged": false,
+  "rig_type": null,
+  "t_pose": false,
+  "animations": [],
+  "stage_history": [
+    {
+      "stage": "text_to_model",
+      "task_id": "f40cbb28-f2c7-4c82-8eda-120fe25fe263",
+      "status": "success"
+    }
+  ],
+  "mesh_task_id": "f40cbb28-f2c7-4c82-8eda-120fe25fe263",
+  "final_task_id": "f40cbb28-f2c7-4c82-8eda-120fe25fe263",
+  "base_url": "https://api.tripo3d.ai/v2/openapi",
+  "original_prompt": "a single pair of browline eyeglasses, thick dark top brow bar with thin lower rims, retro clubmaster style, low-poly stylized toon game asset, clean simple geometry",
+  "effective_prompt": "a single pair of browline eyeglasses, thick dark top brow bar with thin lower rims, retro clubmaster style, low-poly stylized toon game asset, clean simple geometry",
+  "prompt_was_rewritten": false,
+  "original_negative": null,
+  "effective_negative": null,
+  "input_mode": "text_to_model",
+  "image_hash": null,
+  "image_url": null,
+  "multiview_hash": null,
+  "multiview_views": null,
+  "image_type": null,
+  "auto_reference": {
+    "used": false
+  },
+  "generated_at": "2026-06-11T05:16:04.886Z"
+}

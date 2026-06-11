@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(bun --version)",
-      "Bash(npm --version)"
+      "Bash(npm --version)",
+      "PowerShell(Test-Path \"C:\\\\Users\\\\Duy\\\\Downloads\\\\colosseum-main.zip\"; \\(Get-Item \"C:\\\\Users\\\\Duy\\\\Downloads\\\\colosseum-main.zip\"\\).Length)"
     ]
   }
 }

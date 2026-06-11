@@ -1,0 +1,51 @@
+{
+  "key": "glasses_heart",
+  "kind": "prop",
+  "provider": "tripo",
+  "model": "v2.5-20250123",
+  "prompt": "a single pair of heart-shaped sunglasses, playful rounded heart lenses, fun fashion eyewear, low-poly stylized toon game asset, clean simple geometry",
+  "negative": null,
+  "seed": null,
+  "face_limit": 2000,
+  "face_count": null,
+  "file_size_bytes": 266704,
+  "optimization": {
+    "applied": true,
+    "before_bytes": 497340,
+    "after_bytes": 266704,
+    "texture_size": 1024,
+    "texture_format": "jpeg",
+    "quantize": true
+  },
+  "texture": false,
+  "pbr": true,
+  "rigged": false,
+  "rig_type": null,
+  "t_pose": false,
+  "animations": [],
+  "stage_history": [
+    {
+      "stage": "text_to_model",
+      "task_id": "edc2b7ae-43da-44b6-9c72-a8bcf9bd6b00",
+      "status": "success"
+    }
+  ],
+  "mesh_task_id": "edc2b7ae-43da-44b6-9c72-a8bcf9bd6b00",
+  "final_task_id": "edc2b7ae-43da-44b6-9c72-a8bcf9bd6b00",
+  "base_url": "https://api.tripo3d.ai/v2/openapi",
+  "original_prompt": "a single pair of heart-shaped sunglasses, playful rounded heart lenses, fun fashion eyewear, low-poly stylized toon game asset, clean simple geometry",
+  "effective_prompt": "a single pair of heart-shaped sunglasses, playful rounded heart lenses, fun fashion eyewear, low-poly stylized toon game asset, clean simple geometry",
+  "prompt_was_rewritten": false,
+  "original_negative": null,
+  "effective_negative": null,
+  "input_mode": "text_to_model",
+  "image_hash": null,
+  "image_url": null,
+  "multiview_hash": null,
+  "multiview_views": null,
+  "image_type": null,
+  "auto_reference": {
+    "used": false
+  },
+  "generated_at": "2026-06-11T05:14:09.115Z"
+}

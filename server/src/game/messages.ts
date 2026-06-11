@@ -47,6 +47,8 @@ const MAX_LOOK_LEN = 2600;
 const LEGAL_ACCESSORY_ITEM_IDS = new Set<string>([
   "hat-cap", "hat-top-hat", "hat-beanie", "hat-wizard",
   "glasses-round", "glasses-shades",
+  // GLB-backed glasses (see client items.ts GLB_GLASSES)
+  "glasses-aviator", "glasses-cateye", "glasses-heart", "glasses-sport", "glasses-browline",
   "scarf-red", "scarf-mustard",
   "backpack-standard",
   // Facial-expression tokens — not mesh accessories; the client's

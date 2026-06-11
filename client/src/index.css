@@ -83,6 +83,16 @@ html.game-rotated .game-shell {
   0%, 100% { opacity: 0.2; }
   50% { opacity: 0.4; }
 }
+/* Landing screen: gentle vertical drift for the title-screen floaters and
+   the Enter button; one-shot fade for the post-enter veil. */
+@keyframes landing-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9px); }
+}
+@keyframes landing-veil-out {
+  0%, 45% { opacity: 1; }
+  100% { opacity: 0; }
+}
 
 .animate-shake      { animation: shake 0.3s ease-out; }
 .animate-float-up   { animation: float-up 0.8s ease-out forwards; }

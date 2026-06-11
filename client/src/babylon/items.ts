@@ -14,6 +14,7 @@
 import { Color3, Mesh, MeshBuilder, StandardMaterial, Vector4, type Scene, type TransformNode } from '@babylonjs/core';
 import { createStandardMaterial } from './helpers';
 import { getPatternTexture, patternDominantColor, patternKey, uniformDesign, type GarmentDesign, type Pattern } from './textures';
+import { instantiateAccessoryModel, type AccessoryFit } from './accessoryModels';
 import { ASSETS } from '../assets';
 
 export type BodyRegion = 'head' | 'torso' | 'arms' | 'legs' | 'feet';
@@ -1236,6 +1237,33 @@ export const WARDROBE_TEXTURE_ITEMS: TextureItemDef[] = [
 
 // (Jersey catalog moved above WARDROBE_TEXTURE_ITEMS for const-hoisting.)
 
+// ─── GLB-backed glasses ──────────────────────────────────────────────────────
+// Generated as texture-less meshes via rezona-pgc-tools-gen-model-3d (Tripo
+// text-to-3D) and loaded through accessoryModels.ts (load-once → clone-per-
+// avatar). The GLB supplies the frame SHAPE only; the solid frame color is
+// applied in code (AccessoryFit.frameColor) so these stay stylistically in
+// line with the procedural glasses above. Each `fit` seats the auto-normalised
+// mesh on the head_front socket (between the eyes) — tune targetSize / offsets
+// / rotation per model after a visual check.
+interface GlbGlassesDef { id: string; label: string; assetKey: string; fit: AccessoryFit; }
+const GLB_GLASSES: readonly GlbGlassesDef[] = [
+  { id: 'glasses-aviator', label: 'Aviators', assetKey: 'glasses_aviator',
+    fit: { frameColor: '#5a5a64', targetSize: 0.52, yOffset: -0.03, zOffset: 0.02, rotY: Math.PI / 2 } },
+  { id: 'glasses-cateye', label: 'Cat-Eye', assetKey: 'glasses_cateye',
+    fit: { frameColor: '#22232a', targetSize: 0.52, yOffset: -0.03, zOffset: 0.02, rotY: Math.PI / 2 } },
+  { id: 'glasses-heart', label: 'Heart Shades', assetKey: 'glasses_heart',
+    fit: { frameColor: '#d94f8c', targetSize: 0.52, yOffset: -0.03, zOffset: 0.02, rotY: Math.PI / 2 } },
+  { id: 'glasses-sport', label: 'Sport Shades', assetKey: 'glasses_sport',
+    fit: { frameColor: '#1a1a1d', targetSize: 0.54, yOffset: -0.03, zOffset: 0.02, rotY: Math.PI / 2 } },
+  { id: 'glasses-browline', label: 'Browline', assetKey: 'glasses_browline',
+    fit: { frameColor: '#3a2a1a', targetSize: 0.5, yOffset: -0.03, zOffset: 0.02, rotY: Math.PI / 2 } },
+];
+
+/** ASSETS keys for every GLB-backed accessory. game.ts preloads these so the
+ *  clones are ready before the first equip (and re-applies outfits once they
+ *  finish loading). */
+export const GLB_ACCESSORY_KEYS: readonly string[] = GLB_GLASSES.map((g) => g.assetKey);
+
 // ─── Accessory builders ─────────────────────────────────────────────────────
 export const WARDROBE_ACCESSORY_ITEMS: AccessoryItemDef[] = [
   // Hats / glasses / scarves / backpack no longer go through Mesh.MergeMeshes
@@ -1451,6 +1479,16 @@ export const WARDROBE_ACCESSORY_ITEMS: AccessoryItemDef[] = [
       return [lensL, lensR, frame, templeL, templeR];
     },
   },
+  // GLB-backed glasses — frame shape from generated meshes (see GLB_GLASSES);
+  // appended right after the procedural glasses so they group under the same
+  // "Eyewear" stall category in the HUD.
+  ...GLB_GLASSES.map((g): AccessoryItemDef => ({
+    id: g.id,
+    label: g.label,
+    socket: 'head_front',
+    swatch: solid(g.fit.frameColor),
+    build: (scene, parent) => instantiateAccessoryModel(scene, parent, g.assetKey, g.fit),
+  })),
   // Scarves built as a STACK of thin horizontal torus rings — alternating
   // colors create clearly horizontal bands wrapping the neck (not a single
   // ring with a vertical hanging tail). A short side-flap suggests the

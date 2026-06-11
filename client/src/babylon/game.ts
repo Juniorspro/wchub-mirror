@@ -27,14 +27,12 @@ import { createGameAudio } from './audio';
 import { configureHardwareScaling, getCameraRelativeMoveXZ } from './helpers';
 import { RUNTIME_CONFIG } from './config';
 import { createSceneEntities, type SceneEntities, type StallDef } from './entities';
-import { createItemField, type ItemField } from './items';
+import { createItemField, GLB_ACCESSORY_KEYS, type ItemField } from './items';
+import { preloadAccessoryModels } from './accessoryModels';
 import {
   awardCoins,
   getGameSnapshot,
-  hydrateEconomyFromStorage,
-  hydratePresetsFromStorage,
   applyMilestoneReward,
-  resetGameStore,
   setBettingFixtures,
   setBettingPersonal,
   setBettingPool,
@@ -62,6 +60,7 @@ import {
   type GameWorldObjects,
 } from './world';
 import { advanceSelfPrediction, getInterpolatedPlayers, type NetClient } from '../net';
+import { hasNativeBridge, openGameDetail } from './bridge';
 import { cameraDragBus, isPortraitRotated, subscribeRotated } from './touch';
 import { groundHeightAt, normalizeInput } from '@shared';
 
@@ -181,9 +180,10 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
   // the player at roughly stride pace without the server dropping any.
   const JUMP_RETRIGGER_MS = 950;
 
-  resetGameStore();
-  hydratePresetsFromStorage();
-  hydrateEconomyFromStorage();
+  // NOTE: store reset + localStorage hydration (presets/economy/outfit)
+  // moved to App.tsx, BEFORE net.connect() — the join opts carry the
+  // restored outfit, so hydration must complete before connecting. A
+  // resetGameStore() here would wipe that restored state again.
 
   const net = runtimeContext?.net as NetClient | undefined;
   const audio = createGameAudio();
@@ -242,10 +242,15 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
   // Pushed (not assigned) because React StrictMode double-mounts the
   // world — tests scan all registered maps for the live one.
   if (import.meta.env.DEV) {
-    const w = window as unknown as { __avatarMaps?: unknown[]; __nets?: unknown[]; __inputs?: unknown[] };
+    const w = window as unknown as { __avatarMaps?: unknown[]; __nets?: unknown[]; __inputs?: unknown[]; __engines?: unknown[]; __scenes?: unknown[] };
     (w.__avatarMaps ??= []).push(avatars);
     (w.__nets ??= []).push(net);
     (w.__inputs ??= []).push(runtimeContext?.input);
+    // Engine + scene exposed so automated previews can pump the render loop
+    // manually (background tabs throttle rAF, so avatars never spawn / render
+    // otherwise — spawning happens inside engine.runRenderLoop).
+    (w.__engines ??= []).push(engine);
+    (w.__scenes ??= []).push(scene);
   }
 
   function ensureAvatar(sid: string, isSelf: boolean): CharacterAvatar {
@@ -352,6 +357,23 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
     // Stash so dispose can clear it
     (net as unknown as { _attachInterval?: ReturnType<typeof setInterval> })._attachInterval = attachInterval;
   }
+
+  // ─── Preload GLB accessory models (glasses) ───────────────────────────────
+  // The wardrobe build path is synchronous, so GLB-backed accessories clone a
+  // preloaded template (see accessoryModels.ts). Kick the load off up front;
+  // once it settles, re-apply every avatar's CURRENT outfit so any glasses
+  // equipped before the meshes finished loading now appear.
+  void preloadAccessoryModels(scene, GLB_ACCESSORY_KEYS).then(() => {
+    if (disposed) return;
+    for (const [sid, outfitKey] of appliedOutfitFor) {
+      const a = avatars.get(sid);
+      if (!a) continue;
+      const sep = outfitKey.indexOf('|');
+      const textureCsv = sep >= 0 ? outfitKey.slice(0, sep) : outfitKey;
+      const accessoryCsv = sep >= 0 ? outfitKey.slice(sep + 1) : '';
+      a.applyOutfit(csvToArray(textureCsv), csvToArray(accessoryCsv));
+    }
+  });
 
   const onResize = () => engine.resize();
   window.addEventListener('resize', onResize);
@@ -656,6 +678,7 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
       let nearbyPortalId: string | null = null;
       let nearbyPortalLabel = '';
       let nearbyPortalUrl = '';
+      let nearbyPortalGameId = 0;
       let nearbyPortalDist = Infinity;
       const myX = net.predictedSelf?.x ?? 0;
       const myZ = net.predictedSelf?.y ?? 0;
@@ -666,12 +689,25 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
           nearbyPortalId = portal.id;
           nearbyPortalLabel = portal.label;
           nearbyPortalUrl = portal.url;
+          nearbyPortalGameId = portal.gameId;
         }
       }
       const gHeld = !!input?.keys.has('g') || !!input?.keys.has('G');
-      if (gHeld && !gHeldLastFrame && nearbyPortalUrl && !portalRedirectFired) {
-        portalRedirectFired = true;
-        try { window.location.href = nearbyPortalUrl; } catch { /* ignore */ }
+      // Edge-detected G-press near a portal jumps to that game. Inside the
+      // host App we deep-link via the native bridge (openGameDetail) — this
+      // does NOT unload our WebView, so the player can return and jump again;
+      // hence no permanent latch on that path. On desktop/browser there's no
+      // bridge, so we fall back to a real navigation, which DOES leave the
+      // page → latch with portalRedirectFired to guard against a double-tap.
+      // A reserved/"Coming Soon" gate carries gameId 0 + empty url → no jump.
+      const portalLinked = nearbyPortalGameId > 0 || !!nearbyPortalUrl;
+      if (gHeld && !gHeldLastFrame && nearbyPortalId && portalLinked && !portalRedirectFired) {
+        if (hasNativeBridge() && nearbyPortalGameId > 0) {
+          openGameDetail(nearbyPortalGameId);
+        } else if (nearbyPortalUrl) {
+          portalRedirectFired = true;
+          try { window.location.href = nearbyPortalUrl; } catch { /* ignore */ }
+        }
       }
       gHeldLastFrame = gHeld;
 
@@ -698,6 +734,7 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
         || curSnap.nearbyPortalId !== nearbyPortalId
         || curSnap.nearbyPortalLabel !== nearbyPortalLabel
         || curSnap.nearbyPortalUrl !== nearbyPortalUrl
+        || curSnap.nearbyPortalGameId !== nearbyPortalGameId
         || curSnap.nearbySignpost !== newNearSignpost;
       if (changed) {
         setGameSnapshot({
@@ -709,6 +746,7 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
           nearbyPortalId,
           nearbyPortalLabel,
           nearbyPortalUrl,
+          nearbyPortalGameId,
           nearbySignpost: newNearSignpost,
         });
       }

@@ -212,8 +212,16 @@ export class NetClient {
     this.cbs = callbacks;
   }
 
-  /** 连接 Colyseus 房间。token/gameId 搭车 join opts（服务端 decodeIdentity 用，做身份/存档）。 */
-  async connect(roomCode: string, token?: string, gameId?: number): Promise<void> {
+  /** 连接 Colyseus 房间。token/gameId 搭车 join opts（服务端 decodeIdentity 用，做身份/存档）。
+   *  `outfit` also rides the join opts: server addPlayer accepts
+   *  textureItems/accessoryItems so a returning player walks in already
+   *  wearing their persisted outfit instead of flashing the default. */
+  async connect(
+    roomCode: string,
+    token?: string,
+    gameId?: number,
+    outfit?: { textureItems: string; accessoryItems: string },
+  ): Promise<void> {
     this.disconnect();
     this.roomCode = roomCode;
     this.setStatus('connecting');
@@ -233,6 +241,10 @@ export class NetClient {
       const opts: Record<string, unknown> = { code: roomCode, name: 'player' };
       if (token) opts.token = token;
       if (gameId != null) opts.gameId = gameId;
+      if (outfit) {
+        if (outfit.textureItems) opts.textureItems = outfit.textureItems;
+        if (outfit.accessoryItems) opts.accessoryItems = outfit.accessoryItems;
+      }
 
       let timedOut = false;
       const join = client.joinOrCreate(roomName, opts);

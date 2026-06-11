@@ -14,7 +14,7 @@
 // uses a NetClient handle threaded down from App.tsx.
 // ══════════════════════════════════════════════
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import type { Phase } from '@rezona/core/3d';
 import {
   clearBetResult,
@@ -45,6 +45,7 @@ import {
 import { drawDesignPanelsSync, patternSwatchCss, uniformDesign, type GarmentDesign, type Pattern } from './textures';
 import { STALL_LAYOUT, type StallCategory, type StallDef } from './entities';
 import { isPortraitRotated } from './touch';
+import { hasNativeBridge, openGameDetail } from './bridge';
 import type { NetClient } from '../net';
 
 interface HudProps {
@@ -193,6 +194,7 @@ export function Hud({ phaseRef: _phaseRef, net }: HudProps) {
         nearestOtherName={snap.nearestOtherName}
         portalLabel={snap.nearbyPortalLabel}
         portalUrl={snap.nearbyPortalUrl}
+        portalGameId={snap.nearbyPortalGameId}
       />
 
       {snap.lastBetResult ? (
@@ -338,6 +340,7 @@ function ActionCluster({
   nearestOtherName,
   portalLabel,
   portalUrl,
+  portalGameId,
 }: {
   net: NetClient | undefined;
   stallLabel: string;
@@ -347,16 +350,27 @@ function ActionCluster({
   nearestOtherName: string;
   portalLabel: string;
   portalUrl: string;
+  portalGameId: number;
 }) {
   const send = (type: string, payload?: unknown) => {
     if (net?.isOpen()) net.send(type, payload);
+  };
+  // Jump to the portal's game. Inside the host App, deep-link via the native
+  // bridge (keeps this WebView alive); on desktop/browser fall back to a URL
+  // navigation. Mirrors the G-key path in game.ts.
+  const enterPortal = () => {
+    if (hasNativeBridge()) {
+      openGameDetail(portalGameId);
+    } else if (portalUrl) {
+      try { window.location.href = portalUrl; } catch { /* ignore */ }
+    }
   };
   return (
     <div style={actionClusterStyle}>
       {portalUrl ? (
         <ActionButton
           emoji="🌀" label="Play" title={`Play ${portalLabel}`} accent
-          onClick={() => { try { window.location.href = portalUrl; } catch { /* ignore */ } }}
+          onClick={enterPortal}
         />
       ) : null}
       {stallLabel ? (
@@ -392,11 +406,26 @@ function ActionButton({
   active?: boolean;
   accent?: boolean;
 }) {
+  // Fire on POINTERDOWN, not click. The browser only synthesises a `click`
+  // for the PRIMARY pointer, so while the left thumb holds the movement
+  // joystick (the primary pointer) a second-finger tap here was non-primary
+  // and never produced a click — you couldn't move + jump (or wave/praise)
+  // at the same time. pointerdown fires for every pointer. We stop the touch
+  // from bubbling to the camera-drag/canvas layers, and keep a keyboard-only
+  // onClick fallback (keyboard-activated clicks report detail === 0).
+  const press = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    onClick();
+  };
+  const keyboardClick = (e: ReactMouseEvent<HTMLButtonElement>) => {
+    if (e.detail === 0) onClick();
+  };
   return (
     <button
       type="button" className="btn-press"
       title={title} aria-label={title}
-      onClick={onClick}
+      onPointerDown={press}
+      onClick={keyboardClick}
       style={{
         ...actionButtonStyle,
         ...(accent ? actionButtonAccentStyle : {}),

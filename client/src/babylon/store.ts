@@ -97,6 +97,9 @@ export interface GameStoreSnapshot {
   readonly nearbyPortalLabel: string;
   /** Redirect URL for the nearby portal. Empty when no portal nearby. */
   readonly nearbyPortalUrl: string;
+  /** Host-App game id of the nearby portal. Inside the App the HUD/G-key
+   *  deep-links here via bridge.openGameDetail(gameId); 0 when none nearby. */
+  readonly nearbyPortalGameId: number;
   /** Server-pushed match fixtures + live scores + pool sizes. Fed by
    *  NetClient on every `event:fixtures` / `event:bet-update` broadcast.
    *  HUD's MatchTicker + BettingPopup render from this. */
@@ -229,6 +232,7 @@ const DAILY_BONUS_MS = 24 * 60 * 60 * 1000;
 const LS_BALANCE = 'dressup-balance';
 const LS_OWNED   = 'dressup-owned';
 const LS_LAST_BONUS = 'dressup-last-bonus';
+const LS_OUTFIT = 'dressup-outfit';
 
 type GameStoreListener = (snapshot: GameStoreSnapshot) => void;
 
@@ -265,6 +269,7 @@ const initialSnapshot: GameStoreSnapshot = {
   nearbyPortalId: null,
   nearbyPortalLabel: '',
   nearbyPortalUrl: '',
+  nearbyPortalGameId: 0,
   bettingFixtures: [],
   myBets: new Map(),
   lastBetResult: null,
@@ -309,6 +314,13 @@ export function getGameSnapshot(): GameStoreSnapshot {
 
 export function setGameSnapshot(patch: Partial<GameStoreSnapshot>): void {
   snapshot = { ...snapshot, ...patch };
+  // Single chokepoint for outfit persistence: EVERY outfit mutation
+  // (toggle/equip/reset/preset/expression/custom look) lands here as an
+  // outfit patch, so the equipped outfit survives reloads without each
+  // mutator needing its own save call. resetGameStore() deliberately
+  // bypasses this function — a boot reset must not clobber the stored
+  // outfit before hydrateOutfitFromStorage() restores it.
+  if (patch.outfit) persistOutfit(patch.outfit);
   for (const listener of listeners) listener(snapshot);
 }
 
@@ -650,6 +662,58 @@ function persistEconomy(balance: number, ownedItems: readonly string[]): void {
     localStorage.setItem(LS_OWNED, ownedItems.join(','));
   } catch {
     // localStorage full / disabled — silently ignore.
+  }
+}
+
+function persistOutfit(outfit: OutfitState): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(LS_OUTFIT, JSON.stringify({
+      textureItemIds: outfit.textureItemIds,
+      accessoryItemIds: outfit.accessoryItemIds,
+    }));
+  } catch {
+    // localStorage full / disabled — silently ignore.
+  }
+}
+
+/** True for ids the avatar/outfit pipeline knows how to wear: catalog
+ *  texture/accessory items, `look:<slot>:<b64>` custom designs, and
+ *  `face-<expr>` expression tokens. Anything else in storage (stale ids
+ *  from removed items, corrupted writes) is dropped on restore. */
+function isWearableId(id: string, kind: 'texture' | 'accessory'): boolean {
+  if (kind === 'texture') {
+    return id.startsWith('look:') || WARDROBE_TEXTURE_ITEMS.some((i) => i.id === id);
+  }
+  return id.startsWith('face-') || WARDROBE_ACCESSORY_ITEMS.some((i) => i.id === id);
+}
+
+/** Run on app boot, AFTER resetGameStore(). Restores the last equipped
+ *  outfit so the avatar walks in wearing what the player left in — the
+ *  caller should hydrate BEFORE net.connect() so the join opts can carry
+ *  the same outfit to the server (see addPlayer in server/src/game).
+ *  Caps mirror the server's addPlayer slices (2800 / 256 chars) so a
+ *  restored outfit can never be silently truncated into a different one
+ *  by the server. */
+export function hydrateOutfitFromStorage(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const raw = localStorage.getItem(LS_OUTFIT);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as {
+      textureItemIds?: unknown;
+      accessoryItemIds?: unknown;
+    } | null;
+    if (!parsed || typeof parsed !== 'object') return;
+    const textures = (Array.isArray(parsed.textureItemIds) ? parsed.textureItemIds : [])
+      .filter((id): id is string => typeof id === 'string' && isWearableId(id, 'texture'));
+    const accessories = (Array.isArray(parsed.accessoryItemIds) ? parsed.accessoryItemIds : [])
+      .filter((id): id is string => typeof id === 'string' && isWearableId(id, 'accessory'));
+    if (textures.join(',').length > 2800 || accessories.join(',').length > 256) return;
+    if (textures.length === 0 && accessories.length === 0) return;
+    setOutfit(textures, accessories);
+  } catch {
+    // Corrupted / unreadable — keep the default outfit.
   }
 }
 

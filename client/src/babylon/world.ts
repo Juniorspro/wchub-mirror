@@ -18,6 +18,7 @@ import {
   Material,
   Mesh,
   MeshBuilder,
+  ParticleSystem,
   Quaternion,
   StandardMaterial,
   Texture,
@@ -144,13 +145,16 @@ const TRAIL_DEFS: ReadonlyArray<{ w: number; pts: ReadonlyArray<readonly [number
 export interface PortalGate {
   readonly id: string;
   readonly label: string;
+  /** Host-App game id. Inside the App WebView the portal deep-links here via
+   *  bridge.openGameDetail(gameId); `url` is only the desktop/browser fallback. */
+  readonly gameId: number;
   readonly url: string;
   /** Cover-image asset key registered in src/assets.ts. */
   readonly cover:
-    | 'portal-cover-adventure'
-    | 'portal-cover-puzzle'
+    | 'portal-cover-juggler'
+    | 'portal-cover-goalie'
+    | 'portal-cover-dribbler'
     | 'portal-cover-racing'
-    | 'portal-cover-defender'
     | 'portal-cover-cards';
   /** Ground-plane position of the portal's center (computed below). */
   readonly x: number;
@@ -191,23 +195,33 @@ const STADIUM_WALL_HEIGHT = 26;
 // Distribution (clockwise from south-east, around the back, to south-west):
 //   SE → E → N (back) → W → SW
 const _stadiumPortalSpec: Array<{
-  id: string; label: string; url: string;
+  id: string; label: string; gameId: number; url: string;
   cover: PortalGate['cover']; angle: number;
 }> = [
-  { id: 'portal-adventure', label: 'Pixel Quest',
-    url: 'https://rezona.app/pixel-quest',
-    cover: 'portal-cover-adventure', angle: -Math.PI / 4 },          // SE
-  { id: 'portal-puzzle',    label: 'Bubble Tower',
-    url: 'https://rezona.app/bubble-tower',
-    cover: 'portal-cover-puzzle',    angle: Math.PI / 6 },            // E-NE
-  { id: 'portal-racing',    label: 'Kart Rush',
-    url: 'https://rezona.app/kart-rush',
-    cover: 'portal-cover-racing',    angle: Math.PI / 2 },            // N (back)
-  { id: 'portal-defender',  label: 'Sky Defender',
-    url: 'https://rezona.app/sky-defender',
-    cover: 'portal-cover-defender',  angle: Math.PI - Math.PI / 6 },  // W-NW
-  { id: 'portal-cards',     label: 'Card Clash',
-    url: 'https://rezona.app/card-clash',
+  // ── Linked to real Rezona games. In the host App the gate deep-links via
+  //    bridge.openGameDetail(gameId) — gameId is the number decoded from the
+  //    share link (web.rezona.ai/share/game/<base64url(gameId)>) — with the
+  //    share URL as the desktop/browser fallback. Same mechanism as the
+  //    colosseum demo. A gameId of 0 + empty url marks a RESERVED "Coming
+  //    Soon" gate: no game yet, so its proximity prompt / Play button stay
+  //    hidden (see game.ts + hud.tsx).
+  { id: 'portal-adventure', label: 'Catching These Balls',
+    gameId: 9332494, url: 'https://web.rezona.ai/share/game/OTMzMjQ5NA',
+    cover: 'portal-cover-goalie',    angle: -Math.PI / 4 },          // SE
+  { id: 'portal-puzzle',    label: 'Master Dribbler',
+    gameId: 9331745, url: 'https://web.rezona.ai/share/game/OTMzMTc0NQ',
+    cover: 'portal-cover-dribbler',  angle: Math.PI / 6 },            // E-NE
+  // MIDDLE gate — center-back, faces the field (opposite the entrance).
+  // RESERVED for a future game per request; left unlinked for now.
+  { id: 'portal-racing',    label: 'Coming Soon',
+    gameId: 0, url: '',
+    cover: 'portal-cover-racing',    angle: Math.PI / 2 },            // N (back) — MIDDLE, reserved
+  { id: 'portal-defender',  label: 'Ball Juggler',
+    gameId: 9333284, url: 'https://web.rezona.ai/share/game/OTMzMzI4NA',
+    cover: 'portal-cover-juggler',   angle: Math.PI - Math.PI / 6 },  // W-NW
+  // Spare gate — no game linked yet; reserved like the middle one.
+  { id: 'portal-cards',     label: 'Coming Soon',
+    gameId: 0, url: '',
     cover: 'portal-cover-cards',     angle: Math.PI + Math.PI / 4 },  // SW
 ];
 export const STADIUM_PORTAL_GATES: PortalGate[] = _stadiumPortalSpec.map((s) => {
@@ -234,7 +248,7 @@ export const STADIUM_PORTAL_GATES: PortalGate[] = _stadiumPortalSpec.map((s) => 
   const x = STADIUM_CENTER.x + standInnerAx * cosA + ux * 1.2;
   const z = STADIUM_CENTER.z + standInnerBz * sinA + uz * 1.2;
   return {
-    id: s.id, label: s.label, url: s.url, cover: s.cover,
+    id: s.id, label: s.label, gameId: s.gameId, url: s.url, cover: s.cover,
     x, z,
     facing: Math.atan2(uz, ux),  // cover faces the field center
   };
@@ -535,14 +549,14 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   // ─── Extra POIs to fill empty park areas — see buildExtraPois ─────────
   for (const m of buildExtraPois(scene)) allMeshes.push(m);
 
-  // ─── Event hero banner — the official "REZONA WORLD CUP" poster on a
-  // tall billboard at the plaza's north edge, facing spawn (110, 19) so
-  // every player sees it on arrival. Texture lands when poster_rezona_hero
-  // is generated; until then a deep-blue placeholder face shows.
+  // ─── Hero poster — a PORTRAIT "REZONA WORLD CUP" poster at the plaza's
+  // north edge, facing spawn (110, 19) so every player sees it on arrival.
+  // Replaces the old blank landscape hero-banner placeholder (removed per
+  // design call). Texture lands when poster_worldcup_portrait is generated.
   for (const m of buildPosterSign(scene, allTextures, {
-    cx: 110, cz: 41, baseY: 3.2, width: 9.5, height: 5.3,
+    cx: 110, cz: 41, baseY: 1.5, width: 3.0, height: 4.5,
     faceYaw: 0,                 // front normal points -Z → faces south/spawn
-    posterKey: 'poster_rezona_hero', postHeight: 6.2, id: 'banner-hero',
+    posterKey: 'poster_worldcup_portrait', postHeight: 2.4, id: 'poster-worldcup',
   })) allMeshes.push(m);
 
   // ─── Little mascot posters in varied poses, scattered on stands around
@@ -568,6 +582,40 @@ export function createGameWorld(scene: Scene, canvas: HTMLCanvasElement): GameWo
   // South face of the wall = STADIUM_CENTER.z - (STADIUM_OUTER_DIAMETER/2).
   // Uses the constant so this stays correct when the stadium gets resized.
   for (const m of buildStadiumGate(scene, STADIUM_CENTER.x, STADIUM_CENTER.z - STADIUM_OUTER_DIAMETER / 2)) allMeshes.push(m);
+
+  // ─── REZONA WORLD CUP banner mounted on the big stadium sign (its south
+  // face, facing the spawn approach). The sign box is at (STADIUM_CENTER.x,
+  // 22, signZ) with signZ = STADIUM_CENTER.z − bz − 8 (see buildStadiumGate);
+  // we float the generated banner just in front of that −Z face. The Flux
+  // banner has cinematic black letterbox bars baked in, so we crop them with
+  // a v-scale/offset and size the plane to the cropped content aspect (no
+  // stretch). Guarded on the asset — no banner generated = bare sign.
+  {
+    const bannerUrl = ASSETS['poster_worldcup_banner'];
+    if (bannerUrl) {
+      const signZ = STADIUM_CENTER.z - STADIUM_OUTER_DIAMETER / 2 - 8;
+      const bMat = createStandardMaterial(scene, 'stadium-banner-mat', new Color3(1, 1, 1));
+      const bTex = new Texture(bannerUrl, scene);
+      bTex.anisotropicFilteringLevel = 4;
+      // Crop the baked-in top/bottom black bars (~8% each) so only the art shows.
+      bTex.vScale = 0.84;
+      bTex.vOffset = 0.08;
+      bMat.diffuseTexture = bTex;
+      bMat.emissiveTexture = bTex;
+      bMat.emissiveColor = new Color3(0.9, 0.9, 0.9);
+      bMat.specularColor = new Color3(0, 0, 0);
+      allTextures.push(bTex);
+      const bPlane = MeshBuilder.CreatePlane('stadium-banner', {
+        width: 12, height: 5, sideOrientation: Mesh.DOUBLESIDE,
+      }, scene);
+      bPlane.position.set(STADIUM_CENTER.x, 22, signZ - 0.5);
+      // yaw 0 (NOT π): a DOUBLESIDE plane viewed from the spawn (−Z) side reads
+      // un-mirrored at yaw 0 — same as the buildPosterSign faces. π flips it.
+      bPlane.material = bMat;
+      bPlane.isPickable = false;
+      allMeshes.push(bPlane);
+    }
+  }
 
   // ─── Portal gates — leave to another Rezona game ──────────────────────────
   // Decorative gates mounted on the stadium wall with game cover images.
@@ -3123,11 +3171,165 @@ function buildPortalGate(scene: Scene, portal: PortalGate): Mesh[] {
     width: coverW, height: coverH, sideOrientation: Mesh.DOUBLESIDE,
   }, scene);
   cover.position.set(0, mouthH / 2 - 0.1, 0.02);
+  // The plane's FRONT face points local -Z (toward the stands); players
+  // approach from local +Z (the field side), which is the BACK face and
+  // renders the texture mirrored — title text read backwards until the
+  // posters gained text. Flip 180° so the unmirrored face greets the
+  // field.
+  cover.rotation.y = Math.PI;
   cover.material = coverMat;
   cover.parent = root;
   meshes.push(cover);
 
+  // ── Transporting FX — only on gates that actually transfer somewhere.
+  // "Coming Soon" gates (gameId 0, empty url) stay static, so a live
+  // teleporter reads differently at a glance. FX meshes are deliberately
+  // NOT pushed into `meshes`: createGameWorld freezes every returned
+  // mesh's world matrix, and these animate every frame.
+  if (portal.gameId > 0 || portal.url !== '') {
+    buildPortalTeleportFx(scene, root, portal.id);
+  }
+
   return meshes;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Teleporter FX for a LINKED portal gate: a glowing swirl pad on the
+// ground in front of the tunnel mouth, two counter-rotating energy
+// rings bobbing above it, and a column of rising sparkles. Everything
+// is emissive aqua so the "this gate is live" cue reads from across
+// the field in any light. The pad sits 1.7 units in front of the gate
+// — well inside PORTAL_INTERACT_RADIUS, so standing on it also shows
+// the HUD play prompt.
+function buildPortalTeleportFx(scene: Scene, root: TransformNode, id: string): void {
+  // Swirl pad — a thin cylinder rather than a rotated disc: the swirl
+  // texture maps onto the flat top cap with a plain circular planar UV,
+  // and spinning via rotation.y is then free of Euler-order surprises.
+  const padTex = new DynamicTexture(`portal-fx-pad-tex-${id}`, { width: 256, height: 256 }, scene, true);
+  {
+    const ctx = padTex.getContext() as CanvasRenderingContext2D;
+    ctx.clearRect(0, 0, 256, 256);
+    const ring = ctx.createRadialGradient(128, 128, 30, 128, 128, 126);
+    ring.addColorStop(0.0, 'rgba(95,242,224,0.06)');
+    ring.addColorStop(0.72, 'rgba(95,242,224,0.55)');
+    ring.addColorStop(0.9, 'rgba(255,255,255,0.9)');
+    ring.addColorStop(1.0, 'rgba(95,242,224,0)');
+    ctx.fillStyle = ring;
+    ctx.fillRect(0, 0, 256, 256);
+    // Three spiral arms — read as a vortex once the pad rotates.
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    for (let arm = 0; arm < 3; arm++) {
+      ctx.beginPath();
+      const a0 = (arm / 3) * Math.PI * 2;
+      for (let i = 0; i <= 28; i++) {
+        const f = i / 28;
+        const ang = a0 + f * Math.PI * 1.5;
+        const r = 18 + f * 96;
+        const x = 128 + Math.cos(ang) * r;
+        const y = 128 + Math.sin(ang) * r;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    padTex.update();
+  }
+  padTex.hasAlpha = true;
+  const padMat = new StandardMaterial(`portal-fx-pad-mat-${id}`, scene);
+  padMat.diffuseTexture = padTex;
+  padMat.emissiveTexture = padTex;
+  padMat.opacityTexture = padTex;
+  padMat.emissiveColor = new Color3(0.9, 0.9, 0.9);
+  padMat.specularColor = new Color3(0, 0, 0);
+  padMat.disableLighting = true;
+  const pad = MeshBuilder.CreateCylinder(`portal-fx-pad-${id}`, {
+    diameter: 3.0, height: 0.04, tessellation: 40,
+  }, scene);
+  pad.parent = root;
+  pad.position.set(0, 0.07, 1.7);
+  pad.material = padMat;
+  pad.isPickable = false;
+
+  // Energy rings — counter-rotating, bobbing toruses above the pad.
+  // Chunky tube + near-opaque: a 0.06 tube at saturated-light aqua all
+  // but vanished against the bright poster/grass from a few meters out.
+  const ringMat = new StandardMaterial(`portal-fx-ring-mat-${id}`, scene);
+  ringMat.emissiveColor = Color3.FromHexString('#2ef0d6');
+  ringMat.diffuseColor = Color3.Black();
+  ringMat.specularColor = Color3.Black();
+  ringMat.alpha = 0.9;
+  ringMat.disableLighting = true;
+  const mkRing = (name: string, d: number, y: number) => {
+    const torus = MeshBuilder.CreateTorus(`portal-fx-ring-${id}-${name}`, {
+      diameter: d, thickness: 0.13, tessellation: 36,
+    }, scene);
+    torus.parent = root;
+    torus.position.set(0, y, 1.7);
+    torus.material = ringMat;
+    torus.isPickable = false;
+    return torus;
+  };
+  const ring1 = mkRing('lo', 2.4, 0.55);
+  const ring2 = mkRing('hi', 1.8, 1.2);
+
+  // Rising sparkles — additive soft dots drifting up through the rings.
+  const dotTex = new DynamicTexture(`portal-fx-dot-${id}`, { width: 64, height: 64 }, scene, false);
+  {
+    const ctx = dotTex.getContext() as CanvasRenderingContext2D;
+    ctx.clearRect(0, 0, 64, 64);
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 30);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.45, 'rgba(170,255,242,0.8)');
+    g.addColorStop(1, 'rgba(170,255,242,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+    dotTex.update();
+  }
+  dotTex.hasAlpha = true;
+  const sparkles = new ParticleSystem(`portal-fx-sparkles-${id}`, 40, scene);
+  sparkles.particleTexture = dotTex;
+  sparkles.emitter = pad;
+  sparkles.minEmitBox = new Vector3(-1.1, 0, -1.1);
+  sparkles.maxEmitBox = new Vector3(1.1, 0.2, 1.1);
+  sparkles.direction1 = new Vector3(-0.1, 1.0, -0.1);
+  sparkles.direction2 = new Vector3(0.1, 1.6, 0.1);
+  sparkles.minSize = 0.08;
+  sparkles.maxSize = 0.2;
+  sparkles.minLifeTime = 1.0;
+  sparkles.maxLifeTime = 1.9;
+  sparkles.emitRate = 16;
+  sparkles.minEmitPower = 0.5;
+  sparkles.maxEmitPower = 1.1;
+  sparkles.blendMode = ParticleSystem.BLENDMODE_ADD;
+  sparkles.color1 = new Color4(0.62, 1.0, 0.94, 0.9);
+  sparkles.color2 = new Color4(1.0, 1.0, 1.0, 0.9);
+  sparkles.colorDead = new Color4(0.62, 1.0, 0.94, 0);
+  sparkles.start();
+
+  // Per-frame animation + distance gating. The spin/bob math is cheap;
+  // the particle system is what costs, so it pauses entirely while the
+  // camera is far away — three live gates shouldn't tax a low-end
+  // phone from across the park.
+  let sparklesOn = true;
+  scene.onBeforeRenderObservable.add(() => {
+    const t = performance.now() * 0.001;
+    pad.rotation.y = t * 0.9;
+    ring1.rotation.y = t * 1.3;
+    ring2.rotation.y = -t * 0.9;
+    ring1.position.y = 0.55 + Math.sin(t * 2.0) * 0.1;
+    ring2.position.y = 1.2 + Math.sin(t * 1.6 + 1.4) * 0.14;
+    const pulse = 0.7 + Math.sin(t * 2.4) * 0.25;
+    padMat.emissiveColor.set(pulse, pulse, pulse);
+    const cam = scene.activeCamera;
+    if (cam) {
+      const dx = cam.globalPosition.x - root.position.x;
+      const dz = cam.globalPosition.z - root.position.z;
+      const far = dx * dx + dz * dz > 80 * 80;
+      if (far && sparklesOn) { sparkles.stop(); sparklesOn = false; }
+      else if (!far && !sparklesOn) { sparkles.start(); sparklesOn = true; }
+    }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
