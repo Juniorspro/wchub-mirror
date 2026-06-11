@@ -230,7 +230,7 @@ function buildLamp(scene: Scene, x: number, z: number, woodDarkMat: StandardMate
 
 // Caminito curvo de lajas (bezier cuadrática) + faroles alternados.
 function buildCaminito(scene: Scene, p0: { x: number; z: number }, p1: { x: number; z: number },
-  ctrlOffset: number, woodDarkMat: StandardMaterial, warmMat: StandardMaterial): void {
+  ctrlOffset: number, woodDarkMat: StandardMaterial, warmMat: StandardMaterial, halfWidth = 1.3): void {
   const mx = (p0.x + p1.x) / 2;
   const mz = (p0.z + p1.z) / 2;
   const dx = p1.x - p0.x;
@@ -238,7 +238,7 @@ function buildCaminito(scene: Scene, p0: { x: number; z: number }, p1: { x: numb
   const len = Math.hypot(dx, dz) || 1;
   const cx = mx + (-dz / len) * ctrlOffset;
   const cz = mz + (dx / len) * ctrlOffset;
-  const HALF = 1.3;
+  const HALF = halfWidth;
   const N = 24;
   const left: Vector3[] = [];
   const right: Vector3[] = [];
@@ -1261,7 +1261,18 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   };
   buildCaminito(scene, gapExit(1), { x: CANCHA.x - 9.2, z: CANCHA.z }, 2.2, woodDarkMat, warmMat);
   buildCaminito(scene, gapExit(3), { x: COPAS.x - 1.5, z: COPAS.z - 6.8 }, -2.5, woodDarkMat, warmMat);
-  buildCaminito(scene, gapExit(4), { x: ESTADIO.x, z: ESTADIO.z - EST_B - 6.5 }, 3.0, woodDarkMat, warmMat);
+  // al estadio: bien ancho y rematando en una explanada que cubre el portón
+  buildCaminito(scene, gapExit(4), { x: ESTADIO.x, z: ESTADIO.z - EST_B - 7.5 }, 3.0, woodDarkMat, warmMat, 2.4);
+  const apron = MeshBuilder.CreateGround('est-apron', { width: 13.5, height: 8.5 }, scene);
+  apron.position.set(ESTADIO.x, 0.024, ESTADIO.z - EST_B - 3.2); // pega contra la pared, pylons incluidos
+  const apronMat = stdMat(scene, 'est-apron-mat', '#ffffff');
+  const apronTex = new Texture(flagstoneUrl, scene);
+  apronTex.uScale = 4.2;
+  apronTex.vScale = 2.6;
+  apronTex.anisotropicFilteringLevel = 8;
+  apronMat.diffuseTexture = apronTex;
+  apron.material = apronMat;
+  apron.isPickable = false;
   buildCaminito(scene, gapExit(6), { x: MUNECO.x + 4.4, z: MUNECO.z }, 2.0, woodDarkMat, warmMat);
   // faroles en el sendero de entrada sur
   buildLamp(scene, 2.1, -26, woodDarkMat, warmMat);
