@@ -829,9 +829,10 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   sun.intensity = 0.9;
   sun.diffuse = new Color3(1.0, 0.96, 0.86);
 
-  // Glow para los neones (ratio bajo = barato en el Mali)
-  const glow = new GlowLayer('glow', scene, { mainTextureRatio: 0.5 });
-  glow.intensity = 0.85;
+  // Glow para los neones (ratio bajo = barato en el Mali); intensidad
+  // contenida: el neón se nota pero no come la silueta del ícono.
+  const glow = new GlowLayer('glow', scene, { mainTextureRatio: 0.5, blurKernelSize: 24 });
+  glow.intensity = 0.42;
   const spinners: Spinner[] = [];
 
   // Piso verde: la MISMA textura de pasto del juego, tileada igual (~7u/tile)
