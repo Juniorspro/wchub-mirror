@@ -7,6 +7,7 @@ import { registerMessages } from "./messages";
 import { step } from "./simulation";
 import { decodeIdentity } from "../plugins/auth/identity";
 import { attachIdentity, detachIdentity } from "../plugins/storage";
+import { censorProfanity } from "../shared/profanity";
 
 export { registerMessages, step };
 export type { GameState } from "./state";
@@ -32,7 +33,9 @@ export function addPlayer(
   // Display name: the token's userName wins (synced to the real account,
   // can't drift from what the client claims); plain `name`/`username`
   // opts cover browser guests and older clients.
-  p.username = String(identity?.userName || opts?.username || opts?.name || "anon").slice(0, 16);
+  p.username = censorProfanity(
+    String(identity?.userName || opts?.username || opts?.name || "anon").slice(0, 16),
+  );
   // Optional initial outfit carried in joinOpts (so a returning player can
   // walk in already wearing what they had). Server still validates on
   // explicit `equip` messages — see messages.ts.

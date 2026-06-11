@@ -93,6 +93,12 @@ export interface NetClientCallbacks {
    *  + rate-limits and broadcasts back; clients trigger the visual hop
    *  on the avatar matching `sessionId`. */
   onJump?: (sessionId: string) => void;
+  /** Fired when the server kicks THIS session for inactivity (seat
+   *  reclaimed for a waiting player). The owner must NOT auto-reconnect —
+   *  that would be a revolving door on a full room; route back to the
+   *  landing screen instead. `afkKicked` stays true until the next
+   *  connect() so status-driven reconnect loops can check it. */
+  onAfkKick?: () => void;
 }
 
 // 注入的运行时配置（vite injectGameConfigPlugin / Worker /game.config.js → window.GAME_CONFIG）。
@@ -206,6 +212,9 @@ export class NetClient {
 
   serverClockOffset: number | null = null;
   identityStatus: IdentityStatus | null = null;
+  /** True after the server kicked this session for inactivity; cleared on
+   *  the next connect(). Reconnect loops must not fire while set. */
+  afkKicked = false;
   private lastInputSentAt = 0;
 
   constructor(callbacks: NetClientCallbacks = {}) {
@@ -219,15 +228,21 @@ export class NetClient {
    *  `name` is the display name (host-App username when available) — the
    *  server prefers the token's userName over this when a token decodes,
    *  so inside the App the name can't drift from the real account. */
+  /** roomCode=null → no explicit #room= in the URL: ask the Worker's
+   *  matchmaker for a room with space instead of piling every player into
+   *  the hardcoded 'lounge'. One room caps at maxPlayers; the matchmaker
+   *  mints a fresh code (own Container) when everything is full — without
+   *  this, player #21 bounces off "room is full" forever, which looks
+   *  exactly like the server being down. Explicit codes (party links) and
+   *  standalone-local dev (no Worker) keep the direct path. */
   async connect(
-    roomCode: string,
+    roomCode: string | null,
     token?: string,
     gameId?: number,
     outfit?: { textureItems: string; accessoryItems: string },
     name?: string,
   ): Promise<void> {
     this.disconnect();
-    this.roomCode = roomCode;
     this.setStatus('connecting');
     try {
       const { roomName, port } = gameConfig();
@@ -237,6 +252,21 @@ export class NetClient {
       const proto = forceProd || loc.protocol === 'https:' ? 'wss:' : 'ws:';
       // dev standalone：直连 :port colyseus；生产：经 Worker /rooms/:code 转发到 Container。
       const standaloneLocal = isLocal && loc.port !== '8787';
+      if (!roomCode) {
+        roomCode = 'lounge';
+        if (!standaloneLocal) {
+          try {
+            const httpProto = forceProd || loc.protocol === 'https:' ? 'https:' : 'http:';
+            const res = await fetch(`${httpProto}//${loc.host}/matchmake`, { method: 'POST' });
+            const alloc = (await res.json()) as { code?: unknown };
+            if (res.ok && typeof alloc.code === 'string' && alloc.code) roomCode = alloc.code;
+          } catch {
+            // Matchmaker unreachable — fall back to the default room and
+            // let the join itself succeed or fail.
+          }
+        }
+      }
+      this.roomCode = roomCode;
       const endpoint = standaloneLocal
         ? `${proto}//localhost:${port}`
         : `${proto}//${loc.host}/rooms/${encodeURIComponent(roomCode)}`;
@@ -555,6 +585,13 @@ export class NetClient {
         });
       });
       room.send('ball:request');
+
+      // AFK kick arrives as a message BEFORE the server closes the socket,
+      // so the flag is set by the time onLeave fires 'disconnected'.
+      room.onMessage('afk-kick', () => {
+        this.afkKicked = true;
+        this.cbs.onAfkKick?.();
+      });
 
       room.onLeave(() => this.setStatus('disconnected'));
       room.onError(() => this.setStatus('error'));

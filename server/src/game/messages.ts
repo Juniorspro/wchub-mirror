@@ -16,6 +16,7 @@ import { GameState } from "./state";
 import { gameConfig } from "../game.config";
 import { TICK_HZ, MAP_W, MAP_H, PLAYER_SPEED } from "../shared/constants";
 import { movePlayer, normalizeInput, clamp } from "../shared/math";
+import { censorProfanity } from "../shared/profanity";
 import { registerBettingEvent } from "./event";
 import { registerSoccerBall } from "./soccer";
 import { getIdentity, loadGameData, writeGameData } from "../plugins/storage";
@@ -131,12 +132,15 @@ export function registerMessages(room: Room<GameState>, state: GameState): void 
       const parsed = JSON.parse(raw) as unknown;
       if (!Array.isArray(parsed)) return;
       const seen = new Set(chatLog.map((m) => `${m.from}:${m.t}`));
+      // Censor on restore too — entries persisted before the filter shipped
+      // (or by an older server build) replay to late joiners otherwise.
       const restored = parsed.filter((m): m is ChatLogEntry =>
         !!m && typeof m === "object"
         && typeof (m as ChatLogEntry).text === "string"
         && typeof (m as ChatLogEntry).name === "string"
         && typeof (m as ChatLogEntry).t === "number"
-        && !seen.has(`${(m as ChatLogEntry).from}:${(m as ChatLogEntry).t}`));
+        && !seen.has(`${(m as ChatLogEntry).from}:${(m as ChatLogEntry).t}`))
+        .map((m) => ({ ...m, name: censorProfanity(m.name), text: censorProfanity(m.text) }));
       chatLog.unshift(...restored.slice(-CHAT_LOG_CAP));
       chatLog.sort((a, b) => a.t - b.t);
       while (chatLog.length > CHAT_LOG_CAP) chatLog.shift();
@@ -226,7 +230,7 @@ export function registerMessages(room: Room<GameState>, state: GameState): void 
     const last = lastChatAt.get(client.sessionId) ?? 0;
     if (now - last < CHAT_RATE_LIMIT_MS) return;
     lastChatAt.set(client.sessionId, now);
-    const text = sanitizeText(msg?.text, MAX_CHAT_LEN);
+    const text = censorProfanity(sanitizeText(msg?.text, MAX_CHAT_LEN));
     if (!text) return;
     const entry = {
       from: client.sessionId,
@@ -255,7 +259,7 @@ export function registerMessages(room: Room<GameState>, state: GameState): void 
   room.onMessage<RenameMsg>("rename", (client, msg) => {
     const p = state.players.get(client.sessionId);
     if (!p) return;
-    const name = sanitizeText(msg?.name, MAX_NAME_LEN);
+    const name = censorProfanity(sanitizeText(msg?.name, MAX_NAME_LEN));
     if (!name || name === p.username) return;
     p.username = name;
     room.broadcast("roster-update", {
