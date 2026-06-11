@@ -43,6 +43,13 @@ import cutStoneUrl from '../src/assets/sprite/sprite_tex-cut-stone_525147.webp';
 import turfUrl from '../src/assets/sprite/sprite_stadium-turf_f0a345.png';
 import crowdUrl from '../src/assets/sprite/sprite_stadium-crowd_1c49a4.png';
 import bannerUrl from '../src/assets/bg/bg_poster-worldcup-banner_e92888.webp';
+// carteles del juego original (covers de portales + lámina del mundial)
+import coverCardsUrl from '../src/assets/sprite/sprite_portal-cover-cards_abc1fd.webp';
+import coverDribblerUrl from '../src/assets/sprite/sprite_portal-cover-dribbler_3b541b.webp';
+import coverGoalieUrl from '../src/assets/sprite/sprite_portal-cover-goalie_0695f6.webp';
+import coverJugglerUrl from '../src/assets/sprite/sprite_portal-cover-juggler_fe5b6e.webp';
+import coverRacingUrl from '../src/assets/sprite/sprite_portal-cover-racing_c7b1b5.webp';
+import portraitUrl from '../src/assets/portrait/portrait_poster-worldcup-portrait_69e0b1.webp';
 
 // ─── Constantes del layout (portables a world.ts) ───────────────────────
 const RING_RADIUS = 17.5;        // radio del anillo de tiendas
@@ -871,6 +878,83 @@ function buildEstadio(scene: Scene): void {
   }
 }
 
+// Cartel enmarcado sobre postes (pósters del juego original).
+function buildCartel(scene: Scene, url: string, w: number, h: number,
+  x: number, z: number, yaw: number, woodDarkMat: StandardMaterial): void {
+  const root = new TransformNode('cartel', scene);
+  root.position.set(x, 0, z);
+  root.rotation.y = yaw;
+  const frame = MeshBuilder.CreateBox('cartel-frame', { width: w + 0.3, height: h + 0.3, depth: 0.09 }, scene);
+  frame.parent = root;
+  frame.position.y = h / 2 + 1.1;
+  frame.material = stdMat(scene, 'cartel-frame-mat', '#2e2a24');
+  frame.isPickable = false;
+  const mat = new StandardMaterial('cartel-mat', scene);
+  const tex = new Texture(url, scene);
+  mat.diffuseTexture = tex;
+  mat.emissiveTexture = tex;
+  mat.emissiveColor = new Color3(0.4, 0.4, 0.4);
+  mat.specularColor = new Color3(0, 0, 0);
+  const plano = MeshBuilder.CreatePlane('cartel-img', { width: w, height: h }, scene);
+  plano.parent = root;
+  plano.position.set(0, h / 2 + 1.1, -0.06);
+  plano.material = mat;
+  plano.isPickable = false;
+  for (const sx of [-1, 1]) {
+    const post = MeshBuilder.CreateCylinder('cartel-post', { diameter: 0.14, height: 1.3, tessellation: 8 }, scene);
+    post.parent = root;
+    post.position.set(sx * (w / 2 - 0.2), 0.65, 0);
+    post.material = woodDarkMat;
+    post.isPickable = false;
+  }
+}
+
+// Tablón de fixtures (el fixture board del original, pintado a mano).
+function buildFixtureBoard(scene: Scene, x: number, z: number, yaw: number,
+  woodDarkMat: StandardMaterial): void {
+  const tex = new DynamicTexture('fixture-tex', { width: 512, height: 320 }, scene, true);
+  const c = tex.getContext() as unknown as CanvasRenderingContext2D;
+  c.fillStyle = '#10204a';
+  c.fillRect(0, 0, 512, 320);
+  c.strokeStyle = '#e8c84a';
+  c.lineWidth = 8;
+  c.strokeRect(4, 4, 504, 312);
+  c.fillStyle = '#e8c84a';
+  c.textAlign = 'center';
+  c.font = 'bold 40px ui-monospace, monospace';
+  c.fillText('★ FIXTURE · COPA ★', 256, 48);
+  c.font = 'bold 28px ui-monospace, monospace';
+  c.fillStyle = '#f3ecd9';
+  const rows = ['ARG 2-1 BRA', 'GER 0-0 FRA', 'URU 3-2 MEX', 'ITA 1-1 ESP', 'CRO 2-0 ???'];
+  for (let i = 0; i < rows.length; i++) c.fillText(rows[i], 256, 100 + i * 44);
+  tex.update();
+  const root = new TransformNode('fixture-board', scene);
+  root.position.set(x, 0, z);
+  root.rotation.y = yaw;
+  const board = MeshBuilder.CreateBox('fixture-box', { width: 5.2, height: 3.2, depth: 0.12 }, scene);
+  board.parent = root;
+  board.position.y = 2.7;
+  board.material = stdMat(scene, 'fixture-back', '#1d2540');
+  board.isPickable = false;
+  const mat = new StandardMaterial('fixture-mat', scene);
+  mat.diffuseTexture = tex;
+  mat.emissiveTexture = tex;
+  mat.emissiveColor = new Color3(0.45, 0.45, 0.45);
+  mat.specularColor = new Color3(0, 0, 0);
+  const plano = MeshBuilder.CreatePlane('fixture-img', { width: 5.0, height: 3.0 }, scene);
+  plano.parent = root;
+  plano.position.set(0, 2.7, -0.08);
+  plano.material = mat;
+  plano.isPickable = false;
+  for (const sx of [-1.9, 1.9]) {
+    const post = MeshBuilder.CreateCylinder('fixture-post', { diameter: 0.18, height: 2.4, tessellation: 8 }, scene);
+    post.parent = root;
+    post.position.set(sx, 1.2, 0);
+    post.material = woodDarkMat;
+    post.isPickable = false;
+  }
+}
+
 // ─── Tienda: toldo a dos aguas rayado + mostrador + cartel + faroles ────
 function buildTienda(scene: Scene, def: TiendaDef, x: number, z: number, facing: number,
   woodMat: StandardMaterial, woodDarkMat: StandardMaterial, spinners: Spinner[]): void {
@@ -999,6 +1083,118 @@ function buildTienda(scene: Scene, def: TiendaDef, x: number, z: number, facing:
 
   // Ícono neón 3D del rubro flotando sobre el techo (gira + rebota)
   buildNeonIcon(scene, def.id, spinners, root, RIDGE_Y + 0.55);
+}
+
+// ─── Jugador: humanoide PS1 con cara dibujada por el usuario ───────────
+// Outfit DEFAULT de todos: remera blanca + pantalón negro + zapas verdes.
+const OUTFIT = { remera: '#f2f2ee', pantalon: '#1d1d22', zapas: '#3dbf5a' };
+interface Player {
+  root: TransformNode;
+  legL: TransformNode; legR: TransformNode;
+  armL: TransformNode; armR: TransformNode;
+  phase: number;
+  yaw: number;
+}
+let PLAYER: Player | null = null;
+const INPUT = { kx: 0, ky: 0, jx: 0, jy: 0 };
+
+function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): Player {
+  const skin = stdMat(scene, 'pl-skin', '#e8b88f');
+  const remera = stdMat(scene, 'pl-remera', OUTFIT.remera);
+  const pantalon = stdMat(scene, 'pl-pantalon', OUTFIT.pantalon);
+  const zapas = stdMat(scene, 'pl-zapas', OUTFIT.zapas);
+  const suela = stdMat(scene, 'pl-suela', '#f4f4f0');
+  const pelo = stdMat(scene, 'pl-pelo', '#3a2a1c');
+
+  const root = new TransformNode('player', scene);
+  const part = (m: Mesh, mat: StandardMaterial, parent: TransformNode, x: number, y: number, z: number): Mesh => {
+    m.parent = parent;
+    m.position.set(x, y, z);
+    m.material = mat;
+    m.isPickable = false;
+    return m;
+  };
+  const B = MeshBuilder;
+  // piernas (pantalón negro largo + zapas verdes)
+  const legs: TransformNode[] = [];
+  for (const sx of [-1, 1] as const) {
+    const leg = new TransformNode(`pl-leg-${sx}`, scene);
+    leg.parent = root;
+    leg.position.set(sx * 0.145, 0.89, 0);
+    part(B.CreateBox('pl-thigh', { width: 0.21, height: 0.42, depth: 0.26 }, scene), pantalon, leg, 0, -0.21, 0);
+    part(B.CreateBox('pl-shin', { width: 0.17, height: 0.4, depth: 0.2 }, scene), pantalon, leg, 0, -0.6, 0);
+    part(B.CreateBox('pl-shoe', { width: 0.19, height: 0.12, depth: 0.34 }, scene), zapas, leg, 0, -0.83, -0.05);
+    part(B.CreateBox('pl-sole', { width: 0.2, height: 0.05, depth: 0.36 }, scene), suela, leg, 0, -0.885, -0.05);
+    legs.push(leg);
+  }
+  // pelvis + torso (remera blanca)
+  part(B.CreateBox('pl-pelvis', { width: 0.46, height: 0.18, depth: 0.3 }, scene), pantalon, root, 0, 0.97, 0);
+  part(B.CreateBox('pl-torso', { width: 0.58, height: 0.62, depth: 0.32 }, scene), remera, root, 0, 1.36, 0);
+  // brazos (manga blanca corta + piel)
+  const arms: TransformNode[] = [];
+  for (const sx of [-1, 1] as const) {
+    const arm = new TransformNode(`pl-arm-${sx}`, scene);
+    arm.parent = root;
+    arm.position.set(sx * 0.37, 1.6, 0);
+    part(B.CreateBox('pl-sleeve', { width: 0.18, height: 0.22, depth: 0.2 }, scene), remera, arm, 0, -0.08, 0);
+    part(B.CreateBox('pl-upper', { width: 0.13, height: 0.26, depth: 0.14 }, scene), skin, arm, 0, -0.32, 0);
+    part(B.CreateBox('pl-hand', { width: 0.13, height: 0.12, depth: 0.14 }, scene), skin, arm, 0, -0.5, 0);
+    arms.push(arm);
+  }
+  // cabeza + pelo + CARA DIBUJADA por el usuario
+  const head = new TransformNode('pl-head', scene);
+  head.parent = root;
+  head.position.y = 1.95;
+  part(B.CreateBox('pl-neck', { width: 0.14, height: 0.12, depth: 0.14 }, scene), skin, head, 0, -0.13, 0);
+  part(B.CreateBox('pl-skull', { width: 0.46, height: 0.46, depth: 0.46 }, scene), skin, head, 0, 0.15, 0);
+  part(B.CreateBox('pl-hair-top', { width: 0.5, height: 0.14, depth: 0.5 }, scene), pelo, head, 0, 0.38, 0);
+  part(B.CreateBox('pl-hair-back', { width: 0.5, height: 0.3, depth: 0.12 }, scene), pelo, head, 0, 0.19, 0.2);
+  const faceTex = new DynamicTexture('pl-face', { width: 256, height: 256 }, scene, false);
+  // las DynamicTexture sin mipmaps salen espejadas en Y → copiar dado vuelta
+  const fc2 = faceTex.getContext() as unknown as CanvasRenderingContext2D;
+  fc2.save();
+  fc2.translate(0, 256);
+  fc2.scale(1, -1);
+  fc2.drawImage(faceCv, 0, 0, 256, 256);
+  fc2.restore();
+  faceTex.update(false);
+  faceTex.updateSamplingMode(Texture.NEAREST_SAMPLINGMODE);
+  const faceMat = new StandardMaterial('pl-face-mat', scene);
+  faceMat.diffuseTexture = faceTex;
+  faceMat.emissiveColor = new Color3(0.3, 0.3, 0.3);
+  faceMat.specularColor = new Color3(0, 0, 0);
+  const cara = part(B.CreatePlane('pl-cara', { width: 0.42, height: 0.42 }, scene), faceMat, head, 0, 0.14, -0.232);
+  cara.isPickable = false;
+  // nombre flotante (billboard)
+  const nameTex = new DynamicTexture('pl-name', { width: 256, height: 64 }, scene, true);
+  const nc = nameTex.getContext() as unknown as CanvasRenderingContext2D;
+  nc.clearRect(0, 0, 256, 64);
+  nc.font = 'bold 38px ui-monospace, monospace';
+  nc.textAlign = 'center';
+  nc.textBaseline = 'middle';
+  nc.lineWidth = 7;
+  nc.strokeStyle = '#10204a';
+  nc.strokeText(nombre, 128, 32, 240);
+  nc.fillStyle = '#ffffff';
+  nc.fillText(nombre, 128, 32, 240);
+  nameTex.update();
+  nameTex.hasAlpha = true;
+  const nameMat = new StandardMaterial('pl-name-mat', scene);
+  nameMat.diffuseTexture = nameTex;
+  nameMat.emissiveTexture = nameTex;
+  nameMat.emissiveColor = new Color3(1, 1, 1);
+  nameMat.useAlphaFromDiffuseTexture = true;
+  nameMat.disableLighting = true;
+  nameMat.backFaceCulling = false;
+  const nameP = MeshBuilder.CreatePlane('pl-name-plane', { width: 1.5, height: 0.38 }, scene);
+  nameP.parent = root;
+  nameP.position.y = 2.5;
+  nameP.billboardMode = Mesh.BILLBOARDMODE_Y;
+  nameP.material = nameMat;
+  nameP.isPickable = false;
+
+  root.position.set(0, 0, -27); // spawn en el sendero sur
+  return { root, legL: legs[0], legR: legs[1], armL: arms[0], armR: arms[1], phase: 0, yaw: 0 };
 }
 
 // ─── Escena completa ────────────────────────────────────────────────────
@@ -1285,6 +1481,44 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   buildEstadio(scene);
   buildCerca(scene);
 
+  // ─── Carteles del juego original ──────────────────────────────────────
+  // Tablón de fixtures camino a la cancha + láminas del mundial en stands.
+  buildFixtureBoard(scene, 28, 11, Math.atan2(-28, -11), woodDarkMat);
+  buildCartel(scene, portraitUrl, 2.2, 3.0, -13, 22, Math.atan2(13, -22), woodDarkMat);
+  buildCartel(scene, bannerUrl, 4.6, 1.7, -25, -14, Math.atan2(25, 14), woodDarkMat);
+  buildCartel(scene, portraitUrl, 2.2, 3.0, 33, -20, Math.atan2(-33, 20), woodDarkMat);
+  // Los 5 covers de portales montados en la pared del estadio (como las
+  // puertas decoradas del original) a ambos lados del portón.
+  const covers = [coverGoalieUrl, coverDribblerUrl, coverJugglerUrl, coverCardsUrl, coverRacingUrl];
+  const coverOffs = [-1.05, -0.52, 0.52, 1.05, 1.55];
+  for (let i = 0; i < covers.length; i++) {
+    const a = -Math.PI / 2 + coverOffs[i];
+    let nx = Math.cos(a) / EST_A;
+    let nz = Math.sin(a) / EST_B;
+    const nl = Math.hypot(nx, nz) || 1;
+    nx /= nl;
+    nz /= nl;
+    const px = ESTADIO.x + Math.cos(a) * EST_A + nx * 0.6;
+    const pz = ESTADIO.z + Math.sin(a) * EST_B + nz * 0.6;
+    const yaw = Math.atan2(nx, nz); // frente del plano (-Z local) hacia afuera
+    const frame = MeshBuilder.CreateBox('cover-frame', { width: 2.5, height: 3.3, depth: 0.12 }, scene);
+    frame.position.set(px, 3.3, pz);
+    frame.rotation.y = yaw;
+    frame.material = stdMat(scene, `cover-frame-${i}`, '#2e2a24');
+    frame.isPickable = false;
+    const cmat = new StandardMaterial(`cover-mat-${i}`, scene);
+    const ctex = new Texture(covers[i], scene);
+    cmat.diffuseTexture = ctex;
+    cmat.emissiveTexture = ctex;
+    cmat.emissiveColor = new Color3(0.4, 0.4, 0.4);
+    cmat.specularColor = new Color3(0, 0, 0);
+    const cplane = MeshBuilder.CreatePlane(`cover-img-${i}`, { width: 2.2, height: 3.0 }, scene);
+    cplane.position.set(px + nx * 0.08, 3.3, pz + nz * 0.08);
+    cplane.rotation.y = yaw;
+    cplane.material = cmat;
+    cplane.isPickable = false;
+  }
+
   // ─── Robles y matas de pasto (billboards cruzados, estilo del juego) ──
   // Despejado alrededor de los POIs nuevos y sus caminitos.
   const nearPOI = (x: number, z: number): boolean => {
@@ -1380,6 +1614,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   canvas.addEventListener('wheel', () => { lastInteract = performance.now(); }, { passive: true });
   scene.onBeforeRenderObservable.add(() => {
     const t = performance.now() / 1000;
+    const dt = scene.getEngine().getDeltaTime() / 1000;
     for (let i = 0; i < flags.length; i++) {
       flags[i].rotation.y = (-((i / FLAGS.length) * Math.PI * 2 + Math.PI / 8) + Math.PI / 2) + Math.sin(t * 2.2 + i * 1.7) * 0.16;
     }
@@ -1387,7 +1622,48 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       s.node.rotation.y = t * 0.8 + s.phase;
       s.node.position.y = s.baseY + Math.sin(t * 1.6 + s.phase) * 0.08;
     }
-    if (performance.now() - lastInteract > 6000) {
+    // ─── jugador: caminar relativo a cámara + animación + cámara follow ──
+    if (PLAYER) {
+      let dx = INPUT.kx + INPUT.jx;
+      let dy = INPUT.ky + INPUT.jy;
+      const len = Math.hypot(dx, dy);
+      if (len > 1) { dx /= len; dy /= len; }
+      if (len > 0.08) {
+        const fx = camera.target.x - camera.position.x;
+        const fz = camera.target.z - camera.position.z;
+        const fl = Math.hypot(fx, fz) || 1;
+        const fwx = fx / fl;
+        const fwz = fz / fl;
+        const mx = fwx * (-dy) + fwz * dx;   // derecha = (fwz, -fwx)
+        const mz = fwz * (-dy) + (-fwx) * dx;
+        const SPEED = 4.2;
+        const p = PLAYER.root.position;
+        p.x = Math.max(-50, Math.min(56, p.x + mx * SPEED * dt));
+        p.z = Math.max(-42, Math.min(95, p.z + mz * SPEED * dt));
+        const targetYaw = Math.atan2(-mx, -mz); // la cara mira a -Z local
+        let dYaw = targetYaw - PLAYER.yaw;
+        while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+        while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+        PLAYER.yaw += dYaw * Math.min(1, dt * 12);
+        PLAYER.root.rotation.y = PLAYER.yaw;
+        PLAYER.phase += dt * 9 * Math.min(1, len);
+        const sw = Math.sin(PLAYER.phase);
+        PLAYER.legL.rotation.x = sw * 0.6;
+        PLAYER.legR.rotation.x = -sw * 0.6;
+        PLAYER.armL.rotation.x = -sw * 0.45;
+        PLAYER.armR.rotation.x = sw * 0.45;
+        PLAYER.root.position.y = Math.abs(Math.sin(PLAYER.phase)) * 0.05;
+      } else {
+        PLAYER.legL.rotation.x *= 0.85;
+        PLAYER.legR.rotation.x *= 0.85;
+        PLAYER.armL.rotation.x *= 0.85;
+        PLAYER.armR.rotation.x *= 0.85;
+        PLAYER.root.position.y *= 0.85;
+      }
+      camera.target.x += (PLAYER.root.position.x - camera.target.x) * 0.12;
+      camera.target.z += (PLAYER.root.position.z - camera.target.z) * 0.12;
+      camera.target.y += (PLAYER.root.position.y + 1.5 - camera.target.y) * 0.12;
+    } else if (performance.now() - lastInteract > 6000) {
       camera.alpha += 0.00011 * scene.getEngine().getDeltaTime();
     }
   });
@@ -1409,10 +1685,155 @@ function boot(): void {
     const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
     engine.setHardwareScalingLevel(1 / dpr);
     const scene = buildScene(engine, canvas);
-    // handle de dev para capturas/automatización (shot-maplab.mjs)
-    (window as unknown as Record<string, unknown>).__maplab = { scene, camera: scene.activeCamera };
     engine.runRenderLoop(() => scene.render());
     window.addEventListener('resize', () => engine.resize());
+
+    // ─── ENTRADA OBLIGATORIA: dibujá tu cara + nombre ──────────────────
+    const $id = (s: string): HTMLElement => document.getElementById(s) as HTMLElement;
+    const facecv = $id('facecv') as HTMLCanvasElement;
+    const iname = $id('iname') as HTMLInputElement;
+    const ienter = $id('ienter') as HTMLButtonElement;
+    const fctx = facecv.getContext('2d') as CanvasRenderingContext2D;
+    const SKINBG = '#e8b88f';
+    fctx.fillStyle = SKINBG;
+    fctx.fillRect(0, 0, 256, 256);
+    let ink = '#2b1c12';
+    let drew = 0;
+    let drawing = false;
+    let lx = 0;
+    let ly = 0;
+    const validate = (): void => {
+      ienter.disabled = !(iname.value.trim().length >= 2 && drew > 0);
+    };
+    const cvPos = (e: PointerEvent): [number, number] => {
+      const r = facecv.getBoundingClientRect();
+      return [(e.clientX - r.left) * 256 / r.width, (e.clientY - r.top) * 256 / r.height];
+    };
+    facecv.addEventListener('pointerdown', (e) => {
+      drawing = true;
+      [lx, ly] = cvPos(e);
+      facecv.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    facecv.addEventListener('pointermove', (e) => {
+      if (!drawing) return;
+      const [x, y] = cvPos(e);
+      fctx.strokeStyle = ink === 'ERASE' ? SKINBG : ink;
+      fctx.lineWidth = ink === 'ERASE' ? 24 : 9;
+      fctx.lineCap = 'round';
+      fctx.beginPath();
+      fctx.moveTo(lx, ly);
+      fctx.lineTo(x, y);
+      fctx.stroke();
+      lx = x;
+      ly = y;
+      drew++;
+      validate();
+    });
+    window.addEventListener('pointerup', () => { drawing = false; });
+    document.querySelectorAll('#tools .tool').forEach((el) => {
+      el.addEventListener('click', () => {
+        const c = (el as HTMLElement).dataset.c as string;
+        if (c === 'CLEAR') {
+          fctx.fillStyle = SKINBG;
+          fctx.fillRect(0, 0, 256, 256);
+          drew = 0;
+          validate();
+          return;
+        }
+        ink = c;
+        document.querySelectorAll('#tools .tool').forEach((t2) => t2.classList.remove('on'));
+        el.classList.add('on');
+      });
+    });
+    iname.addEventListener('input', validate);
+    // cara/nombre guardados: precarga (igual te muestra la entrada)
+    try {
+      const sn = localStorage.getItem('maplab_name');
+      const sf = localStorage.getItem('maplab_face');
+      if (sn) iname.value = sn;
+      if (sf) {
+        const img = new Image();
+        img.onload = () => {
+          fctx.drawImage(img, 0, 0, 256, 256);
+          drew = Math.max(drew, 1);
+          validate();
+        };
+        img.src = sf;
+      }
+    } catch { /* sin storage, no pasa nada */ }
+    validate();
+
+    const enterGame = (): void => {
+      if (PLAYER) return;
+      const nombre = iname.value.trim().slice(0, 14) || 'WACHO';
+      try {
+        localStorage.setItem('maplab_name', nombre);
+        localStorage.setItem('maplab_face', facecv.toDataURL('image/png'));
+      } catch { /* ídem */ }
+      PLAYER = buildPlayer(scene, facecv, nombre);
+      $id('intro').style.display = 'none';
+      $id('joy').style.display = 'block';
+      const cam = scene.activeCamera as ArcRotateCamera;
+      cam.alpha = -Math.PI / 2;
+      cam.beta = 1.22;
+      cam.radius = 9;
+      cam.lowerRadiusLimit = 4;
+      const hint = document.getElementById('hint');
+      if (hint) {
+        hint.textContent = 'joystick para caminar · arrastrá para girar';
+        hint.style.opacity = '1';
+        setTimeout(() => { hint.style.opacity = '0'; }, 7000);
+      }
+    };
+    ienter.addEventListener('click', enterGame);
+
+    // ─── joystick táctil ────────────────────────────────────────────────
+    const joy = $id('joy');
+    const knob = $id('knob');
+    let jid = -1;
+    const joyMove = (e: PointerEvent): void => {
+      const r = joy.getBoundingClientRect();
+      let vx = e.clientX - (r.left + r.width / 2);
+      let vy = e.clientY - (r.top + r.height / 2);
+      const l = Math.hypot(vx, vy);
+      const MAX = 44;
+      if (l > MAX) { vx = vx / l * MAX; vy = vy / l * MAX; }
+      INPUT.jx = vx / MAX;
+      INPUT.jy = vy / MAX;
+      knob.style.transform = `translate(calc(-50% + ${vx}px), calc(-50% + ${vy}px))`;
+    };
+    joy.addEventListener('pointerdown', (e) => {
+      jid = e.pointerId;
+      joy.setPointerCapture(jid);
+      joyMove(e);
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    joy.addEventListener('pointermove', (e) => { if (e.pointerId === jid) joyMove(e); });
+    const joyEnd = (): void => {
+      jid = -1;
+      INPUT.jx = 0;
+      INPUT.jy = 0;
+      knob.style.transform = 'translate(-50%, -50%)';
+    };
+    joy.addEventListener('pointerup', joyEnd);
+    joy.addEventListener('pointercancel', joyEnd);
+
+    // ─── teclado (desktop) ──────────────────────────────────────────────
+    const keys = new Set<string>();
+    const updKeys = (): void => {
+      INPUT.kx = ((keys.has('d') || keys.has('arrowright')) ? 1 : 0) - ((keys.has('a') || keys.has('arrowleft')) ? 1 : 0);
+      INPUT.ky = ((keys.has('s') || keys.has('arrowdown')) ? 1 : 0) - ((keys.has('w') || keys.has('arrowup')) ? 1 : 0);
+    };
+    window.addEventListener('keydown', (e) => { keys.add(e.key.toLowerCase()); updKeys(); });
+    window.addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); updKeys(); });
+
+    // handle de dev para capturas/automatización (shot-maplab.mjs)
+    (window as unknown as Record<string, unknown>).__maplab = {
+      scene, camera: scene.activeCamera, enterGame,
+      getPlayer: () => PLAYER, input: INPUT, facecv,
+    };
     // ocultar el hint a los 7s
     setTimeout(() => {
       const hint = document.getElementById('hint');

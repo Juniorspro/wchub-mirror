@@ -38,6 +38,59 @@
       background: #300; color: #f99; font: 12px ui-monospace, monospace;
       padding: 10px; white-space: pre-wrap; display: none;
     }
+    /* ── entrada obligatoria: dibujá tu cara + nombre ── */
+    #intro {
+      position: fixed; inset: 0; z-index: 50; display: flex;
+      align-items: center; justify-content: center;
+      background: rgba(10, 14, 24, 0.82); backdrop-filter: blur(3px);
+    }
+    #ibox {
+      background: #141a2a; border: 2px solid #e8c84a; border-radius: 14px;
+      padding: 18px 20px calc(env(safe-area-inset-bottom, 0px) + 18px) 20px;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      font: 700 13px/1.4 ui-monospace, 'Courier New', monospace; color: #f3ecd9;
+      max-width: 92vw;
+    }
+    #ibox .ittl { font-size: 18px; letter-spacing: 0.12em; color: #e8c84a; }
+    #ibox .isub { font-size: 11px; opacity: 0.8; font-weight: 600; }
+    #facecv {
+      width: min(64vw, 256px); height: min(64vw, 256px);
+      border-radius: 50%; border: 3px solid #3a4666; touch-action: none;
+      background: #e8b88f; cursor: crosshair;
+    }
+    #tools { display: flex; gap: 8px; }
+    .tool {
+      width: 34px; height: 34px; border-radius: 50%; border: 2px solid #ffffff44;
+      cursor: pointer; font: 700 14px ui-monospace, monospace;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .tool.on { border-color: #e8c84a; box-shadow: 0 0 8px #e8c84a88; }
+    #iname {
+      width: 100%; box-sizing: border-box; padding: 9px 12px;
+      border-radius: 8px; border: 2px solid #3a4666; background: #0d1220;
+      color: #f3ecd9; font: 700 14px ui-monospace, monospace; text-align: center;
+      outline: none;
+    }
+    #iname:focus { border-color: #e8c84a; }
+    #ienter {
+      width: 100%; padding: 11px; border-radius: 8px; border: 0;
+      background: #e8c84a; color: #1d2540; font: 800 14px ui-monospace, monospace;
+      letter-spacing: 0.1em; cursor: pointer;
+    }
+    #ienter:disabled { background: #4a5068; color: #9aa0b8; cursor: not-allowed; }
+    /* ── joystick táctil ── */
+    #joy {
+      position: fixed; left: 18px; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+      width: 124px; height: 124px; border-radius: 50%; z-index: 12;
+      background: rgba(255,255,255,0.08); border: 2px solid rgba(255,255,255,0.25);
+      touch-action: none; display: none;
+    }
+    #knob {
+      position: absolute; left: 50%; top: 50%; width: 52px; height: 52px;
+      border-radius: 50%; background: rgba(255,255,255,0.35);
+      border: 2px solid rgba(255,255,255,0.5);
+      transform: translate(-50%, -50%); pointer-events: none;
+    }
   </style>
 </head>
 <body>
@@ -45,6 +98,25 @@
   <canvas id="scene"></canvas>
   <div id="scan"></div>
   <div id="hint">arrastrá para girar · pellizcá para zoom</div>
+  <div id="joy"><div id="knob"></div></div>
+  <div id="intro">
+    <div id="ibox">
+      <div class="ittl">⚽ PATIO MUNDIAL</div>
+      <div class="isub">dibujá tu cara (obligatorio) y poné tu nombre</div>
+      <canvas id="facecv" width="256" height="256"></canvas>
+      <div id="tools">
+        <div class="tool on" data-c="#2b1c12" style="background:#2b1c12"></div>
+        <div class="tool" data-c="#c1272d" style="background:#c1272d"></div>
+        <div class="tool" data-c="#1d3a8f" style="background:#1d3a8f"></div>
+        <div class="tool" data-c="#1d7a3a" style="background:#1d7a3a"></div>
+        <div class="tool" data-c="#f4f4ee" style="background:#f4f4ee"></div>
+        <div class="tool" data-c="ERASE" style="background:#e8b88f">⌫</div>
+        <div class="tool" data-c="CLEAR" style="background:#3a4666;color:#fff">✕</div>
+      </div>
+      <input id="iname" maxlength="14" placeholder="tu nombre…" autocomplete="off" />
+      <button id="ienter" disabled>ENTRAR AL PATIO</button>
+    </div>
+  </div>
   <div id="err"></div>
   <script type="module" src="./main.ts"></script>
 </body>
