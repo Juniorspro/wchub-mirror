@@ -186,6 +186,18 @@ const STADIUM_OUTER_DIAMETER = 105;
 const STADIUM_OVAL_RATIO = 1.4;
 const STADIUM_WALL_HEIGHT = 26;
 
+/** Normalized stadium-oval factor for a ground point: <1 inside the wall
+ *  ellipse, 1 on it, >1 outside. Used by game.ts for the BGM zone switch
+ *  (calm track inside the bowl) — callers should apply hysteresis around
+ *  1.0 rather than flipping on the raw threshold. */
+export function stadiumInteriorFactor(x: number, z: number): number {
+  const ax = (STADIUM_OUTER_DIAMETER / 2) * STADIUM_OVAL_RATIO;
+  const bz = STADIUM_OUTER_DIAMETER / 2;
+  const dx = (x - STADIUM_CENTER.x) / ax;
+  const dz = (z - STADIUM_CENTER.z) / bz;
+  return dx * dx + dz * dz;
+}
+
 // Portal placements — angles on the stadium's INNER ellipse (the field
 // edge where the bottom tier of stands begins). All 5 face inward
 // toward the field center, just like real team-emergence tunnels. The

@@ -57,8 +57,10 @@ import {
   SIGNPOST_X,
   SIGNPOST_Z,
   STADIUM_PORTAL_GATES,
+  stadiumInteriorFactor,
   type GameWorldObjects,
 } from './world';
+import { ASSETS } from '../assets';
 import { advanceSelfPrediction, getInterpolatedPlayers, type NetClient } from '../net';
 import { hasNativeBridge, openGameDetail } from './bridge';
 import { cameraDragBus, isPortraitRotated, subscribeRotated } from './touch';
@@ -144,6 +146,11 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
   // protects against any quick double-tap before navigation kicks in).
   let gHeldLastFrame = false;
   let portalRedirectFired = false;
+  // ─── BGM zone state ───────────────────────────────────────────────────────
+  // Calm track inside the stadium bowl, festive fair loop outside. Tracked
+  // with hysteresis (enter <0.92, exit >1.05 on the normalized oval factor)
+  // so the music can't flap when the player skirts the wall line.
+  let inStadiumBgmZone = false;
 
   // ─── Community / social state ─────────────────────────────────────────────
   // Compliments + wave use the same edge+cooldown trigger pattern as jump.
@@ -187,6 +194,11 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
 
   const net = runtimeContext?.net as NetClient | undefined;
   const audio = createGameAudio();
+  // Start the fair loop immediately — independent of the server connection,
+  // so "no music" can never be a symptom of a slow join. Before the audio
+  // unlock (landing page's Enter click) the engine queues the track and
+  // starts it on the unlock callback.
+  audio.playBgm(ASSETS['bgm_fair_loop']);
   const engine = new Engine(canvas, RUNTIME_CONFIG.engine.antialias, {
     preserveDrawingBuffer: RUNTIME_CONFIG.engine.preserveDrawingBuffer,
     stencil: RUNTIME_CONFIG.engine.stencil,
@@ -692,6 +704,20 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
           nearbyPortalGameId = portal.gameId;
         }
       }
+
+      // ── BGM zone switch — reuses myX/myZ from the portal scan. playBgm
+      // de-dupes by URL, so calling every frame only restarts playback on
+      // an actual zone flip. Falls back to the fair loop if the calm track
+      // ever goes missing from the manifest.
+      const zoneK = stadiumInteriorFactor(myX, myZ);
+      if (inStadiumBgmZone && zoneK > 1.05) inStadiumBgmZone = false;
+      else if (!inStadiumBgmZone && zoneK < 0.92) inStadiumBgmZone = true;
+      audio.playBgm(
+        inStadiumBgmZone
+          ? (ASSETS['bgm_stadium_calm'] ?? ASSETS['bgm_fair_loop'])
+          : ASSETS['bgm_fair_loop'],
+      );
+
       const gHeld = !!input?.keys.has('g') || !!input?.keys.has('G');
       // Edge-detected G-press near a portal jumps to that game. Inside the
       // host App we deep-link via the native bridge (openGameDetail) — this

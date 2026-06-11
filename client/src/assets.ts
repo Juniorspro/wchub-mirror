@@ -8,6 +8,8 @@ export type AssetMeta = {
 };
 
 export const ASSETS: Record<string, string> = {
+  "bgm_fair_loop": new URL("./assets/bgm/bgm_bgm-fair-loop_2f7397.mp3", import.meta.url).href,
+  "bgm_stadium_calm": new URL("./assets/bgm/bgm_bgm-stadium-calm_060593.mp3", import.meta.url).href,
   "field_soccer_ball": new URL("./assets/models/prop_field-soccer-ball_be41c5.glb", import.meta.url).href,
   "field_soccer_goal": new URL("./assets/models/prop_field-soccer-goal_3a2403.glb", import.meta.url).href,
   "glasses_aviator": new URL("./assets/models/prop_glasses-aviator_d423ef.glb", import.meta.url).href,
