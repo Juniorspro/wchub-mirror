@@ -84,6 +84,13 @@ export function registerMessages(room: Room<GameState>, state: GameState): void 
   const lastComplimentSentAt = new Map<string, number>();
   const lastComplimentReceivedAt = new Map<string, number>();
   const lastWaveAt = new Map<string, number>();
+  // Rolling chat log — replayed to late joiners (and reconnectors) via the
+  // 'chat-request' → 'chat-history' round trip so everyone shares the same
+  // chat box, not just whoever was online when a line was sent. Outlives
+  // individual sessions because the room itself survives emptying
+  // (autoDispose=false in room.ts).
+  const CHAT_LOG_CAP = 50;
+  const chatLog: Array<{ from: string; name: string; text: string; t: number }> = [];
 
   // Soccer ball — see ./soccer.ts. Sets up the tick + 'ball:request' handler.
   const soccerBall = registerSoccerBall(room, state);
@@ -152,12 +159,23 @@ export function registerMessages(room: Room<GameState>, state: GameState): void 
     lastChatAt.set(client.sessionId, now);
     const text = sanitizeText(msg?.text, MAX_CHAT_LEN);
     if (!text) return;
-    room.broadcast("chat", {
+    const entry = {
       from: client.sessionId,
       name: p.username,
       text,
       t: now,
-    });
+    };
+    chatLog.push(entry);
+    while (chatLog.length > CHAT_LOG_CAP) chatLog.shift();
+    room.broadcast("chat", entry);
+  });
+
+  // Chat backfill — the client sends 'chat-request' AFTER it has registered
+  // its 'chat-history' handler (a push on join would race the handler
+  // registration and Colyseus drops messages without a handler). Targeted
+  // send, not a broadcast: only the requester needs the backlog.
+  room.onMessage("chat-request", (client) => {
+    client.send("chat-history", { messages: chatLog });
   });
 
   room.onMessage<RenameMsg>("rename", (client, msg) => {

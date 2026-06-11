@@ -22,7 +22,7 @@ declare global {
 if (typeof window !== 'undefined' && !(window as unknown as { GAME_CONFIG?: unknown }).GAME_CONFIG) {
   (window as unknown as { GAME_CONFIG: unknown }).GAME_CONFIG = {
     roomName: 'dressup-lounge',
-    maxPlayers: 12,
+    maxPlayers: 20,
     tickHz: 20,
     port: 2567,
     world: { width: 200, height: 175 },

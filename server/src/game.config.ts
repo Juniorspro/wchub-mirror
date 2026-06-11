@@ -11,8 +11,9 @@ export const gameConfig = {
   /** Colyseus room name */
   roomName: "dressup-lounge",
 
-  /** Cozy lounge size — 12 avatars fit comfortably */
-  maxPlayers: 12,
+  /** Lounge capacity — raised 12 → 20 (2026-06-11) per request; the park
+   *  is large enough and avatars are cheap (no combat, 20Hz tick). */
+  maxPlayers: 20,
 
   /** Tick rate — lower than an arena since there's no combat */
   tickHz: 20,

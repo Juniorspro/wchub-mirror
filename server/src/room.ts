@@ -54,6 +54,14 @@ type CreateOpts = { code?: unknown };
 
 export class GameRoom extends Room<GameState> {
   maxClients = gameConfig.maxPlayers;
+  // Survive emptying (2026-06-11): with the default autoDispose=true the
+  // room died the moment the last socket dropped — so a transient network
+  // hiccup that disconnected everyone at once (or the creator leaving in a
+  // 1-on-1 lounge) nuked the room, its chat log, and any in-flight state.
+  // The room is NOT tied to any "host" player: it now lives until the
+  // Container's sleepAfter idle timer reclaims the process, and clients
+  // auto-reconnect into the same code with state intact.
+  autoDispose = false;
   code = "";
 
   onCreate(options: CreateOpts) {

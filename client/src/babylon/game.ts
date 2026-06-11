@@ -347,10 +347,10 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
     // Poll-style attach: every 250ms, if a room becomes available, register
     // chat + identity handlers. Cheap, idempotent.
     const attachInterval = setInterval(() => {
-      const room = (net as unknown as { room?: { onMessage: (t: string, cb: (msg: ChatEntry) => void) => void; _chatHooked?: boolean } }).room;
+      const room = (net as unknown as { room?: { onMessage: (t: string, cb: (msg: never) => void) => void; send: (t: string) => void; _chatHooked?: boolean } }).room;
       if (room && !room._chatHooked) {
         room._chatHooked = true;
-        room.onMessage('chat', (msg) => {
+        room.onMessage('chat', (msg: ChatEntry) => {
           // Stamp local arrival time — msg.t is the SERVER clock, which can
           // be minutes off the phone's; the HUD's unread comparison must
           // stay in one clock domain (see ChatEntry.localT).
@@ -364,6 +364,27 @@ export function startGame(canvas: HTMLCanvasElement, runtimeContext?: GameRuntim
           const a = avatars.get(msg.from);
           if (a) a.triggerChat(msg.text);
         });
+        // Backlog replay — the server's rolling chat log, so a late joiner
+        // (or a reconnect, which re-runs this hook on the fresh room object)
+        // sees the same chat box as everyone else. Merge-dedupe by sender +
+        // server timestamp: on reconnect the backlog overlaps what's
+        // already in the local history.
+        room.onMessage('chat-history', (msg: { messages?: ChatEntry[] }) => {
+          const incoming = Array.isArray(msg?.messages) ? msg.messages : [];
+          if (incoming.length === 0) return;
+          const seen = new Set(chatHistory.map((m) => `${m.from}:${m.t}`));
+          const fresh = incoming
+            .filter((m) => m && typeof m.text === 'string' && !seen.has(`${m.from}:${m.t}`))
+            .map((m) => ({ ...m, localT: Date.now() }));
+          if (fresh.length === 0) return;
+          chatHistory.push(...fresh);
+          chatHistory.sort((a, b) => a.t - b.t);
+          while (chatHistory.length > CHAT_HISTORY_CAP) chatHistory.shift();
+          setChatMessages([...chatHistory]);
+        });
+        // Request AFTER the handler exists — a push on join would race the
+        // registration above and Colyseus drops unhandled messages.
+        room.send('chat-request');
       }
     }, 250);
     // Stash so dispose can clear it
