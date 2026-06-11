@@ -40,6 +40,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
   <button class="chip" id="fprev">◀</button>
   <button class="chip" id="fbtn">😀 1/48 · base</button>
   <button class="chip" id="fnext">▶</button>
+  <button class="chip on" id="dbtn">🎨 dibujada</button>
 </div>
 <div id="bar">
   <button class="chip on" data-p="ESTUDIO">💡</button>
@@ -318,6 +319,10 @@ function buildIndices(){
    La cara es un descriptor de rasgos → headDisp lo esculpe en la esfera.
    48 caras determinísticas por seed (la 0 es la cara base del v3). */
 var FACEN=48,FACEIDX=0,FACE=null;
+/* v3.3: modo CARA DIBUJADA (sticker pegado a la cabeza, estilo cartoon).
+   Dibujado ON: ojos/boca/ceja van PINTADOS y el esculpido los apaga
+   (la nariz/mentón/cachetes siguen 3D y asoman a través del sticker). */
+var DRAWN=true;
 var FACENAMES=['base','el nene','doña rosa','tanque','flaco','cachetón','don angry',
   'la nona','pibito','narigón','el ruso','toro','finito','el profe','morfón',
   'orejudo','la jefa','chiquito','frentudo','el mago','duro','suavecito','tía marta',
@@ -328,13 +333,14 @@ function makeFace(i){
   var r=mulberry(1234+i*977);
   function R(a,b){return a+(b-a)*r()}
   /* amplitudes cartoon: ~×1.7 sobre el v3 para que se lean de lejos */
-  if(i===0)return{noseA:0.045,noseT:0.50,noseW:0.30,bridgeA:0.014,
+  var f;
+  if(i===0)f={noseA:0.045,noseT:0.50,noseW:0.30,bridgeA:0.014,
     eyeD:0.016,eyeSep:0.45,eyeT:0.625,eyeW:0.20,
     chinA:0.020,chinT:0.20,mouthD:0.009,mouthT:0.345,lipA:0.006,
     earA:0.024,earT:0.46,occA:0.013,
     cheekA:0.014,cheekT:0.40,cheekSep:0.62,
     browA:0.010,browT:0.66,jawA:0.007,frenteA:0.0};
-  return{
+  else f={
     noseA:R(0.025,0.075),noseT:R(0.46,0.55),noseW:R(0.18,0.44),bridgeA:R(0.005,0.024),
     eyeD:R(0.008,0.030),eyeSep:R(0.33,0.61),eyeT:R(0.60,0.665),eyeW:R(0.14,0.27),
     chinA:R(0.006,0.038),chinT:R(0.15,0.27),mouthD:R(0.004,0.018),mouthT:R(0.32,0.37),lipA:R(0,0.014),
@@ -342,18 +348,35 @@ function makeFace(i){
     cheekA:R(0.003,0.030),cheekT:R(0.36,0.45),cheekSep:R(0.48,0.78),
     browA:R(0.003,0.024),browT:R(0.64,0.70),jawA:R(0,0.022),frenteA:R(0,0.018)
   };
+  var d=makeFaceDrawn(i,r),k;
+  for(k in d)f[k]=d[k];
+  return f;
+}
+/* rasgos DIBUJADOS (consume el mismo stream del seed → determinístico) */
+function makeFaceDrawn(i,r){
+  function R(a,b){return a+(b-a)*r()}
+  if(i===0)return{browAng:0.10,browTh:11,eyeStyle:0,irisC:'#3a2a18',pupilS:0.45,
+    mouthStyle:0,mouthW:0.95,blush:0.4,freck:0,lashes:0};
+  return{
+    browAng:R(-0.45,0.45),browTh:R(6,17),eyeStyle:Math.floor(R(0,4.999)),
+    irisC:['#3a2a18','#1d3a5f','#2c5530','#5a3a1a','#222226','#6b3aa0'][Math.floor(R(0,5.999))],
+    pupilS:R(0.30,0.62),mouthStyle:Math.floor(R(0,5.999)),mouthW:R(0.55,1.25),
+    blush:R(0,0.85),freck:r()<0.30?1:0,lashes:r()<0.25?1:0
+  };
 }
 FACE=makeFace(0);
 /* cara: campo de desplazamiento radial (frente en θ=π/2), lee FACE */
 function headDisp(th,t){
-  var F=1.5708,C=FACE,r=0;
+  /* con cara DIBUJADA: ojos/ceja/boca van pintados → el esculpido los
+     apaga (ds=0) y quedan nariz/mentón/cachetes/orejas en 3D */
+  var F=1.5708,C=FACE,r=0,ds=DRAWN?0:1;
   r+=C.noseA*gauss(angDist(th,F),C.noseW)*gauss(t-C.noseT,0.085);                                  /* nariz */
   r+=C.bridgeA*gauss(angDist(th,F),0.42)*gauss(t-0.68,0.05);                                       /* puente/frente baja */
-  r-=C.eyeD*(gauss(angDist(th,F-C.eyeSep),C.eyeW)+gauss(angDist(th,F+C.eyeSep),C.eyeW))*gauss(t-C.eyeT,0.045); /* cuencas */
-  r+=C.browA*gauss(angDist(th,F),0.34)*gauss(t-C.browT,0.035);                                     /* ceja/arco */
+  r-=ds*C.eyeD*(gauss(angDist(th,F-C.eyeSep),C.eyeW)+gauss(angDist(th,F+C.eyeSep),C.eyeW))*gauss(t-C.eyeT,0.045); /* cuencas */
+  r+=ds*C.browA*gauss(angDist(th,F),0.34)*gauss(t-C.browT,0.035);                                  /* ceja/arco */
   r+=C.chinA*gauss(angDist(th,F),0.32)*gauss(t-C.chinT,0.06);                                      /* mentón */
-  r-=C.mouthD*gauss(angDist(th,F),0.30)*gauss(t-C.mouthT,0.03);                                    /* boca */
-  r+=C.lipA*gauss(angDist(th,F),0.22)*gauss(t-(C.mouthT-0.05),0.025);                              /* labio inferior */
+  r-=ds*C.mouthD*gauss(angDist(th,F),0.30)*gauss(t-C.mouthT,0.03);                                 /* boca */
+  r+=ds*C.lipA*gauss(angDist(th,F),0.22)*gauss(t-(C.mouthT-0.05),0.025);                           /* labio inferior */
   r+=C.earA*(gauss(angDist(th,0),0.22)+gauss(angDist(th,3.1416),0.22))*gauss(t-C.earT,0.06);       /* orejas */
   r+=C.occA*gauss(angDist(th,4.712),0.75)*gauss(t-0.70,0.10);                                      /* occipucio */
   r+=C.cheekA*(gauss(angDist(th,F-C.cheekSep),0.30)+gauss(angDist(th,F+C.cheekSep),0.30))*gauss(t-C.cheekT,0.07); /* cachetes */
@@ -722,6 +745,7 @@ function initFigure(){
   skelHelper=new THREE.SkeletonHelper(figMesh);
   skelHelper.material.linewidth=2;
   skelHelper.visible=false;
+  initDecal();
 }
 /* huesos direccionales: indice → [bindDir, ruta fk] */
 var DIRB=null;
@@ -776,6 +800,135 @@ function setMat(n){
   skinMat.clearcoat=m[3];
   skinMat.clearcoatRoughness=m[4];
 }
+/* ---------- cara dibujada MOLDEADA (no un png recto) ----------
+   Malla (θ,t) que copia la MISMA superficie del loft de la cabeza
+   (superelipse + headDisp) desplazada 6mm hacia afuera: el dibujo se
+   curva sobre frente/cachetes y la nariz 3D asoma a través. Cuelga del
+   hueso de la cabeza → acompaña nod/turn/tilt. */
+var decalGeo=null,decalTex=null,decalMesh=null,decalCv=null,decalCtx=null;
+var DEC_U=40,DEC_V=30,DEC_PHI=1.1,DEC_T0=0.16,DEC_T1=0.74;
+function buildDecalGeometry(){
+  var F=1.5708,pos=decalGeo.attributes.position.array,i,j,n=0;
+  for(j=0;j<=DEC_V;j++){
+    var t=DEC_T1-(j/DEC_V)*(DEC_T1-DEC_T0);
+    var row=sampleRow(HUM.HEAD,t),w=row[1],dF=row[2],dB=row[3],ex=row[4];
+    for(i=0;i<=DEC_U;i++){
+      var th=F-DEC_PHI+(i/DEC_U)*2*DEC_PHI;
+      var cs=Math.cos(th),sn=Math.sin(th);
+      var x=(cs<0?-1:1)*Math.pow(Math.abs(cs),2/ex);
+      var z=(sn<0?-1:1)*Math.pow(Math.abs(sn),2/ex);
+      var dE=lerp(sstep(-0.35,0.35,sn),dB,dF);
+      var px=-x*w,py=0.98+t*0.28,pz=z*dE;
+      var rr=headDisp(th,t)+0.006;
+      var rl=Math.sqrt(cs*cs+sn*sn)||1;
+      px+=(-cs/rl)*rr;
+      pz+=(sn/rl)*rr;
+      /* a locales del hueso head (bind: (0,1.087,0.005), rot identidad) */
+      pos[n++]=px;pos[n++]=py-1.087;pos[n++]=pz-0.005;
+    }
+  }
+  decalGeo.attributes.position.needsUpdate=true;
+}
+function initDecal(){
+  decalCv=mkCanvas(512,512);
+  decalCtx=decalCv.getContext('2d');
+  decalTex=new THREE.CanvasTexture(decalCv);
+  decalGeo=new THREE.BufferGeometry();
+  var nv=(DEC_U+1)*(DEC_V+1);
+  decalGeo.setAttribute('position',new THREE.BufferAttribute(new Float32Array(nv*3),3));
+  var uv=new Float32Array(nv*2),idx=[],i,j,k=0;
+  for(j=0;j<=DEC_V;j++)for(i=0;i<=DEC_U;i++){uv[k++]=i/DEC_U;uv[k++]=1-j/DEC_V}
+  for(j=0;j<DEC_V;j++)for(i=0;i<DEC_U;i++){
+    var a=j*(DEC_U+1)+i,b=a+1,cc=a+DEC_U+1,d=cc+1;
+    idx.push(a,cc,b,b,cc,d);
+  }
+  decalGeo.setIndex(idx);
+  decalGeo.setAttribute('uv',new THREE.BufferAttribute(uv,2));
+  buildDecalGeometry();
+  var dm=new THREE.MeshBasicMaterial({map:decalTex,transparent:true,side:THREE.DoubleSide});
+  decalMesh=new THREE.Mesh(decalGeo,dm);
+  decalMesh.frustumCulled=false;
+  BREF[8].add(decalMesh);
+  paintFaceDecal();
+}
+function paintFaceDecal(){
+  var c=decalCtx,C=FACE,s;
+  var yk=function(t){return(1-(t-DEC_T0)/(DEC_T1-DEC_T0))*512};
+  var xk=function(sep){return(sep/DEC_PHI)*256};
+  c.clearRect(0,0,512,512);
+  var ink='#2b1c12';
+  var ey=yk(C.eyeT),ex=xk(C.eyeSep),er=C.eyeW*210;
+  if(C.blush>0.05){ /* rubor */
+    c.fillStyle='rgba(232,108,100,'+(C.blush*0.45).toFixed(3)+')';
+    var by=yk(C.cheekT),bx=xk(C.cheekSep);
+    c.beginPath();c.arc(256-bx,by,er*0.8,0,7);c.fill();
+    c.beginPath();c.arc(256+bx,by,er*0.8,0,7);c.fill();
+  }
+  c.strokeStyle=ink;c.lineCap='round';c.lineWidth=C.browTh; /* cejas */
+  var bw=er*1.15,byy=yk(C.browT);
+  for(s=-1;s<=1;s+=2){
+    var cx=256+s*ex,dy=Math.tan(C.browAng)*bw/2*s;
+    c.beginPath();c.moveTo(cx-bw/2,byy+dy);c.lineTo(cx+bw/2,byy-dy);c.stroke();
+  }
+  for(s=-1;s<=1;s+=2){ /* ojos por estilo */
+    var cx2=256+s*ex;
+    if(C.eyeStyle===2){ /* feliz cerrado */
+      c.strokeStyle=ink;c.lineWidth=9;
+      c.beginPath();c.arc(cx2,ey+er*0.25,er*0.7,Math.PI*1.12,Math.PI*1.88);c.stroke();
+    }else if(C.eyeStyle===4){ /* puntito */
+      c.fillStyle=ink;c.beginPath();c.arc(cx2,ey,er*0.38,0,7);c.fill();
+    }else{
+      var rx=er*(C.eyeStyle===1?0.95:0.75),ry=er*(C.eyeStyle===3?0.6:1.0);
+      c.fillStyle='#fff';c.strokeStyle=ink;c.lineWidth=6;
+      c.beginPath();c.ellipse(cx2,ey,rx,ry,0,0,7);c.fill();c.stroke();
+      c.fillStyle=C.irisC;
+      c.beginPath();c.arc(cx2,ey+ry*0.08,Math.min(rx,ry)*0.62,0,7);c.fill();
+      c.fillStyle='#14100c';
+      c.beginPath();c.arc(cx2,ey+ry*0.08,Math.min(rx,ry)*0.62*C.pupilS,0,7);c.fill();
+      c.fillStyle='#fff';
+      c.beginPath();c.arc(cx2-rx*0.25,ey-ry*0.3,Math.min(rx,ry)*0.2,0,7);c.fill();
+      if(C.eyeStyle===3){ /* dormilón: párpado */
+        c.strokeStyle=ink;c.lineWidth=7;
+        c.beginPath();c.moveTo(cx2-rx,ey-ry*0.45);c.lineTo(cx2+rx,ey-ry*0.45);c.stroke();
+      }
+      if(C.lashes){
+        c.strokeStyle=ink;c.lineWidth=5;
+        for(var l=0;l<3;l++){
+          c.beginPath();
+          c.moveTo(cx2+s*rx*(0.62+l*0.14),ey-ry*(0.72-l*0.1));
+          c.lineTo(cx2+s*rx*(0.95+l*0.2),ey-ry*(1.05-l*0.12));c.stroke();
+        }
+      }
+    }
+  }
+  if(C.freck){ /* pecas */
+    c.fillStyle='rgba(122,74,42,0.55)';
+    for(var fI=0;fI<4;fI++)for(s=-1;s<=1;s+=2){
+      c.beginPath();c.arc(256+s*(ex*0.7+fI*10),yk(C.cheekT)-8+(fI%2)*12,3.5,0,7);c.fill();
+    }
+  }
+  var my=yk(C.mouthT),mw=C.mouthW*95; /* boca por estilo */
+  c.strokeStyle=ink;c.lineWidth=10;c.lineCap='round';
+  if(C.mouthStyle===0){
+    c.beginPath();c.arc(256,my-mw*0.45,mw,Math.PI*0.18,Math.PI*0.82);c.stroke();
+  }else if(C.mouthStyle===1){ /* grin con dientes */
+    c.beginPath();c.arc(256,my-mw*0.3,mw,Math.PI*0.12,Math.PI*0.88);c.closePath();
+    c.fillStyle='#fff';c.fill();c.stroke();
+    c.lineWidth=5;
+    c.beginPath();c.moveTo(256-mw*0.55,my+mw*0.16);c.lineTo(256+mw*0.55,my+mw*0.16);c.stroke();
+  }else if(C.mouthStyle===2){ /* o */
+    c.fillStyle='#5a2a1e';c.beginPath();c.ellipse(256,my,mw*0.32,mw*0.42,0,0,7);c.fill();
+  }else if(C.mouthStyle===3){ /* serio */
+    c.beginPath();c.moveTo(256-mw*0.5,my);c.lineTo(256+mw*0.5,my);c.stroke();
+  }else if(C.mouthStyle===4){ /* smirk */
+    c.beginPath();c.arc(256+mw*0.25,my-mw*0.5,mw*0.75,Math.PI*0.35,Math.PI*0.72);c.stroke();
+  }else{ /* ondulada */
+    c.beginPath();c.moveTo(256-mw*0.55,my);
+    c.quadraticCurveTo(256-mw*0.27,my+13,256,my);
+    c.quadraticCurveTo(256+mw*0.27,my-13,256+mw*0.55,my);c.stroke();
+  }
+  decalTex.needsUpdate=true;
+}
 /* re-esculpe la cara: regenera posiciones en bind pose (mismo layout,
    mismos índices/pesos — solo cambia el campo de la cabeza) */
 function setFace(i){
@@ -785,6 +938,11 @@ function setFace(i){
   figGeo.attributes.position.needsUpdate=true;
   figGeo.computeVertexNormals();
   figGeo.attributes.normal.needsUpdate=true;
+  if(decalGeo){
+    buildDecalGeometry();
+    paintFaceDecal();
+    decalMesh.visible=DRAWN;
+  }
   $('fbtn').textContent='😀 '+(FACEIDX+1)+'/'+FACEN+' · '+FACENAMES[FACEIDX];
 }
 /* ---------- osciladores por pose ---------- */
@@ -1278,6 +1436,11 @@ function wireUI(){
   $('fprev').addEventListener('click',function(){setFace(FACEIDX-1)});
   $('fnext').addEventListener('click',function(){setFace(FACEIDX+1)});
   $('fbtn').addEventListener('click',function(){setFace(1+Math.floor(Math.random()*(FACEN-1)))});
+  $('dbtn').addEventListener('click',function(){
+    DRAWN=!DRAWN;
+    if(DRAWN)$('dbtn').classList.add('on');else $('dbtn').classList.remove('on');
+    setFace(FACEIDX); /* re-esculpe: con dibujo apaga ojos/boca 3D */
+  });
   $('wbtn').addEventListener('click',function(){
     wireMesh.visible=!wireMesh.visible;
     if(wireMesh.visible)$('wbtn').classList.add('on');else $('wbtn').classList.remove('on');
