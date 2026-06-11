@@ -899,7 +899,10 @@ function buildCartel(scene: Scene, url: string, w: number, h: number,
   mat.specularColor = new Color3(0, 0, 0);
   const plano = MeshBuilder.CreatePlane('cartel-img', { width: w, height: h }, scene);
   plano.parent = root;
-  plano.position.set(0, h / 2 + 1.1, -0.06);
+  // el frente del plano es -Z local → girarlo π para que mire al parque
+  // (el yaw del root apunta +Z local al centro del mapa)
+  plano.rotation.y = Math.PI;
+  plano.position.set(0, h / 2 + 1.1, 0.06);
   plano.material = mat;
   plano.isPickable = false;
   for (const sx of [-1, 1]) {
@@ -945,7 +948,8 @@ function buildFixtureBoard(scene: Scene, x: number, z: number, yaw: number,
   mat.specularColor = new Color3(0, 0, 0);
   const plano = MeshBuilder.CreatePlane('fixture-img', { width: 5.0, height: 3.0 }, scene);
   plano.parent = root;
-  plano.position.set(0, 2.7, -0.08);
+  plano.rotation.y = Math.PI; // frente (-Z) girado hacia el parque
+  plano.position.set(0, 2.7, 0.08);
   plano.material = mat;
   plano.isPickable = false;
   for (const sx of [-1.9, 1.9]) {
@@ -1005,7 +1009,8 @@ function buildTienda(scene: Scene, def: TiendaDef, x: number, z: number, facing:
     const panel = MeshBuilder.CreatePlane(`${def.id}-roof-${sign}`, { width: 4.0, height: 1.75 }, scene);
     panel.parent = root;
     panel.position.set(0, (POST_H + RIDGE_Y) / 2, sign * 0.72);
-    panel.rotation.x = sign === 1 ? Math.PI / 2 - 0.62 : -(Math.PI / 2 - 0.62);
+    // borde superior hacia la cumbrera (centro): pendiente A dos aguas
+    panel.rotation.x = sign === 1 ? -(Math.PI / 2 - 0.62) : (Math.PI / 2 - 0.62);
     panel.material = roofMat;
     panel.isPickable = false;
   }
@@ -1103,6 +1108,9 @@ interface Player {
 }
 let PLAYER: Player | null = null;
 const INPUT = { kx: 0, ky: 0, jx: 0, jy: 0 };
+// puertas-portal del estadio (hint de cercanía + pulso)
+const PORTAL_DOORS: Array<{ x: number; z: number; url: string; label: string; mat: StandardMaterial }> = [];
+let PHINT: HTMLElement | null = null;
 const DEC_U = 32;
 const DEC_V = 24;
 const DEC_PHI = 1.1;
@@ -1508,37 +1516,96 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   buildCartel(scene, portraitUrl, 2.2, 3.0, -13, 22, Math.atan2(13, -22), woodDarkMat);
   buildCartel(scene, bannerUrl, 4.6, 1.7, -25, -14, Math.atan2(25, 14), woodDarkMat);
   buildCartel(scene, portraitUrl, 2.2, 3.0, 33, -20, Math.atan2(-33, 20), woodDarkMat);
-  // Los 5 covers de portales montados en la pared del estadio (como las
-  // puertas decoradas del original) a ambos lados del portón.
-  const covers = [coverGoalieUrl, coverDribblerUrl, coverJugglerUrl, coverCardsUrl, coverRacingUrl];
-  const coverOffs = [-1.05, -0.52, 0.52, 1.05, 1.55];
-  for (let i = 0; i < covers.length; i++) {
+  // ─── PUERTAS-PORTAL del estadio (como el original: te llevan a otros
+  // juegos de Rezona). Tocá la puerta para abrir el link. Las dos sin
+  // gameId todavía quedan como "COMING SOON" (igual que en world.ts).
+  const PORTALES: Array<{ url: string; label: string; cover: string }> = [
+    { url: '', label: 'Festejo GOTY', cover: coverCardsUrl },
+    { url: 'https://web.rezona.ai/share/game/OTMzMzI4NA', label: 'Ball Juggler', cover: coverJugglerUrl },
+    { url: 'https://web.rezona.ai/share/game/OTMzMjQ5NA', label: 'Catching These Balls', cover: coverGoalieUrl },
+    { url: 'https://web.rezona.ai/share/game/OTMzMTc0NQ', label: 'Master Dribbler', cover: coverDribblerUrl },
+    { url: '', label: 'Coming Soon', cover: coverRacingUrl },
+  ];
+  const coverOffs = [-1.55, -1.0, -0.5, 0.5, 1.0];
+  for (let i = 0; i < PORTALES.length; i++) {
     const a = -Math.PI / 2 + coverOffs[i];
     let nx = Math.cos(a) / EST_A;
     let nz = Math.sin(a) / EST_B;
     const nl = Math.hypot(nx, nz) || 1;
     nx /= nl;
     nz /= nl;
-    const px = ESTADIO.x + Math.cos(a) * EST_A + nx * 0.6;
-    const pz = ESTADIO.z + Math.sin(a) * EST_B + nz * 0.6;
-    const yaw = Math.atan2(nx, nz); // frente del plano (-Z local) hacia afuera
-    const frame = MeshBuilder.CreateBox('cover-frame', { width: 2.5, height: 3.3, depth: 0.12 }, scene);
-    frame.position.set(px, 3.3, pz);
-    frame.rotation.y = yaw;
-    frame.material = stdMat(scene, `cover-frame-${i}`, '#2e2a24');
-    frame.isPickable = false;
-    const cmat = new StandardMaterial(`cover-mat-${i}`, scene);
-    const ctex = new Texture(covers[i], scene);
+    const px = ESTADIO.x + Math.cos(a) * EST_A + nx * 0.3;
+    const pz = ESTADIO.z + Math.sin(a) * EST_B + nz * 0.3;
+    const root = new TransformNode(`portal-${i}`, scene);
+    root.position.set(px, 0, pz);
+    root.rotation.y = Math.atan2(nx, nz); // +Z local hacia AFUERA de la pared
+    // marco de puerta: jambas + dintel + fondo oscuro
+    for (const sx of [-1.25, 1.25]) {
+      const jamb = MeshBuilder.CreateBox('portal-jamb', { width: 0.3, height: 3.5, depth: 0.5 }, scene);
+      jamb.parent = root;
+      jamb.position.set(sx, 1.75, 0);
+      jamb.material = stoneMat;
+      jamb.isPickable = false;
+    }
+    const lintel = MeshBuilder.CreateBox('portal-lintel', { width: 2.9, height: 0.35, depth: 0.55 }, scene);
+    lintel.parent = root;
+    lintel.position.set(0, 3.6, 0);
+    lintel.material = stdMat(scene, `portal-lintel-${i}`, '#e6c34a');
+    lintel.isPickable = false;
+    const fondo = MeshBuilder.CreateBox('portal-fondo', { width: 2.3, height: 3.4, depth: 0.18 }, scene);
+    fondo.parent = root;
+    fondo.position.set(0, 1.7, -0.1);
+    fondo.material = stdMat(scene, 'portal-fondo-mat', '#15151c');
+    fondo.isPickable = false;
+    // cover del juego = la puerta en sí (tocable)
+    const cmat = new StandardMaterial(`portal-cover-${i}`, scene);
+    const ctex = new Texture(PORTALES[i].cover, scene);
     cmat.diffuseTexture = ctex;
     cmat.emissiveTexture = ctex;
-    cmat.emissiveColor = new Color3(0.4, 0.4, 0.4);
+    cmat.emissiveColor = new Color3(0.42, 0.42, 0.42);
     cmat.specularColor = new Color3(0, 0, 0);
-    const cplane = MeshBuilder.CreatePlane(`cover-img-${i}`, { width: 2.2, height: 3.0 }, scene);
-    cplane.position.set(px + nx * 0.08, 3.3, pz + nz * 0.08);
-    cplane.rotation.y = yaw;
-    cplane.material = cmat;
-    cplane.isPickable = false;
+    const puerta = MeshBuilder.CreatePlane(`portal-img-${i}`, { width: 2.1, height: 3.1 }, scene);
+    puerta.parent = root;
+    puerta.rotation.y = Math.PI; // frente (-Z) hacia afuera
+    puerta.position.set(0, 1.72, 0.04);
+    puerta.material = cmat;
+    puerta.isPickable = true;
+    puerta.metadata = { portalUrl: PORTALES[i].url, portalLabel: PORTALES[i].label };
+    PORTAL_DOORS.push({ x: px, z: pz, url: PORTALES[i].url, label: PORTALES[i].label, mat: cmat });
+    // cartelito con el nombre del juego sobre el dintel
+    const ltex = new DynamicTexture(`portal-label-${i}`, { width: 512, height: 96 }, scene, true);
+    const lc = ltex.getContext() as unknown as CanvasRenderingContext2D;
+    lc.fillStyle = '#10204a';
+    lc.fillRect(0, 0, 512, 96);
+    lc.strokeStyle = '#e8c84a';
+    lc.lineWidth = 6;
+    lc.strokeRect(3, 3, 506, 90);
+    lc.fillStyle = PORTALES[i].url ? '#f3ecd9' : '#8a90a8';
+    lc.textAlign = 'center';
+    lc.textBaseline = 'middle';
+    lc.font = 'bold 44px ui-monospace, monospace';
+    lc.fillText(PORTALES[i].url ? PORTALES[i].label : PORTALES[i].label.toUpperCase(), 256, 50, 490);
+    ltex.update();
+    const lmat = new StandardMaterial(`portal-label-mat-${i}`, scene);
+    lmat.diffuseTexture = ltex;
+    lmat.emissiveTexture = ltex;
+    lmat.emissiveColor = new Color3(0.5, 0.5, 0.5);
+    lmat.specularColor = new Color3(0, 0, 0);
+    const lplane = MeshBuilder.CreatePlane(`portal-label-pl-${i}`, { width: 2.7, height: 0.5 }, scene);
+    lplane.parent = root;
+    lplane.rotation.y = Math.PI;
+    lplane.position.set(0, 4.1, 0.05);
+    lplane.material = lmat;
+    lplane.isPickable = false;
   }
+  // tocar una puerta abre el juego (si tiene link)
+  scene.onPointerDown = (_evt, pick) => {
+    const md = pick?.pickedMesh?.metadata as { portalUrl?: string; portalLabel?: string } | undefined;
+    if (pick?.hit && md && md.portalUrl) {
+      window.open(md.portalUrl, '_blank');
+    }
+  };
+
 
   // ─── Robles y matas de pasto (billboards cruzados, estilo del juego) ──
   // Despejado alrededor de los POIs nuevos y sus caminitos.
@@ -1679,6 +1746,29 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       PLAYER.mesh.updateVerticesData('normal', PLAYER.normals);
       decalPositions(J, PLAYER.decalPos, DEC_U, DEC_V, DEC_PHI, DEC_T0, DEC_T1);
       PLAYER.decal.updateVerticesData('position', PLAYER.decalPos);
+      // puertas-portal: pulso + hint al acercarse
+      let nearPortal: { url: string; label: string; mat: StandardMaterial } | null = null;
+      for (const d of PORTAL_DOORS) {
+        d.mat.emissiveColor.set(0.42, 0.42, 0.42);
+        if (!nearPortal && Math.hypot(PLAYER.root.position.x - d.x, PLAYER.root.position.z - d.z) < 5) {
+          nearPortal = d;
+        }
+      }
+      if (nearPortal) {
+        const pulse = 0.55 + 0.18 * Math.sin(t * 5);
+        nearPortal.mat.emissiveColor.set(pulse, pulse, pulse);
+      }
+      if (!PHINT) PHINT = document.getElementById('phint');
+      if (PHINT) {
+        if (nearPortal) {
+          PHINT.style.display = 'block';
+          PHINT.textContent = nearPortal.url
+            ? '⚽ ' + nearPortal.label + ' — tocá la puerta para jugar'
+            : '🚧 ' + nearPortal.label;
+        } else {
+          PHINT.style.display = 'none';
+        }
+      }
       camera.target.x += (PLAYER.root.position.x - camera.target.x) * 0.12;
       camera.target.z += (PLAYER.root.position.z - camera.target.z) * 0.12;
       camera.target.y += (PLAYER.root.position.y + 1.0 - camera.target.y) * 0.12;
