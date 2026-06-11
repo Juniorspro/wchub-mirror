@@ -41,6 +41,8 @@ import flagstoneUrl from '../src/assets/sprite/sprite_tex-flagstone_14c15b.webp'
 import woodPlanksUrl from '../src/assets/sprite/sprite_tex-wood-planks_656cc1.webp';
 import cutStoneUrl from '../src/assets/sprite/sprite_tex-cut-stone_525147.webp';
 import turfUrl from '../src/assets/sprite/sprite_stadium-turf_f0a345.png';
+import crowdUrl from '../src/assets/sprite/sprite_stadium-crowd_1c49a4.png';
+import bannerUrl from '../src/assets/bg/bg_poster-worldcup-banner_e92888.webp';
 
 // ─── Constantes del layout (portables a world.ts) ───────────────────────
 const RING_RADIUS = 17.5;        // radio del anillo de tiendas
@@ -54,6 +56,13 @@ const GROUND_SIZE = 300;
 const CANCHA = { x: 44, z: -5 };      // este — cancha de práctica 18×26
 const COPAS = { x: 20.5, z: 32 };     // noreste — sector de copas + podio
 const MUNECO = { x: -31.7, z: -4.3 }; // oeste — el muñeco (mascota fan #1)
+// Estadio al norte (mitad de escala del juego: oval 1.4, portón al sur)
+const ESTADIO = { x: 0, z: 68 };
+const EST_B = 26;                  // semieje z (el juego: 52.5)
+const EST_A = EST_B * 1.4;         // semieje x (mismo ratio oval)
+const EST_WALL_H = 15;             // alto de pared (el juego: 26)
+// Cerca perimetral del parque (como buildParkFence del juego)
+const FENCE = { x0: -52, z0: -44, x1: 58, z1: 98 };
 
 interface TiendaDef {
   id: string;
@@ -62,7 +71,7 @@ interface TiendaDef {
   color: string;
 }
 
-// Las 7 tiendas reales del juego + 3 temáticas nuevas de feria.
+// Las 7 tiendas REALES del juego (STALL_LAYOUT de entities.ts) — nada inventado.
 const TIENDAS: TiendaDef[] = [
   { id: 'shirts',    nombre: "Sasha's Shirts",   rubro: 'SHIRTS & JERSEYS', color: '#c14444' },
   { id: 'pants',     nombre: 'Pants Pavilion',   rubro: 'PANTS & SHORTS',   color: '#3a6ea5' },
@@ -71,9 +80,6 @@ const TIENDAS: TiendaDef[] = [
   { id: 'glasses',   nombre: 'Glasses + Bags',   rubro: 'GLASSES & BAGS',   color: '#d96bc4' },
   { id: 'scarves',   nombre: 'Cozy Scarves',     rubro: 'SCARVES',          color: '#e89c4a' },
   { id: 'customize', nombre: 'The Design Bench', rubro: 'DESIGN YOUR OWN',  color: '#a85dd9' },
-  { id: 'chori',     nombre: 'Choripán Corner',  rubro: 'PARRILLA',         color: '#c75b39' },
-  { id: 'mate',      nombre: 'Mate & Tortas',    rubro: 'MERIENDA',         color: '#7c9e5a' },
-  { id: 'prode',     nombre: 'Prode Mundial',    rubro: 'APUESTAS',         color: '#4aa3a3' },
 ];
 
 // Banderas simplificadas (franjas pintadas a mano en DynamicTexture).
@@ -204,34 +210,8 @@ function buildNeonIcon(scene: Scene, id: string, spinners: Spinner[], parent: Tr
       part(B.CreateCylinder('i-tip', { diameterBottom: 0.15, diameterTop: 0.02, height: 0.3, tessellation: 10 }, scene), violet, 0.38, 0.95, 0, 0, 0, 0.5);
       break;
     }
-    case 'chori': { // choripán: pan + chori asomando
-      const bread = neonMat(scene, 'neon-bread', '#ffc44d');
-      const meat = neonMat(scene, 'neon-chori', '#ff5b3a');
-      part(B.CreateCapsule('i-bun-b', { radius: 0.2, height: 1.0, tessellation: 12 }, scene), bread, 0, 0.18, 0.06, 0, 0, Math.PI / 2);
-      part(B.CreateCapsule('i-bun-t', { radius: 0.2, height: 1.0, tessellation: 12 }, scene), bread, 0, 0.42, 0.06, 0, 0, Math.PI / 2);
-      part(B.CreateCapsule('i-chori', { radius: 0.13, height: 1.15, tessellation: 12 }, scene), meat, 0, 0.3, -0.12, 0, 0, Math.PI / 2);
-      break;
-    }
-    case 'mate': { // mate: calabaza + boca + bombilla
-      const green = neonMat(scene, 'neon-mate', '#6bff6b');
-      const silver = neonMat(scene, 'neon-bombilla', '#e8f4ff');
-      part(B.CreateSphere('i-gourd', { diameter: 0.62, segments: 14 }, scene), green, 0, 0.3, 0).scaling.set(0.92, 1.15, 0.92);
-      part(B.CreateTorus('i-rim', { diameter: 0.4, thickness: 0.06, tessellation: 18 }, scene), green, 0, 0.66, 0);
-      part(B.CreateCylinder('i-straw', { diameter: 0.06, height: 0.85, tessellation: 8 }, scene), silver, 0.18, 0.85, 0, 0, 0, -0.45);
-      part(B.CreateSphere('i-straw-end', { diameter: 0.14, segments: 8 }, scene), silver, 0.37, 1.2, 0);
-      break;
-    }
-    default: { // prode: dado con puntos
-      const teal = neonMat(scene, 'neon-dice', '#4dff9e');
-      const dark = stdMat(scene, 'neon-dice-pip', '#0a2a18');
-      part(B.CreateBox('i-die', { size: 0.7 }, scene), teal, 0, 0.35, 0);
-      // pips: 1 al frente, 2 arriba
-      part(B.CreateDisc('i-pip-f', { radius: 0.08, tessellation: 12 }, scene), dark, 0, 0.35, -0.355);
-      part(B.CreateDisc('i-pip-t1', { radius: 0.08, tessellation: 12 }, scene), dark, -0.15, 0.706, -0.15, Math.PI / 2);
-      part(B.CreateDisc('i-pip-t2', { radius: 0.08, tessellation: 12 }, scene), dark, 0.15, 0.706, 0.15, Math.PI / 2);
-      root.rotation.z = 0.18;
-      break;
-    }
+    default:
+      break; // las 7 tiendas reales están cubiertas arriba
   }
   spinners.push({ node: root, baseY: y, phase: Math.random() * Math.PI * 2 });
 }
@@ -672,6 +652,225 @@ function buildCopas(scene: Scene, cx: number, cz: number, stoneMat: StandardMate
   spinners.push({ node: starRoot, baseY: 0, phase: 2.6 });
 }
 
+// Cerca perimetral del parque: 4 rieles + postes cada 8u (buildParkFence).
+function buildCerca(scene: Scene): void {
+  const railMat = stdMat(scene, 'fence-rail-mat', '#8a6435');
+  const postMat = stdMat(scene, 'fence-post-mat', '#6b4e26');
+  const { x0, z0, x1, z1 } = FENCE;
+  const cx = (x0 + x1) / 2;
+  const cz = (z0 + z1) / 2;
+  const xLen = x1 - x0;
+  const zLen = z1 - z0;
+  const rail = (w: number, d: number, px: number, pz: number): void => {
+    const r = MeshBuilder.CreateBox('fence-rail', { width: w, height: 1.1, depth: d }, scene);
+    r.position.set(px, 0.55, pz);
+    r.material = railMat;
+    r.isPickable = false;
+  };
+  rail(xLen, 0.18, cx, z0);
+  rail(xLen, 0.18, cx, z1);
+  rail(0.18, zLen, x0, cz);
+  rail(0.18, zLen, x1, cz);
+  for (let x = x0; x <= x1; x += 8) {
+    for (const z of [z0, z1]) {
+      const p = MeshBuilder.CreateBox('fence-post', { width: 0.32, height: 1.4, depth: 0.32 }, scene);
+      p.position.set(x, 0.7, z);
+      p.material = postMat;
+      p.isPickable = false;
+    }
+  }
+  for (let z = z0; z <= z1; z += 8) {
+    for (const x of [x0, x1]) {
+      const p = MeshBuilder.CreateBox('fence-post', { width: 0.32, height: 1.4, depth: 0.32 }, scene);
+      p.position.set(x, 0.7, z);
+      p.material = postMat;
+      p.isPickable = false;
+    }
+  }
+}
+
+// Estadio del juego a media escala: oval con portón al sur, tribunas
+// escalonadas, anillo de público, techo con borde dorado, pilares y
+// cartel REZONA WORLD CUP al frente (misma receta que buildStadium).
+function buildEstadio(scene: Scene): void {
+  const cx = ESTADIO.x;
+  const cz = ESTADIO.z;
+  const ax = EST_A;
+  const bz = EST_B;
+  const beige = stdMat(scene, 'est-beige', '#d8c4a5');
+  const gray = stdMat(scene, 'est-gray', '#8a8a86');
+  const white = stdMat(scene, 'est-white', '#ededea');
+  const seat = stdMat(scene, 'est-seat', '#5a4030');
+  const roofM = stdMat(scene, 'est-roof', '#aeb1b4');
+  const goldTrim = stdMat(scene, 'est-gold', '#e6c34a');
+
+  // piso de césped interior (asoma por el portón)
+  const turfMat = stdMat(scene, 'est-turf', '#ffffff');
+  const turfTex = new Texture(turfUrl, scene);
+  turfTex.uScale = 8;
+  turfTex.vScale = 8;
+  turfMat.diffuseTexture = turfTex;
+  const floor = MeshBuilder.CreateDisc('est-floor', { radius: 1, tessellation: 56 }, scene);
+  floor.rotation.x = Math.PI / 2;
+  floor.scaling.set(ax - 7, bz - 7, 1);
+  floor.position.set(cx, 0.02, cz);
+  floor.material = turfMat;
+  floor.isPickable = false;
+
+  // pared en DOS ribbons: la inferior con corte de portón al sur, la
+  // superior cerrada (sin "ventana de cielo" sobre el dintel)
+  const GATE_H = 4.6;
+  const GATE_HALF_ANGLE = 0.14;
+  const SEGS = 56;
+  const aStart = -Math.PI / 2 + GATE_HALF_ANGLE;
+  const aEnd = -Math.PI / 2 + Math.PI * 2 - GATE_HALF_ANGLE;
+  const ring = (radA: number, radB: number, yLo: number, yHi: number, closed: boolean, mat: StandardMaterial, name: string): void => {
+    const lo: Vector3[] = [];
+    const hi: Vector3[] = [];
+    for (let i = 0; i <= SEGS; i++) {
+      const t = i / SEGS;
+      const a = closed ? t * Math.PI * 2 : aStart + (aEnd - aStart) * t;
+      const x = cx + radA * Math.cos(a);
+      const z = cz + radB * Math.sin(a);
+      lo.push(new Vector3(x, yLo, z));
+      hi.push(new Vector3(x, yHi, z));
+    }
+    const rib = MeshBuilder.CreateRibbon(name, {
+      pathArray: [lo, hi], sideOrientation: Mesh.DOUBLESIDE, closeArray: false, closePath: closed,
+    }, scene);
+    rib.material = mat;
+    rib.isPickable = false;
+  };
+  ring(ax, bz, 0, GATE_H, false, beige, 'est-wall-lo');
+  ring(ax, bz, GATE_H, EST_WALL_H, true, beige, 'est-wall-hi');
+
+  // tribunas: 4 niveles que suben hacia afuera (riser + estante)
+  const TIERS = 4;
+  const RISE = 1.5;
+  const INSET = 1.5;
+  const inA = ax - TIERS * INSET;
+  const inB = bz - TIERS * INSET;
+  for (let tier = 0; tier < TIERS; tier++) {
+    const yLo = tier * RISE;
+    const yHi = yLo + RISE;
+    const tIn = tier / TIERS;
+    const tOut = (tier + 1) / TIERS;
+    const iA = inA + (ax - inA) * tIn;
+    const iB = inB + (bz - inB) * tIn;
+    const oA = inA + (ax - inA) * tOut;
+    const oB = inB + (bz - inB) * tOut;
+    ring(iA, iB, yLo, yHi, false, seat, `est-riser-${tier}`);
+    // estante horizontal del nivel
+    const shIn: Vector3[] = [];
+    const shOut: Vector3[] = [];
+    for (let i = 0; i <= SEGS; i++) {
+      const t = i / SEGS;
+      const a = aStart + (aEnd - aStart) * t;
+      shIn.push(new Vector3(cx + iA * Math.cos(a), yHi, cz + iB * Math.sin(a)));
+      shOut.push(new Vector3(cx + oA * Math.cos(a), yHi, cz + oB * Math.sin(a)));
+    }
+    const shelf = MeshBuilder.CreateRibbon(`est-shelf-${tier}`, {
+      pathArray: [shIn, shOut], sideOrientation: Mesh.DOUBLESIDE, closeArray: false, closePath: false,
+    }, scene);
+    shelf.material = gray;
+    shelf.isPickable = false;
+    // tapas laterales en el corte del portón (perfil escalonado)
+    for (const a of [aStart, aEnd]) {
+      const xi = cx + iA * Math.cos(a);
+      const zi = cz + iB * Math.sin(a);
+      const xo = cx + oA * Math.cos(a);
+      const zo = cz + oB * Math.sin(a);
+      const cap = MeshBuilder.CreateRibbon(`est-cap-${tier}`, {
+        pathArray: [
+          [new Vector3(xi, 0, zi), new Vector3(xo, 0, zo)],
+          [new Vector3(xi, yHi, zi), new Vector3(xo, yHi, zo)],
+        ],
+        sideOrientation: Mesh.DOUBLESIDE, closeArray: false, closePath: false,
+      }, scene);
+      cap.material = seat;
+      cap.isPickable = false;
+    }
+  }
+
+  // anillo de público (textura del juego) entre tribunas y techo
+  const crowdMat = new StandardMaterial('est-crowd', scene);
+  const crowdTex = new Texture(crowdUrl, scene);
+  crowdTex.uScale = 12;
+  crowdTex.vScale = 1;
+  crowdTex.anisotropicFilteringLevel = 8;
+  crowdMat.diffuseTexture = crowdTex;
+  crowdMat.emissiveTexture = crowdTex;
+  crowdMat.emissiveColor = new Color3(0.35, 0.35, 0.35);
+  crowdMat.specularColor = new Color3(0, 0, 0);
+  crowdMat.backFaceCulling = false;
+  ring(ax - 0.4, bz - 0.4, TIERS * RISE, EST_WALL_H - 1, false, crowdMat, 'est-crowd-ring');
+
+  // techo plano anular + borde dorado
+  const ROOF_Y = EST_WALL_H + 0.8;
+  const roofIn: Vector3[] = [];
+  const roofOut: Vector3[] = [];
+  for (let i = 0; i <= SEGS; i++) {
+    const a = (i / SEGS) * Math.PI * 2;
+    roofIn.push(new Vector3(cx + (ax - 3) * Math.cos(a), ROOF_Y, cz + (bz - 3) * Math.sin(a)));
+    roofOut.push(new Vector3(cx + (ax + 1.2) * Math.cos(a), ROOF_Y, cz + (bz + 1.2) * Math.sin(a)));
+  }
+  const roof = MeshBuilder.CreateRibbon('est-roof', {
+    pathArray: [roofIn, roofOut], sideOrientation: Mesh.DOUBLESIDE, closeArray: false, closePath: true,
+  }, scene);
+  roof.material = roofM;
+  roof.isPickable = false;
+  ring(ax + 1.4, bz + 1.4, ROOF_Y - 0.25, ROOF_Y + 0.3, true, goldTrim, 'est-roof-rim');
+
+  // pilares perimetrales (salteando el arco del portón)
+  const N_PILLARS = 22;
+  for (let i = 0; i < N_PILLARS; i++) {
+    const angle = (i / N_PILLARS) * Math.PI * 2;
+    let na = angle;
+    while (na > Math.PI) na -= 2 * Math.PI;
+    if (Math.abs(na - (-Math.PI / 2)) < GATE_HALF_ANGLE + 0.06) continue;
+    const pillar = MeshBuilder.CreateBox(`est-pillar-${i}`, { width: 0.9, height: EST_WALL_H + 1.4, depth: 0.9 }, scene);
+    pillar.position.set(cx + Math.cos(angle) * ax, (EST_WALL_H + 1.4) / 2, cz + Math.sin(angle) * bz);
+    pillar.material = white;
+    pillar.isPickable = false;
+  }
+
+  // portón: dos pilones + dintel dorado (esencia de buildStadiumGate)
+  const gateX = Math.sin(GATE_HALF_ANGLE) * ax;
+  for (const sx of [-1, 1]) {
+    const pylon = MeshBuilder.CreateBox('est-pylon', { width: 1.5, height: GATE_H + 1.2, depth: 1.5 }, scene);
+    pylon.position.set(sx * (gateX + 0.4), (GATE_H + 1.2) / 2, cz - bz + 0.4);
+    pylon.material = beige;
+    pylon.isPickable = false;
+  }
+  const lintel = MeshBuilder.CreateBox('est-lintel', { width: gateX * 2 + 2.6, height: 0.5, depth: 1.7 }, scene);
+  lintel.position.set(0, GATE_H + 1.5, cz - bz + 0.4);
+  lintel.material = goldTrim;
+  lintel.isPickable = false;
+
+  // cartel REZONA WORLD CUP sobre postes, al frente del portón
+  const signZ = cz - bz - 5;
+  const sign = MeshBuilder.CreateBox('est-sign', { width: 16, height: 3.2, depth: 0.6 }, scene);
+  sign.position.set(cx, 11, signZ);
+  sign.material = stdMat(scene, 'est-sign-mat', '#3a6ea5');
+  sign.isPickable = false;
+  const bannerMat = new StandardMaterial('est-banner-mat', scene);
+  const bannerTex = new Texture(bannerUrl, scene);
+  bannerMat.diffuseTexture = bannerTex;
+  bannerMat.emissiveTexture = bannerTex;
+  bannerMat.emissiveColor = new Color3(0.45, 0.45, 0.45);
+  bannerMat.specularColor = new Color3(0, 0, 0);
+  const banner = MeshBuilder.CreatePlane('est-banner', { width: 15.4, height: 2.7 }, scene);
+  banner.position.set(cx, 11, signZ - 0.32);
+  banner.material = bannerMat;
+  banner.isPickable = false;
+  for (const px of [-7, 7]) {
+    const pole = MeshBuilder.CreateCylinder('est-sign-pole', { diameter: 0.35, height: 9.4, tessellation: 10 }, scene);
+    pole.position.set(cx + px, 4.7, signZ);
+    pole.material = gray;
+    pole.isPickable = false;
+  }
+}
+
 // ─── Tienda: toldo a dos aguas rayado + mostrador + cartel + faroles ────
 function buildTienda(scene: Scene, def: TiendaDef, x: number, z: number, facing: number,
   woodMat: StandardMaterial, woodDarkMat: StandardMaterial, spinners: Spinner[]): void {
@@ -808,12 +1007,12 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   const SKY = '#aecbe8';
   scene.clearColor = Color4.FromHexString(`${SKY}ff`);
   scene.fogMode = Scene.FOGMODE_EXP2;
-  scene.fogDensity = 0.0065;
+  scene.fogDensity = 0.0048; // el estadio al norte tiene que leerse desde el patio
   scene.fogColor = Color3.FromHexString(SKY);
 
   const camera = new ArcRotateCamera('cam', -Math.PI / 2, 1.12, 30, new Vector3(0, 1.4, 0), scene);
   camera.lowerRadiusLimit = 7;
-  camera.upperRadiusLimit = 78; // el mapa extendido (cancha/copas/muñeco) entra en cuadro
+  camera.upperRadiusLimit = 95; // mapa completo con estadio en cuadro
   camera.lowerBetaLimit = 0.25;
   camera.upperBetaLimit = 1.46;
   camera.minZ = 0.1;
@@ -1060,17 +1259,20 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const a = GATE_ANGLE + GATE_HALF_GAP + (span * gapIdx) / TIENDAS.length;
     return { x: Math.cos(a) * PROM_OUTER, z: Math.sin(a) * PROM_OUTER };
   };
-  buildCaminito(scene, gapExit(2), { x: CANCHA.x - 9.2, z: CANCHA.z }, 2.2, woodDarkMat, warmMat);
-  buildCaminito(scene, gapExit(4), { x: COPAS.x - 1.5, z: COPAS.z - 6.8 }, -2.5, woodDarkMat, warmMat);
-  buildCaminito(scene, gapExit(8), { x: MUNECO.x + 4.4, z: MUNECO.z }, 2.0, woodDarkMat, warmMat);
+  buildCaminito(scene, gapExit(1), { x: CANCHA.x - 9.2, z: CANCHA.z }, 2.2, woodDarkMat, warmMat);
+  buildCaminito(scene, gapExit(3), { x: COPAS.x - 1.5, z: COPAS.z - 6.8 }, -2.5, woodDarkMat, warmMat);
+  buildCaminito(scene, gapExit(4), { x: ESTADIO.x, z: ESTADIO.z - EST_B - 6.5 }, 3.0, woodDarkMat, warmMat);
+  buildCaminito(scene, gapExit(6), { x: MUNECO.x + 4.4, z: MUNECO.z }, 2.0, woodDarkMat, warmMat);
   // faroles en el sendero de entrada sur
   buildLamp(scene, 2.1, -26, woodDarkMat, warmMat);
   buildLamp(scene, -2.1, -33, woodDarkMat, warmMat);
 
-  // ─── Sectores: cancha + muñeco + copas ───────────────────────────────
+  // ─── Sectores: cancha + muñeco + copas + estadio + cerca ─────────────
   buildCancha(scene, CANCHA.x, CANCHA.z, woodMat, woodDarkMat);
   buildMuneco(scene, MUNECO.x, MUNECO.z, stoneMat, spinners);
   buildCopas(scene, COPAS.x, COPAS.z, stoneMat, spinners);
+  buildEstadio(scene);
+  buildCerca(scene);
 
   // ─── Robles y matas de pasto (billboards cruzados, estilo del juego) ──
   // Despejado alrededor de los POIs nuevos y sus caminitos.
@@ -1078,7 +1280,14 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     if (Math.abs(x - CANCHA.x) < 13.5 && Math.abs(z - CANCHA.z) < 17.5) return true; // cancha + arcos
     if (Math.hypot(x - COPAS.x, z - COPAS.z) < 10.5) return true;
     if (Math.hypot(x - MUNECO.x, z - MUNECO.z) < 8.5) return true;
-    for (const [mx, mz] of [[28, -4], [16, 21.5], [-24.5, -3.5]]) {  // corredores de caminitos
+    // óvalo del estadio (+ margen) y su cartel al frente
+    const ex = (x - ESTADIO.x) / (EST_A + 5);
+    const ez = (z - ESTADIO.z) / (EST_B + 5);
+    if (ex * ex + ez * ez < 1) return true;
+    if (Math.abs(x) < 10 && Math.abs(z - (ESTADIO.z - EST_B - 5)) < 4) return true;
+    // afuera de la cerca no va deco
+    if (x < FENCE.x0 + 2 || x > FENCE.x1 - 2 || z < FENCE.z0 + 2 || z > FENCE.z1 - 2) return true;
+    for (const [mx, mz] of [[28, -4], [16, 21.5], [-24.5, -3.5], [-5, 31]]) {  // corredores de caminitos
       if (Math.hypot(x - mx, z - mz) < 5.5) return true;
     }
     return false;

@@ -14,18 +14,15 @@ await page.waitForTimeout(6000);
 const errText = await page.locator('#err').textContent();
 if (errText && errText.trim()) console.log('[#err]', errText.trim());
 await page.screenshot({ path: '/tmp/patio-v2-mobile.png' });
-// vista más lejana (zoom out con rueda)
-await page.mouse.move(540, 1100);
-await page.mouse.wheel(0, 1200);
-await page.waitForTimeout(1500);
-await page.screenshot({ path: '/tmp/patio-v2-wide.png' });
-// vistas fijas: portal, tienda con ícono neón, cancha, copas, muñeco
+// vistas fijas: aérea total, portal, tienda con ícono neón, sectores
 const views = [
-  ['gate',   { alpha: Math.PI / 2, beta: 1.38, radius: 34, tx: 0, ty: 2, tz: 0 }],
-  ['tienda', { alpha: -Math.PI / 2, beta: 1.25, radius: 12, tx: 4.9, ty: 3, tz: 16.8 }],
-  ['cancha', { alpha: Math.PI, beta: 1.05, radius: 30, tx: 44, ty: 1, tz: -5 }],
-  ['copas',  { alpha: -Math.PI / 2, beta: 1.15, radius: 17, tx: 20.5, ty: 2.5, tz: 32 }],
-  ['muneco', { alpha: -Math.PI / 2, beta: 1.25, radius: 13, tx: -31.7, ty: 2.5, tz: -4.3 }],
+  ['wide',    { alpha: -Math.PI / 2, beta: 0.85, radius: 95, tx: 0, ty: 0, tz: 28 }],
+  ['gate',    { alpha: Math.PI / 2, beta: 1.38, radius: 34, tx: 0, ty: 2, tz: 0 }],
+  ['tienda',  { alpha: -Math.PI / 2, beta: 1.25, radius: 12, tx: 0, ty: 3, tz: 17.5 }],
+  ['cancha',  { alpha: Math.PI, beta: 1.05, radius: 30, tx: 44, ty: 1, tz: -5 }],
+  ['copas',   { alpha: -Math.PI / 2, beta: 1.15, radius: 17, tx: 20.5, ty: 2.5, tz: 32 }],
+  ['muneco',  { alpha: -Math.PI / 2, beta: 1.25, radius: 13, tx: -31.7, ty: 2.5, tz: -4.3 }],
+  ['estadio', { alpha: -Math.PI / 2 + 0.35, beta: 1.18, radius: 62, tx: 0, ty: 7, tz: 48 }],
 ];
 for (const [name, v] of views) {
   await page.evaluate((v) => {
