@@ -4,11 +4,13 @@ Android download/extract chains were observed UNESCAPING backslash sequences
 (\\ -> \, \xNN -> raw char), corrupting minified JS. Fix: ship bundle+CSS as
 pure base64 (no backslashes exist) + a backslash-free bootstrap loader that
 strips injected whitespace, length-checks, and dynamic-imports a blob module.
-Usage: python3 scripts/armor.py   ->  dist/armored.html
+Usage: python3 scripts/armor.py [dist-dir]   ->  <dist-dir>/armored.html
+       (dist-dir defaults to 'dist'; e.g. 'dist-maplab' for the map lab)
 """
 import re, base64, sys, os
 os.chdir(os.path.join(os.path.dirname(__file__), '..'))
-h = open('dist/index.html', encoding='utf-8').read()
+DIST = sys.argv[1] if len(sys.argv) > 1 else 'dist'
+h = open(f'{DIST}/index.html', encoding='utf-8').read()
 m = max(re.finditer(r'<script[^>]*type="module"[^>]*>(.*?)</script>', h, flags=re.S),
         key=lambda x: len(x.group(1)))
 bundle = m.group(1)
@@ -38,5 +40,5 @@ loader = ('<script type="text/plain" id="pj">' + b64 + '</script>\n'
           "}catch(e){ov('[LOADER] '+e.message)}\n})();\n</script>")
 assert '\\' not in loader, 'loader must stay backslash-free'
 h = h.replace('__LOADER__', loader)
-open('dist/armored.html', 'w', encoding='utf-8').write(h)
-print('dist/armored.html:', len(h) // 1024 // 1024, 'MB')
+open(f'{DIST}/armored.html', 'w', encoding='utf-8').write(h)
+print(f'{DIST}/armored.html:', len(h) // 1024 // 1024, 'MB')

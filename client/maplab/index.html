@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#aecbe8" />
+  <title>PATIO v2 · maplab</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #aecbe8; }
+    #scene { width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+    /* VHS header strip */
+    #hud {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+      display: flex; justify-content: space-between; align-items: center;
+      padding: calc(env(safe-area-inset-top, 0px) + 6px) 12px 6px 12px;
+      font: 700 12px/1.3 ui-monospace, 'Courier New', monospace;
+      color: #f4f7e8; text-shadow: 0 1px 0 #0008, 0 0 6px #0006;
+      pointer-events: none; letter-spacing: 0.08em;
+    }
+    #hud .rec { color: #ff5b4d; animation: blink 1.2s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0.15; } }
+    #hint {
+      position: fixed; bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+      left: 0; right: 0; text-align: center; z-index: 10;
+      font: 600 11px/1.4 ui-monospace, 'Courier New', monospace;
+      color: #ffffffd9; text-shadow: 0 1px 2px #0009;
+      pointer-events: none; letter-spacing: 0.06em;
+      transition: opacity 1s ease;
+    }
+    /* sutiles scanlines PS1/VHS */
+    #scan {
+      position: fixed; inset: 0; z-index: 9; pointer-events: none;
+      background: repeating-linear-gradient(0deg, #0000 0px, #0000 3px, #00000010 3px, #00000010 4px);
+      mix-blend-mode: multiply;
+    }
+    #err {
+      position: fixed; left: 0; top: 0; right: 0; z-index: 99;
+      background: #300; color: #f99; font: 12px ui-monospace, monospace;
+      padding: 10px; white-space: pre-wrap; display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud"><span><span class="rec">●</span> PATIO v2</span><span>WCHUB · MAPLAB</span></div>
+  <canvas id="scene"></canvas>
+  <div id="scan"></div>
+  <div id="hint">arrastrá para girar · pellizcá para zoom</div>
+  <div id="err"></div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

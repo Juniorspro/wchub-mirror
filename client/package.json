@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "dev:maplab": "vite -c vite.maplab.config.ts",
+    "build:maplab": "vite build -c vite.maplab.config.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
