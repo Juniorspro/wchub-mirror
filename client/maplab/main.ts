@@ -50,6 +50,8 @@ import coverGoalieUrl from '../src/assets/sprite/sprite_portal-cover-goalie_0695
 import coverJugglerUrl from '../src/assets/sprite/sprite_portal-cover-juggler_fe5b6e.webp';
 import coverRacingUrl from '../src/assets/sprite/sprite_portal-cover-racing_c7b1b5.webp';
 import portraitUrl from '../src/assets/portrait/portrait_poster-worldcup-portrait_69e0b1.webp';
+// el humanoide esculpido del viewer (figlab) porteado: malla por frame
+import { FIG, buildFigure, J0, poseCartoon, paintOutfit, decalPositions, type Joints } from './figura';
 
 // ─── Constantes del layout (portables a world.ts) ───────────────────────
 const RING_RADIUS = 17.5;        // radio del anillo de tiendas
@@ -1085,70 +1087,85 @@ function buildTienda(scene: Scene, def: TiendaDef, x: number, z: number, facing:
   buildNeonIcon(scene, def.id, spinners, root, RIDGE_Y + 0.55);
 }
 
-// ─── Jugador: humanoide PS1 con cara dibujada por el usuario ───────────
-// Outfit DEFAULT de todos: remera blanca + pantalón negro + zapas verdes.
-const OUTFIT = { remera: '#f2f2ee', pantalon: '#1d1d22', zapas: '#3dbf5a' };
+// ─── Jugador: LA FIGURA (humanoide esculpido del viewer) ───────────────
+// Outfit DEFAULT de todos: remera blanca + pantalón negro + zapas verdes,
+// pintado por COLOR DE VÉRTICE sobre la malla esculpida. La cara dibujada
+// va en un decal MOLDEADO a la cabeza (misma técnica del figlab).
 interface Player {
   root: TransformNode;
-  legL: TransformNode; legR: TransformNode;
-  armL: TransformNode; armR: TransformNode;
-  phase: number;
+  mesh: Mesh;
+  decal: Mesh;
+  decalPos: Float32Array;
+  normals: Float32Array;
+  walkPh: number;
+  moveAmt: number;
   yaw: number;
 }
 let PLAYER: Player | null = null;
 const INPUT = { kx: 0, ky: 0, jx: 0, jy: 0 };
+const DEC_U = 32;
+const DEC_V = 24;
+const DEC_PHI = 1.1;
+const DEC_T0 = 0.16;
+const DEC_T1 = 0.74;
 
 function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): Player {
-  const skin = stdMat(scene, 'pl-skin', '#e8b88f');
-  const remera = stdMat(scene, 'pl-remera', OUTFIT.remera);
-  const pantalon = stdMat(scene, 'pl-pantalon', OUTFIT.pantalon);
-  const zapas = stdMat(scene, 'pl-zapas', OUTFIT.zapas);
-  const suela = stdMat(scene, 'pl-suela', '#f4f4f0');
-  const pelo = stdMat(scene, 'pl-pelo', '#3a2a1c');
-
   const root = new TransformNode('player', scene);
-  const part = (m: Mesh, mat: StandardMaterial, parent: TransformNode, x: number, y: number, z: number): Mesh => {
-    m.parent = parent;
-    m.position.set(x, y, z);
-    m.material = mat;
-    m.isPickable = false;
-    return m;
-  };
-  const B = MeshBuilder;
-  // piernas (pantalón negro largo + zapas verdes)
-  const legs: TransformNode[] = [];
-  for (const sx of [-1, 1] as const) {
-    const leg = new TransformNode(`pl-leg-${sx}`, scene);
-    leg.parent = root;
-    leg.position.set(sx * 0.145, 0.89, 0);
-    part(B.CreateBox('pl-thigh', { width: 0.21, height: 0.42, depth: 0.26 }, scene), pantalon, leg, 0, -0.21, 0);
-    part(B.CreateBox('pl-shin', { width: 0.17, height: 0.4, depth: 0.2 }, scene), pantalon, leg, 0, -0.6, 0);
-    part(B.CreateBox('pl-shoe', { width: 0.19, height: 0.12, depth: 0.34 }, scene), zapas, leg, 0, -0.83, -0.05);
-    part(B.CreateBox('pl-sole', { width: 0.2, height: 0.05, depth: 0.36 }, scene), suela, leg, 0, -0.885, -0.05);
-    legs.push(leg);
+  // figura esculpida: primera pasada graba layout, después solo posiciones
+  buildFigure(J0());
+  const mesh = new Mesh('player-fig', scene);
+  const vd = new VertexData();
+  vd.positions = FIG.pos as Float32Array;
+  vd.indices = FIG.idx as Uint16Array;
+  const normals = new Float32Array(FIG.vc * 3);
+  VertexData.ComputeNormals(FIG.pos, FIG.idx, normals);
+  vd.normals = normals;
+  const colors = new Float32Array(FIG.vc * 4);
+  paintOutfit(colors,
+    [0.95, 0.95, 0.93],   // remera blanca
+    [0.10, 0.10, 0.13],   // pantalón negro
+    [0.24, 0.75, 0.35],   // zapas verdes
+    [0.91, 0.72, 0.56]);  // piel
+  vd.colors = colors;
+  vd.applyToMesh(mesh, true);
+  const mat = new StandardMaterial('player-mat', scene);
+  mat.diffuseColor = new Color3(1, 1, 1);
+  mat.specularColor = new Color3(0.05, 0.05, 0.05);
+  mat.backFaceCulling = false; // el port viene de un mundo diestro
+  mesh.material = mat;
+  mesh.parent = root;
+  mesh.isPickable = false;
+  mesh.alwaysSelectAsActiveMesh = true; // la malla se regenera por frame
+
+  // decal de la cara dibujada, moldeado a la cabeza
+  const decalPos = new Float32Array((DEC_U + 1) * (DEC_V + 1) * 3);
+  decalPositions(J0(), decalPos, DEC_U, DEC_V, DEC_PHI, DEC_T0, DEC_T1);
+  const dvd = new VertexData();
+  dvd.positions = decalPos;
+  const uvs = new Float32Array((DEC_U + 1) * (DEC_V + 1) * 2);
+  const didx: number[] = [];
+  let k = 0;
+  for (let j = 0; j <= DEC_V; j++) {
+    for (let i = 0; i <= DEC_U; i++) {
+      uvs[k++] = i / DEC_U;
+      uvs[k++] = 1 - j / DEC_V;
+    }
   }
-  // pelvis + torso (remera blanca)
-  part(B.CreateBox('pl-pelvis', { width: 0.46, height: 0.18, depth: 0.3 }, scene), pantalon, root, 0, 0.97, 0);
-  part(B.CreateBox('pl-torso', { width: 0.58, height: 0.62, depth: 0.32 }, scene), remera, root, 0, 1.36, 0);
-  // brazos (manga blanca corta + piel)
-  const arms: TransformNode[] = [];
-  for (const sx of [-1, 1] as const) {
-    const arm = new TransformNode(`pl-arm-${sx}`, scene);
-    arm.parent = root;
-    arm.position.set(sx * 0.37, 1.6, 0);
-    part(B.CreateBox('pl-sleeve', { width: 0.18, height: 0.22, depth: 0.2 }, scene), remera, arm, 0, -0.08, 0);
-    part(B.CreateBox('pl-upper', { width: 0.13, height: 0.26, depth: 0.14 }, scene), skin, arm, 0, -0.32, 0);
-    part(B.CreateBox('pl-hand', { width: 0.13, height: 0.12, depth: 0.14 }, scene), skin, arm, 0, -0.5, 0);
-    arms.push(arm);
+  for (let j = 0; j < DEC_V; j++) {
+    for (let i = 0; i < DEC_U; i++) {
+      const a = j * (DEC_U + 1) + i;
+      const b = a + 1;
+      const c = a + DEC_U + 1;
+      didx.push(a, c, b, b, c, c + 1);
+    }
   }
-  // cabeza + pelo + CARA DIBUJADA por el usuario
-  const head = new TransformNode('pl-head', scene);
-  head.parent = root;
-  head.position.y = 1.95;
-  part(B.CreateBox('pl-neck', { width: 0.14, height: 0.12, depth: 0.14 }, scene), skin, head, 0, -0.13, 0);
-  part(B.CreateBox('pl-skull', { width: 0.46, height: 0.46, depth: 0.46 }, scene), skin, head, 0, 0.15, 0);
-  part(B.CreateBox('pl-hair-top', { width: 0.5, height: 0.14, depth: 0.5 }, scene), pelo, head, 0, 0.38, 0);
-  part(B.CreateBox('pl-hair-back', { width: 0.5, height: 0.3, depth: 0.12 }, scene), pelo, head, 0, 0.19, 0.2);
+  dvd.uvs = uvs;
+  dvd.indices = didx;
+  const dnormals = new Float32Array(decalPos.length);
+  VertexData.ComputeNormals(decalPos, didx, dnormals);
+  dvd.normals = dnormals;
+  const decal = new Mesh('player-cara', scene);
+  dvd.applyToMesh(decal, true);
   const faceTex = new DynamicTexture('pl-face', { width: 256, height: 256 }, scene, false);
   // las DynamicTexture sin mipmaps salen espejadas en Y → copiar dado vuelta
   const fc2 = faceTex.getContext() as unknown as CanvasRenderingContext2D;
@@ -1159,12 +1176,16 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
   fc2.restore();
   faceTex.update(false);
   faceTex.updateSamplingMode(Texture.NEAREST_SAMPLINGMODE);
-  const faceMat = new StandardMaterial('pl-face-mat', scene);
-  faceMat.diffuseTexture = faceTex;
-  faceMat.emissiveColor = new Color3(0.3, 0.3, 0.3);
-  faceMat.specularColor = new Color3(0, 0, 0);
-  const cara = part(B.CreatePlane('pl-cara', { width: 0.42, height: 0.42 }, scene), faceMat, head, 0, 0.14, -0.232);
-  cara.isPickable = false;
+  const dmat = new StandardMaterial('pl-face-mat', scene);
+  dmat.diffuseTexture = faceTex;
+  dmat.emissiveColor = new Color3(0.28, 0.28, 0.28);
+  dmat.specularColor = new Color3(0, 0, 0);
+  dmat.backFaceCulling = false;
+  decal.material = dmat;
+  decal.parent = root;
+  decal.isPickable = false;
+  decal.alwaysSelectAsActiveMesh = true;
+
   // nombre flotante (billboard)
   const nameTex = new DynamicTexture('pl-name', { width: 256, height: 64 }, scene, true);
   const nc = nameTex.getContext() as unknown as CanvasRenderingContext2D;
@@ -1186,15 +1207,15 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
   nameMat.useAlphaFromDiffuseTexture = true;
   nameMat.disableLighting = true;
   nameMat.backFaceCulling = false;
-  const nameP = MeshBuilder.CreatePlane('pl-name-plane', { width: 1.5, height: 0.38 }, scene);
+  const nameP = MeshBuilder.CreatePlane('pl-name-plane', { width: 1.3, height: 0.34 }, scene);
   nameP.parent = root;
-  nameP.position.y = 2.5;
+  nameP.position.y = 1.72;
   nameP.billboardMode = Mesh.BILLBOARDMODE_Y;
   nameP.material = nameMat;
   nameP.isPickable = false;
 
   root.position.set(0, 0, -27); // spawn en el sendero sur
-  return { root, legL: legs[0], legR: legs[1], armL: arms[0], armR: arms[1], phase: 0, yaw: 0 };
+  return { root, mesh, decal, decalPos, normals, walkPh: 0, moveAmt: 0, yaw: 0 };
 }
 
 // ─── Escena completa ────────────────────────────────────────────────────
@@ -1622,13 +1643,14 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       s.node.rotation.y = t * 0.8 + s.phase;
       s.node.position.y = s.baseY + Math.sin(t * 1.6 + s.phase) * 0.08;
     }
-    // ─── jugador: caminar relativo a cámara + animación + cámara follow ──
+    // ─── jugador (LA FIGURA): caminar + malla regenerada por frame ───────
     if (PLAYER) {
       let dx = INPUT.kx + INPUT.jx;
       let dy = INPUT.ky + INPUT.jy;
       const len = Math.hypot(dx, dy);
       if (len > 1) { dx /= len; dy /= len; }
-      if (len > 0.08) {
+      const moving = len > 0.08;
+      if (moving) {
         const fx = camera.target.x - camera.position.x;
         const fz = camera.target.z - camera.position.z;
         const fl = Math.hypot(fx, fz) || 1;
@@ -1640,29 +1662,26 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         const p = PLAYER.root.position;
         p.x = Math.max(-50, Math.min(56, p.x + mx * SPEED * dt));
         p.z = Math.max(-42, Math.min(95, p.z + mz * SPEED * dt));
-        const targetYaw = Math.atan2(-mx, -mz); // la cara mira a -Z local
+        const targetYaw = Math.atan2(mx, mz); // la figura mira a +Z local
         let dYaw = targetYaw - PLAYER.yaw;
         while (dYaw > Math.PI) dYaw -= Math.PI * 2;
         while (dYaw < -Math.PI) dYaw += Math.PI * 2;
         PLAYER.yaw += dYaw * Math.min(1, dt * 12);
         PLAYER.root.rotation.y = PLAYER.yaw;
-        PLAYER.phase += dt * 9 * Math.min(1, len);
-        const sw = Math.sin(PLAYER.phase);
-        PLAYER.legL.rotation.x = sw * 0.6;
-        PLAYER.legR.rotation.x = -sw * 0.6;
-        PLAYER.armL.rotation.x = -sw * 0.45;
-        PLAYER.armR.rotation.x = sw * 0.45;
-        PLAYER.root.position.y = Math.abs(Math.sin(PLAYER.phase)) * 0.05;
-      } else {
-        PLAYER.legL.rotation.x *= 0.85;
-        PLAYER.legR.rotation.x *= 0.85;
-        PLAYER.armL.rotation.x *= 0.85;
-        PLAYER.armR.rotation.x *= 0.85;
-        PLAYER.root.position.y *= 0.85;
+        PLAYER.walkPh += dt * 7.5 * Math.min(1, len);
       }
+      // mezcla idle↔caminata suave + FK → regenerar la malla esculpida
+      PLAYER.moveAmt += ((moving ? Math.min(1, len) : 0) - PLAYER.moveAmt) * Math.min(1, dt * 8);
+      const J: Joints = poseCartoon(t, PLAYER.walkPh, PLAYER.moveAmt);
+      buildFigure(J);
+      PLAYER.mesh.updateVerticesData('position', FIG.pos as Float32Array);
+      VertexData.ComputeNormals(FIG.pos, FIG.idx, PLAYER.normals);
+      PLAYER.mesh.updateVerticesData('normal', PLAYER.normals);
+      decalPositions(J, PLAYER.decalPos, DEC_U, DEC_V, DEC_PHI, DEC_T0, DEC_T1);
+      PLAYER.decal.updateVerticesData('position', PLAYER.decalPos);
       camera.target.x += (PLAYER.root.position.x - camera.target.x) * 0.12;
       camera.target.z += (PLAYER.root.position.z - camera.target.z) * 0.12;
-      camera.target.y += (PLAYER.root.position.y + 1.5 - camera.target.y) * 0.12;
+      camera.target.y += (PLAYER.root.position.y + 1.0 - camera.target.y) * 0.12;
     } else if (performance.now() - lastInteract > 6000) {
       camera.alpha += 0.00011 * scene.getEngine().getDeltaTime();
     }
