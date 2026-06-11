@@ -11,7 +11,7 @@
  *   3. 游戏专属上行操作（开火/技能/升级）：用通用 send(type, payload) 或仿 sendInput 加方法。
  */
 
-import { Client, Room } from 'colyseus.js';
+import { Client, type Room } from './colyseus-provider';
 import {
   MAP_H,
   MAP_W,

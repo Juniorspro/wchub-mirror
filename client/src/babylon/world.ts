@@ -231,9 +231,9 @@ const _stadiumPortalSpec: Array<{
   { id: 'portal-defender',  label: 'Ball Juggler',
     gameId: 9333284, url: 'https://web.rezona.ai/share/game/OTMzMzI4NA',
     cover: 'portal-cover-juggler',   angle: Math.PI - Math.PI / 6 },  // W-NW
-  // Spare gate — no game linked yet; reserved like the middle one.
-  { id: 'portal-cards',     label: 'Coming Soon',
-    gameId: 0, url: '',
+  // FESTEJO GOTY — penalty + celebration trick-run minigame.
+  { id: 'portal-festejo',   label: 'Festejo GOTY',
+    gameId: 0 /* TODO: Rezona gameId */, url: '' /* TODO: web.rezona.ai/share/game/<b64> */,
     cover: 'portal-cover-cards',     angle: Math.PI + Math.PI / 4 },  // SW
 ];
 export const STADIUM_PORTAL_GATES: PortalGate[] = _stadiumPortalSpec.map((s) => {

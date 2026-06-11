@@ -1,0 +1,9 @@
+{
+  "name": "@rezona/core",
+  "version": "1.1.2",
+  "type": "module",
+  "exports": {
+    "./3d": { "types": "./3d.d.ts", "default": "./3d.js" },
+    "./vite/inject-game-config": "./vite/inject-game-config.js"
+  }
+}

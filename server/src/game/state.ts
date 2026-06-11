@@ -16,7 +16,7 @@
 // future game adds combat.
 // ============================================================================
 
-import { Schema, MapSchema, type } from "@colyseus/schema";
+import { Schema, MapSchema, defineTypes } from "@colyseus/schema";
 import { gameConfig } from "../game.config";
 
 export class Player extends Schema {
@@ -24,10 +24,10 @@ export class Player extends Schema {
   // Position on the lounge floor — the server treats it as 2D (x, y), and
   // the Babylon client maps server.y → mesh.position.z (ground-plane axis).
   // Babylon's vertical (up) axis isn't synced; everyone shares one ground level.
-  @type("number") x: number = 12;
-  @type("number") y: number = 12;
+  x: number = 12;
+  y: number = 12;
   // Facing direction in radians (rotation around Babylon Y-up axis).
-  @type("number") aim: number = 0;
+  aim: number = 0;
 
   // ── COLD (server-only mirror; broadcast via `roster-*` messages) ─────────
   // Read by server logic, fan'd out by messages.ts on join / equip / rename.
@@ -39,15 +39,20 @@ export class Player extends Schema {
     "skin-light,shirt-white-tee,pants-blue-jeans,shoes-white-sneakers";
   accessoryItems: string = "";
 }
+// Decorator-free registration: identical wire schema, but builds cleanly
+// under every toolchain in play (tsc / oxc / esbuild) regardless of
+// experimentalDecorators support. Field order preserved (x, y, aim).
+defineTypes(Player, { x: "number", y: "number", aim: "number" });
 
 export class GameState extends Schema {
-  @type({ map: Player }) players = new MapSchema<Player>();
-  @type("string") code: string = "";
+  players = new MapSchema<Player>();
+  code: string = "";
   // BANDWIDTH: `tick` was here as @type("number") and bumped every server
   // step — generating a 20Hz keepalive patch even with zero player motion.
   // It's gone now (no consumer ever read it; the client cast accessed
   // `state.t` not `state.tick` — a years-old typo).
 }
+defineTypes(GameState, { players: { map: Player }, code: "string" });
 
 // A small palette of friendly avatar tint colors picked per join — gives every
 // player a visible nameplate/indicator hue without needing client-side guessing.
