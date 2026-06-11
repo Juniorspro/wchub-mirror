@@ -18,6 +18,7 @@ import {
   DirectionalLight,
   DynamicTexture,
   Engine,
+  GlowLayer,
   HemisphericLight,
   Matrix,
   Mesh,
@@ -39,6 +40,7 @@ import oakTreeUrl from '../src/assets/sprite/sprite_oak-tree_154b7e.png';
 import flagstoneUrl from '../src/assets/sprite/sprite_tex-flagstone_14c15b.webp';
 import woodPlanksUrl from '../src/assets/sprite/sprite_tex-wood-planks_656cc1.webp';
 import cutStoneUrl from '../src/assets/sprite/sprite_tex-cut-stone_525147.webp';
+import turfUrl from '../src/assets/sprite/sprite_stadium-turf_f0a345.png';
 
 // ─── Constantes del layout (portables a world.ts) ───────────────────────
 const RING_RADIUS = 17.5;        // radio del anillo de tiendas
@@ -48,6 +50,10 @@ const GATE_ANGLE = -Math.PI / 2; // entrada al sur (-Z)
 const GATE_HALF_GAP = 0.30;      // medio-hueco angular del portal (rad)
 const FLAG_RADIUS = 6.5;         // mástiles alrededor del monumento
 const GROUND_SIZE = 300;
+// POIs fuera del anillo (los caminitos salen por los huecos entre tiendas)
+const CANCHA = { x: 44, z: -5 };      // este — cancha de práctica 18×26
+const COPAS = { x: 20.5, z: 32 };     // noreste — sector de copas + podio
+const MUNECO = { x: -31.7, z: -4.3 }; // oeste — el muñeco (mascota fan #1)
 
 interface TiendaDef {
   id: string;
@@ -112,9 +118,563 @@ function texMat(scene: Scene, name: string, url: string, repeat: number, tintHex
   return m;
 }
 
+// Material neón: emissive puro sin iluminación — el GlowLayer lo hace brillar.
+function neonMat(scene: Scene, name: string, hex: string): StandardMaterial {
+  const m = new StandardMaterial(name, scene);
+  m.emissiveColor = Color3.FromHexString(hex);
+  m.diffuseColor = Color3.Black();
+  m.specularColor = Color3.Black();
+  m.disableLighting = true;
+  return m;
+}
+
+// Ícono 3D neón por rubro, flotando sobre el toldo (gira + rebota).
+interface Spinner { node: TransformNode; baseY: number; phase: number }
+function buildNeonIcon(scene: Scene, id: string, spinners: Spinner[], parent: TransformNode, y: number): void {
+  const root = new TransformNode(`icon-${id}`, scene);
+  root.parent = parent;
+  root.position.set(0, y, 0);
+  const part = (mesh: Mesh, mat: StandardMaterial, x: number, py: number, z: number, rx = 0, ry = 0, rz = 0): Mesh => {
+    mesh.parent = root;
+    mesh.position.set(x, py, z);
+    mesh.rotation.set(rx, ry, rz);
+    mesh.material = mat;
+    mesh.isPickable = false;
+    return mesh;
+  };
+  const B = MeshBuilder;
+  switch (id) {
+    case 'hats': { // galera: ala + copa cónica + cinta
+      const magenta = neonMat(scene, 'neon-hat', '#ff4dff');
+      const cyan = neonMat(scene, 'neon-hat-band', '#4dfff0');
+      part(B.CreateCylinder('i-brim', { diameter: 1.5, height: 0.09, tessellation: 28 }, scene), magenta, 0, 0, 0);
+      part(B.CreateCylinder('i-crown', { diameterBottom: 0.92, diameterTop: 0.8, height: 0.85, tessellation: 24 }, scene), magenta, 0, 0.47, 0);
+      part(B.CreateCylinder('i-band', { diameter: 0.95, height: 0.16, tessellation: 24 }, scene), cyan, 0, 0.17, 0);
+      part(B.CreateCylinder('i-top', { diameter: 0.84, height: 0.05, tessellation: 24 }, scene), cyan, 0, 0.92, 0);
+      root.rotation.z = 0.14; // canchereada
+      break;
+    }
+    case 'glasses': { // dos aros + puente + patillas
+      const cyan = neonMat(scene, 'neon-glasses', '#4dfff0');
+      for (const sx of [-0.42, 0.42]) {
+        part(B.CreateTorus('i-lens', { diameter: 0.62, thickness: 0.08, tessellation: 22 }, scene), cyan, sx, 0.3, 0, Math.PI / 2);
+      }
+      part(B.CreateBox('i-bridge', { width: 0.24, height: 0.07, depth: 0.07 }, scene), cyan, 0, 0.34, 0);
+      for (const sx of [-0.72, 0.72]) {
+        part(B.CreateBox('i-temple', { width: 0.07, height: 0.07, depth: 0.55 }, scene), cyan, sx, 0.34, -0.28);
+      }
+      break;
+    }
+    case 'shirts': { // camiseta: torso + mangas + cuello
+      const red = neonMat(scene, 'neon-shirt', '#ff4d6d');
+      const white = neonMat(scene, 'neon-shirt-trim', '#fff6e8');
+      part(B.CreateBox('i-torso', { width: 0.85, height: 0.85, depth: 0.2 }, scene), red, 0, 0.2, 0);
+      part(B.CreateBox('i-sleeve-l', { width: 0.4, height: 0.32, depth: 0.2 }, scene), red, -0.58, 0.5, 0, 0, 0, 0.45);
+      part(B.CreateBox('i-sleeve-r', { width: 0.4, height: 0.32, depth: 0.2 }, scene), red, 0.58, 0.5, 0, 0, 0, -0.45);
+      part(B.CreateBox('i-collar', { width: 0.34, height: 0.1, depth: 0.22 }, scene), white, 0, 0.68, 0);
+      break;
+    }
+    case 'pants': { // cintura + dos piernas
+      const blue = neonMat(scene, 'neon-pants', '#4dc9ff');
+      part(B.CreateBox('i-waist', { width: 0.72, height: 0.26, depth: 0.22 }, scene), blue, 0, 0.78, 0);
+      part(B.CreateBox('i-leg-l', { width: 0.3, height: 0.78, depth: 0.22 }, scene), blue, -0.21, 0.28, 0);
+      part(B.CreateBox('i-leg-r', { width: 0.3, height: 0.78, depth: 0.22 }, scene), blue, 0.21, 0.28, 0);
+      break;
+    }
+    case 'shoes': { // zapatilla: suela + cuerpo + puntera
+      const yellow = neonMat(scene, 'neon-shoe', '#ffe44d');
+      const white = neonMat(scene, 'neon-shoe-sole', '#fff6e8');
+      part(B.CreateBox('i-sole', { width: 1.0, height: 0.14, depth: 0.4 }, scene), white, 0, 0.07, 0);
+      part(B.CreateBox('i-body', { width: 0.62, height: 0.36, depth: 0.38 }, scene), yellow, -0.17, 0.32, 0);
+      part(B.CreateSphere('i-toe', { diameter: 0.42, segments: 10 }, scene), yellow, 0.36, 0.22, 0).scaling.set(1.1, 0.7, 0.9);
+      break;
+    }
+    case 'scarves': { // bufanda: aro al cuello + dos puntas colgando
+      const orange = neonMat(scene, 'neon-scarf', '#ff9a4d');
+      part(B.CreateTorus('i-loop', { diameter: 0.62, thickness: 0.14, tessellation: 22 }, scene), orange, 0, 0.62, 0);
+      part(B.CreateBox('i-tail-1', { width: 0.22, height: 0.6, depth: 0.1 }, scene), orange, -0.12, 0.22, 0.24, 0, 0, 0.12);
+      part(B.CreateBox('i-tail-2', { width: 0.22, height: 0.44, depth: 0.1 }, scene), orange, 0.16, 0.32, 0.24, 0, 0, -0.1);
+      break;
+    }
+    case 'customize': { // pincel: mango + virola + punta
+      const violet = neonMat(scene, 'neon-brush', '#b84dff');
+      const white = neonMat(scene, 'neon-brush-tip', '#fff6e8');
+      part(B.CreateCylinder('i-handle', { diameter: 0.12, height: 0.85, tessellation: 10 }, scene), violet, 0, 0.3, 0, 0, 0, 0.5);
+      part(B.CreateCylinder('i-ferrule', { diameter: 0.16, height: 0.18, tessellation: 10 }, scene), white, 0.27, 0.76, 0, 0, 0, 0.5);
+      part(B.CreateCylinder('i-tip', { diameterBottom: 0.15, diameterTop: 0.02, height: 0.3, tessellation: 10 }, scene), violet, 0.38, 0.95, 0, 0, 0, 0.5);
+      break;
+    }
+    case 'chori': { // choripán: pan + chori asomando
+      const bread = neonMat(scene, 'neon-bread', '#ffc44d');
+      const meat = neonMat(scene, 'neon-chori', '#ff5b3a');
+      part(B.CreateCapsule('i-bun-b', { radius: 0.2, height: 1.0, tessellation: 12 }, scene), bread, 0, 0.18, 0.06, 0, 0, Math.PI / 2);
+      part(B.CreateCapsule('i-bun-t', { radius: 0.2, height: 1.0, tessellation: 12 }, scene), bread, 0, 0.42, 0.06, 0, 0, Math.PI / 2);
+      part(B.CreateCapsule('i-chori', { radius: 0.13, height: 1.15, tessellation: 12 }, scene), meat, 0, 0.3, -0.12, 0, 0, Math.PI / 2);
+      break;
+    }
+    case 'mate': { // mate: calabaza + boca + bombilla
+      const green = neonMat(scene, 'neon-mate', '#6bff6b');
+      const silver = neonMat(scene, 'neon-bombilla', '#e8f4ff');
+      part(B.CreateSphere('i-gourd', { diameter: 0.62, segments: 14 }, scene), green, 0, 0.3, 0).scaling.set(0.92, 1.15, 0.92);
+      part(B.CreateTorus('i-rim', { diameter: 0.4, thickness: 0.06, tessellation: 18 }, scene), green, 0, 0.66, 0);
+      part(B.CreateCylinder('i-straw', { diameter: 0.06, height: 0.85, tessellation: 8 }, scene), silver, 0.18, 0.85, 0, 0, 0, -0.45);
+      part(B.CreateSphere('i-straw-end', { diameter: 0.14, segments: 8 }, scene), silver, 0.37, 1.2, 0);
+      break;
+    }
+    default: { // prode: dado con puntos
+      const teal = neonMat(scene, 'neon-dice', '#4dff9e');
+      const dark = stdMat(scene, 'neon-dice-pip', '#0a2a18');
+      part(B.CreateBox('i-die', { size: 0.7 }, scene), teal, 0, 0.35, 0);
+      // pips: 1 al frente, 2 arriba
+      part(B.CreateDisc('i-pip-f', { radius: 0.08, tessellation: 12 }, scene), dark, 0, 0.35, -0.355);
+      part(B.CreateDisc('i-pip-t1', { radius: 0.08, tessellation: 12 }, scene), dark, -0.15, 0.706, -0.15, Math.PI / 2);
+      part(B.CreateDisc('i-pip-t2', { radius: 0.08, tessellation: 12 }, scene), dark, 0.15, 0.706, 0.15, Math.PI / 2);
+      root.rotation.z = 0.18;
+      break;
+    }
+  }
+  spinners.push({ node: root, baseY: y, phase: Math.random() * Math.PI * 2 });
+}
+
+// Farol de caminito: poste de madera + cabeza cálida que brilla.
+function buildLamp(scene: Scene, x: number, z: number, woodDarkMat: StandardMaterial, warmMat: StandardMaterial): void {
+  const post = MeshBuilder.CreateCylinder('lamp-post', { diameter: 0.14, height: 2.7, tessellation: 8 }, scene);
+  post.position.set(x, 1.35, z);
+  post.material = woodDarkMat;
+  post.isPickable = false;
+  const head = MeshBuilder.CreateSphere('lamp-head', { diameter: 0.36, segments: 10 }, scene);
+  head.position.set(x, 2.8, z);
+  head.material = warmMat;
+  head.isPickable = false;
+}
+
+// Caminito curvo de lajas (bezier cuadrática) + faroles alternados.
+function buildCaminito(scene: Scene, p0: { x: number; z: number }, p1: { x: number; z: number },
+  ctrlOffset: number, woodDarkMat: StandardMaterial, warmMat: StandardMaterial): void {
+  const mx = (p0.x + p1.x) / 2;
+  const mz = (p0.z + p1.z) / 2;
+  const dx = p1.x - p0.x;
+  const dz = p1.z - p0.z;
+  const len = Math.hypot(dx, dz) || 1;
+  const cx = mx + (-dz / len) * ctrlOffset;
+  const cz = mz + (dx / len) * ctrlOffset;
+  const HALF = 1.3;
+  const N = 24;
+  const left: Vector3[] = [];
+  const right: Vector3[] = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const x = (1 - t) * (1 - t) * p0.x + 2 * (1 - t) * t * cx + t * t * p1.x;
+    const z = (1 - t) * (1 - t) * p0.z + 2 * (1 - t) * t * cz + t * t * p1.z;
+    const tx = 2 * (1 - t) * (cx - p0.x) + 2 * t * (p1.x - cx);
+    const tz = 2 * (1 - t) * (cz - p0.z) + 2 * t * (p1.z - cz);
+    const tl = Math.hypot(tx, tz) || 1;
+    left.push(new Vector3(x - (tz / tl) * HALF, 0.022, z + (tx / tl) * HALF));
+    right.push(new Vector3(x + (tz / tl) * HALF, 0.022, z - (tx / tl) * HALF));
+  }
+  const rib = MeshBuilder.CreateRibbon('caminito', { pathArray: [left, right] }, scene);
+  const mat = stdMat(scene, `caminito-mat-${p1.x}-${p1.z}`, '#ffffff');
+  const tex = new Texture(flagstoneUrl, scene);
+  tex.uScale = Math.max(2, Math.round(len / 3.2));
+  tex.vScale = 1;
+  tex.anisotropicFilteringLevel = 8;
+  mat.diffuseTexture = tex;
+  mat.backFaceCulling = false;
+  rib.material = mat;
+  rib.isPickable = false;
+  // faroles a los costados, alternados
+  for (const [t, side] of [[0.35, 1], [0.7, -1]] as const) {
+    const x = (1 - t) * (1 - t) * p0.x + 2 * (1 - t) * t * cx + t * t * p1.x;
+    const z = (1 - t) * (1 - t) * p0.z + 2 * (1 - t) * t * cz + t * t * p1.z;
+    const tx = 2 * (1 - t) * (cx - p0.x) + 2 * t * (p1.x - cx);
+    const tz = 2 * (1 - t) * (cz - p0.z) + 2 * t * (p1.z - cz);
+    const tl = Math.hypot(tx, tz) || 1;
+    buildLamp(scene, x - (tz / tl) * (HALF + 0.9) * side, z + (tx / tl) * (HALF + 0.9) * side, woodDarkMat, warmMat);
+  }
+}
+
+// Cancha de práctica: césped de estadio + líneas + arcos + banderines.
+function buildCancha(scene: Scene, cx: number, cz: number, woodMat: StandardMaterial, woodDarkMat: StandardMaterial): void {
+  const W = 18;
+  const D = 26;
+  const turfMat = stdMat(scene, 'turf-mat', '#ffffff');
+  const turfTex = new Texture(turfUrl, scene);
+  turfTex.uScale = 5;
+  turfTex.vScale = 7;
+  turfTex.anisotropicFilteringLevel = 8;
+  turfMat.diffuseTexture = turfTex;
+  const pitch = MeshBuilder.CreateBox('cancha', { width: W, height: 0.06, depth: D }, scene);
+  pitch.position.set(cx, 0.03, cz);
+  pitch.material = turfMat;
+  pitch.isPickable = false;
+
+  const lineMat = stdMat(scene, 'cancha-line', '#f4f4ee', '#3a3a38');
+  const line = (w: number, d: number, dx: number, dz: number): void => {
+    const l = MeshBuilder.CreateBox('cancha-l', { width: w, height: 0.03, depth: d }, scene);
+    l.position.set(cx + dx, 0.075, cz + dz);
+    l.material = lineMat;
+    l.isPickable = false;
+  };
+  line(W, 0.2, 0, D / 2);    // fondo norte
+  line(W, 0.2, 0, -D / 2);   // fondo sur
+  line(0.2, D, W / 2, 0);    // lateral este
+  line(0.2, D, -W / 2, 0);   // lateral oeste
+  line(W, 0.18, 0, 0);       // mitad de cancha
+  // áreas penales (7.3 × 2.75 en cada fondo)
+  for (const sign of [1, -1] as const) {
+    line(7.3, 0.16, 0, sign * (D / 2 - 2.75));
+    line(0.16, 2.75, 3.65, sign * (D / 2 - 1.375));
+    line(0.16, 2.75, -3.65, sign * (D / 2 - 1.375));
+  }
+  const circle = MeshBuilder.CreateTorus('cancha-circle', { diameter: 5, thickness: 0.18, tessellation: 32 }, scene);
+  circle.position.set(cx, 0.07, cz);
+  circle.material = lineMat;
+  circle.isPickable = false;
+
+  // arcos procedurales (mismas proporciones que el juego)
+  const goalMat = stdMat(scene, 'cancha-goal', '#f4f4ee');
+  for (const sign of [1, -1] as const) {
+    const gz = cz + sign * (D / 2 + 0.4);
+    const bar = MeshBuilder.CreateBox('goal-bar', { width: 5, height: 0.15, depth: 0.15 }, scene);
+    bar.position.set(cx, 2.2, gz);
+    bar.material = goalMat;
+    const barB = MeshBuilder.CreateBox('goal-bar-b', { width: 5, height: 0.12, depth: 0.12 }, scene);
+    barB.position.set(cx, 2.2, gz + sign * 1.0);
+    barB.material = goalMat;
+    for (const px of [-2.4, 2.4]) {
+      for (const [bz, dia] of [[0, 0.18], [sign * 1.0, 0.15]] as const) {
+        const post = MeshBuilder.CreateCylinder('goal-post', { height: 2.3, diameter: dia, tessellation: 8 }, scene);
+        post.position.set(cx + px, 1.15, gz + bz);
+        post.material = goalMat;
+      }
+    }
+  }
+
+  // pelota al centro: blanca con parches negros
+  const ballMat = stdMat(scene, 'cancha-ball', '#f4f4ee');
+  const patchMat = stdMat(scene, 'cancha-ball-patch', '#1a1a1d');
+  const ball = MeshBuilder.CreateSphere('cancha-ball', { diameter: 0.55, segments: 14 }, scene);
+  ball.position.set(cx + 1.2, 0.34, cz - 1.5);
+  ball.material = ballMat;
+  for (const [lon, lat] of [[0, 0.2], [2.1, 0.5], [-2.1, 0.5], [Math.PI, 0.1], [1.0, -0.6]] as const) {
+    const patch = MeshBuilder.CreateDisc('ball-patch', { radius: 0.085, tessellation: 6 }, scene);
+    const r = 0.28;
+    const px = ball.position.x + Math.cos(lat) * Math.cos(lon) * r;
+    const py = ball.position.y + Math.sin(lat) * r;
+    const pz = ball.position.z + Math.cos(lat) * Math.sin(lon) * r;
+    patch.position.set(px, py, pz);
+    patch.lookAt(new Vector3(
+      ball.position.x + (px - ball.position.x) * 100,
+      ball.position.y + (py - ball.position.y) * 100,
+      ball.position.z + (pz - ball.position.z) * 100,
+    ));
+    patch.material = patchMat;
+    patch.isPickable = false;
+  }
+
+  // banderines de córner neón + banco de suplentes
+  const cornerMat = neonMat(scene, 'corner-flag', '#ff4d6d');
+  for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+    const pole = MeshBuilder.CreateCylinder('corner-pole', { diameter: 0.06, height: 1.5, tessellation: 6 }, scene);
+    pole.position.set(cx + sx * (W / 2), 0.75, cz + sz * (D / 2));
+    pole.material = goalMat;
+    pole.isPickable = false;
+    const tri = new Mesh('corner-tri', scene);
+    const vd = new VertexData();
+    vd.positions = [0, 0, 0, 0.42, -0.1, 0, 0, -0.28, 0];
+    vd.indices = [0, 1, 2];
+    vd.normals = [0, 0, -1, 0, 0, -1, 0, 0, -1];
+    vd.applyToMesh(tri);
+    tri.position.set(cx + sx * (W / 2), 1.48, cz + sz * (D / 2));
+    tri.rotation.y = Math.atan2(-sx, -sz);
+    tri.material = cornerMat;
+    tri.isPickable = false;
+  }
+  for (const bz of [-3.5, 3.5]) {
+    const seat = MeshBuilder.CreateBox('cancha-bench', { width: 0.5, height: 0.1, depth: 2.4 }, scene);
+    seat.position.set(cx - W / 2 - 1.6, 0.45, cz + bz);
+    seat.material = woodMat;
+    seat.isPickable = false;
+    for (const lz of [-0.9, 0.9]) {
+      const leg = MeshBuilder.CreateBox('cancha-bench-leg', { width: 0.42, height: 0.45, depth: 0.12 }, scene);
+      leg.position.set(cx - W / 2 - 1.6, 0.22, cz + bz + lz);
+      leg.material = woodDarkMat;
+      leg.isPickable = false;
+    }
+  }
+}
+
+// El muñeco: mascota fan (cuerpo bola de nieve + cabeza pelota) mejorada.
+function buildMuneco(scene: Scene, cx: number, cz: number, stoneMat: StandardMaterial,
+  spinners: Spinner[]): void {
+  const white = stdMat(scene, 'mu-white', '#f4f4f2');
+  const dark = stdMat(scene, 'mu-dark', '#1a1a1d');
+  const red = stdMat(scene, 'mu-red', '#c14444');
+  const gold = stdMat(scene, 'mu-gold', '#e8c84a');
+
+  // plataforma de lajas + pedestal de piedra de 2 tambores + placa
+  const disc = MeshBuilder.CreateDisc('mu-disc', { radius: 4.2, tessellation: 36 }, scene);
+  disc.rotation.x = Math.PI / 2;
+  disc.position.set(cx, 0.025, cz);
+  const discMat = stdMat(scene, 'mu-disc-mat', '#ffffff');
+  const discTex = new Texture(flagstoneUrl, scene);
+  discTex.uScale = 3;
+  discTex.vScale = 3;
+  discMat.diffuseTexture = discTex;
+  disc.material = discMat;
+  disc.isPickable = false;
+  const ped1 = MeshBuilder.CreateCylinder('mu-ped1', { height: 0.6, diameter: 3.4, tessellation: 24 }, scene);
+  ped1.position.set(cx, 0.3, cz);
+  ped1.material = stoneMat;
+  const ped2 = MeshBuilder.CreateCylinder('mu-ped2', { height: 0.5, diameter: 2.8, tessellation: 24 }, scene);
+  ped2.position.set(cx, 0.85, cz);
+  ped2.material = dark;
+  const plaque = MeshBuilder.CreateBox('mu-plaque', { width: 1.5, height: 0.5, depth: 0.1 }, scene);
+  plaque.position.set(cx, 0.55, cz - 1.45);
+  plaque.material = gold;
+
+  // cuerpo bola de nieve + botones + faja
+  const body = MeshBuilder.CreateSphere('mu-body', { diameter: 2.0, segments: 16 }, scene);
+  body.position.set(cx, 2.4, cz);
+  body.scaling.set(0.95, 1.1, 0.95);
+  body.material = white;
+  for (let i = 0; i < 3; i++) {
+    const btn = MeshBuilder.CreateSphere('mu-btn', { diameter: 0.16, segments: 8 }, scene);
+    btn.position.set(cx, 2.0 + i * 0.45, cz - (0.93 - Math.abs(i - 1) * 0.06));
+    btn.material = dark;
+  }
+  const sash = MeshBuilder.CreateBox('mu-sash', { width: 2.0, height: 0.35, depth: 0.05 }, scene);
+  sash.position.set(cx, 2.45, cz - 0.95);
+  sash.rotation.z = 0.3;
+  sash.material = red;
+
+  // bufanda al cuello + cola colgando
+  const scarf = MeshBuilder.CreateTorus('mu-scarf', { diameter: 1.15, thickness: 0.22, tessellation: 20 }, scene);
+  scarf.position.set(cx, 3.32, cz);
+  scarf.material = red;
+  const scarfTail = MeshBuilder.CreateBox('mu-scarf-tail', { width: 0.34, height: 0.8, depth: 0.1 }, scene);
+  scarfTail.position.set(cx + 0.45, 3.0, cz - 0.55);
+  scarfTail.rotation.z = 0.15;
+  scarfTail.material = red;
+
+  // cabeza pelota: esfera blanca + hexágonos negros + ojos + sonrisa
+  const head = MeshBuilder.CreateSphere('mu-head', { diameter: 1.6, segments: 18 }, scene);
+  head.position.set(cx, 4.15, cz);
+  head.material = white;
+  for (const [lon, lat] of [[0.7, 0.25], [-0.7, 0.45], [Math.PI, 0], [2.2, -0.15], [0, 0.85]] as const) {
+    const hex = MeshBuilder.CreateDisc('mu-hex', { radius: 0.22, tessellation: 6 }, scene);
+    const r = 0.83;
+    const px = cx + Math.cos(lat) * Math.cos(lon) * r;
+    const py = 4.15 + Math.sin(lat) * r;
+    const pz = cz + Math.cos(lat) * Math.sin(lon) * r;
+    hex.position.set(px, py, pz);
+    hex.lookAt(new Vector3(cx + (px - cx) * 100, 4.15 + (py - 4.15) * 100, cz + (pz - cz) * 100));
+    hex.material = dark;
+    hex.isPickable = false;
+  }
+  for (const sign of [-1, 1] as const) {
+    const eyeW = MeshBuilder.CreateSphere('mu-eye-w', { diameter: 0.4, segments: 10 }, scene);
+    eyeW.position.set(cx + sign * 0.28, 4.3, cz - 0.6);
+    eyeW.material = white;
+    const pupil = MeshBuilder.CreateSphere('mu-eye-p', { diameter: 0.18, segments: 8 }, scene);
+    pupil.position.set(cx + sign * 0.28, 4.3, cz - 0.75);
+    pupil.material = dark;
+  }
+  for (let i = 0; i < 5; i++) { // sonrisa: arco de bolitas
+    const a = -0.5 + (i / 4) * 1.0;
+    const sm = MeshBuilder.CreateSphere('mu-smile', { diameter: 0.09, segments: 6 }, scene);
+    sm.position.set(cx + Math.sin(a) * 0.42, 3.92 - Math.cos(a) * 0.12 + 0.12, cz - 0.72);
+    sm.material = dark;
+  }
+
+  // brazos en "¡vamos!" + guantes rojos
+  for (const sign of [-1, 1] as const) {
+    const arm = MeshBuilder.CreateCylinder('mu-arm', { height: 1.2, diameter: 0.35, tessellation: 10 }, scene);
+    arm.position.set(cx + sign * 1.0, 3.1, cz);
+    arm.rotation.z = -sign * 0.7;
+    arm.material = white;
+    const glove = MeshBuilder.CreateSphere('mu-glove', { diameter: 0.5, segments: 10 }, scene);
+    glove.position.set(cx + sign * (1.0 + Math.sin(0.7) * 0.6), 3.1 + Math.cos(0.7) * 0.6, cz);
+    glove.material = red;
+  }
+
+  // halo neón girando sobre la cabeza
+  const halo = new TransformNode('mu-halo-root', scene);
+  halo.position.set(cx, 0, cz);
+  const ring = MeshBuilder.CreateTorus('mu-halo', { diameter: 1.3, thickness: 0.07, tessellation: 26 }, scene);
+  ring.parent = halo;
+  ring.position.y = 5.35;
+  ring.material = neonMat(scene, 'mu-halo-mat', '#4dfff0');
+  ring.isPickable = false;
+  spinners.push({ node: halo, baseY: 0, phase: 1.3 });
+
+  // cartel pintado al pie
+  const nameTex = new DynamicTexture('mu-name', { width: 512, height: 128 }, scene, true);
+  const nc = nameTex.getContext() as unknown as CanvasRenderingContext2D;
+  nc.fillStyle = '#28406b';
+  nc.fillRect(0, 0, 512, 128);
+  nc.strokeStyle = '#e8c84a';
+  nc.lineWidth = 8;
+  nc.strokeRect(4, 4, 504, 120);
+  nc.fillStyle = '#f3ecd9';
+  nc.textAlign = 'center';
+  nc.textBaseline = 'middle';
+  nc.font = 'bold 56px ui-monospace, monospace';
+  nc.fillText('EL MUÑECO · FAN N°1', 256, 64, 480);
+  nameTex.update();
+  const nameMat = new StandardMaterial('mu-name-mat', scene);
+  nameMat.diffuseTexture = nameTex;
+  nameMat.emissiveTexture = nameTex;
+  nameMat.emissiveColor = new Color3(0.5, 0.5, 0.5);
+  nameMat.specularColor = new Color3(0, 0, 0);
+  const namePlane = MeshBuilder.CreatePlane('mu-name-plane', { width: 2.6, height: 0.65 }, scene);
+  namePlane.position.set(cx, 1.6, cz - 1.5);
+  namePlane.material = nameMat;
+  namePlane.isPickable = false;
+}
+
+// Sector de copas: copa gigante + 4 mini copas + podio 1-2-3 + estrella neón.
+function buildCopas(scene: Scene, cx: number, cz: number, stoneMat: StandardMaterial,
+  spinners: Spinner[]): void {
+  const gold = stdMat(scene, 'cp-gold', '#e8c84a');
+  gold.specularColor = new Color3(0.9, 0.75, 0.3);
+  gold.specularPower = 64;
+  const silver = stdMat(scene, 'cp-silver', '#c8c8d0');
+  silver.specularColor = new Color3(0.7, 0.7, 0.75);
+  const charcoal = stdMat(scene, 'cp-charcoal', '#3a3a40');
+
+  // plataforma de lajas
+  const disc = MeshBuilder.CreateDisc('cp-disc', { radius: 7, tessellation: 40 }, scene);
+  disc.rotation.x = Math.PI / 2;
+  disc.position.set(cx, 0.025, cz);
+  const discMat = stdMat(scene, 'cp-disc-mat', '#ffffff');
+  const discTex = new Texture(flagstoneUrl, scene);
+  discTex.uScale = 5;
+  discTex.vScale = 5;
+  discMat.diffuseTexture = discTex;
+  disc.material = discMat;
+  disc.isPickable = false;
+
+  // copa gigante central sobre pedestal de 2 niveles
+  const trophy = (px: number, pz: number, scale: number, mat: StandardMaterial, pedH: number): void => {
+    const ped = MeshBuilder.CreateCylinder('cp-ped', { height: pedH, diameterTop: 1.4 * scale, diameterBottom: 1.6 * scale, tessellation: 20 }, scene);
+    ped.position.set(px, pedH / 2, pz);
+    ped.material = stoneMat;
+    const baseY = pedH;
+    const ring = MeshBuilder.CreateCylinder('cp-ring', { height: 0.18 * scale, diameter: 0.95 * scale, tessellation: 16 }, scene);
+    ring.position.set(px, baseY + 0.09 * scale, pz);
+    ring.material = mat;
+    const stem = MeshBuilder.CreateCylinder('cp-stem', { height: 0.6 * scale, diameter: 0.4 * scale, tessellation: 16 }, scene);
+    stem.position.set(px, baseY + 0.45 * scale, pz);
+    stem.material = mat;
+    const cup = MeshBuilder.CreateCylinder('cp-cup', { height: 1.2 * scale, diameterTop: 1.3 * scale, diameterBottom: 0.7 * scale, tessellation: 20 }, scene);
+    cup.position.set(px, baseY + 1.35 * scale, pz);
+    cup.material = mat;
+    for (const sign of [-1, 1] as const) {
+      const handle = MeshBuilder.CreateTorus('cp-handle', { diameter: 0.55 * scale, thickness: 0.1 * scale, tessellation: 14 }, scene);
+      handle.position.set(px + sign * 0.75 * scale, baseY + 1.35 * scale, pz);
+      handle.rotation.z = Math.PI / 2;
+      handle.material = mat;
+    }
+    const rim = MeshBuilder.CreateTorus('cp-rim', { diameter: 1.3 * scale, thickness: 0.08 * scale, tessellation: 20 }, scene);
+    rim.position.set(px, baseY + 1.95 * scale, pz);
+    rim.material = mat;
+  };
+  trophy(cx, cz, 1.35, gold, 1.8);
+  for (const [dx, dz] of [[3.8, 1.5], [-3.8, 1.5], [2.6, -3.4], [-2.6, -3.4]] as const) {
+    trophy(cx + dx, cz + dz, 0.62, silver, 0.9);
+  }
+
+  // podio 1-2-3 al frente (lado sur, hacia el caminito)
+  const podiumSpec: Array<[number, number, string]> = [[0, 1.0, '1'], [-1.5, 0.7, '2'], [1.5, 0.5, '3']];
+  for (const [dx, h, num] of podiumSpec) {
+    const box = MeshBuilder.CreateBox(`cp-pod-${num}`, { width: 1.4, height: h, depth: 1.4 }, scene);
+    box.position.set(cx + dx, h / 2, cz - 5.6);
+    box.material = charcoal;
+    const numTex = new DynamicTexture(`cp-num-${num}`, { width: 128, height: 128 }, scene, true);
+    const c = numTex.getContext() as unknown as CanvasRenderingContext2D;
+    c.fillStyle = '#3a3a40';
+    c.fillRect(0, 0, 128, 128);
+    c.fillStyle = '#e8c84a';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.font = 'bold 88px ui-monospace, monospace';
+    c.fillText(num, 64, 68);
+    numTex.update();
+    const numMat = new StandardMaterial(`cp-num-mat-${num}`, scene);
+    numMat.diffuseTexture = numTex;
+    numMat.emissiveTexture = numTex;
+    numMat.emissiveColor = new Color3(0.45, 0.45, 0.45);
+    numMat.specularColor = new Color3(0, 0, 0);
+    const face = MeshBuilder.CreatePlane(`cp-face-${num}`, { width: 1.1, height: Math.min(h - 0.1, 0.9) }, scene);
+    face.position.set(cx + dx, h / 2, cz - 5.6 - 0.71);
+    face.material = numMat;
+    face.isPickable = false;
+  }
+
+  // cerquita de postes + soga alrededor (deja abierta la entrada sur)
+  const ropeMat = stdMat(scene, 'cp-rope', '#8a2b2b');
+  const postPts: Vector3[] = [];
+  for (let i = 0; i <= 8; i++) {
+    // arco de 300° abierto al sur (gap 240°→300° donde están podio y caminito)
+    const a = -Math.PI / 3 + (i / 8) * Math.PI * (5 / 3);
+    const px = cx + Math.cos(a) * 6.6;
+    const pz = cz + Math.sin(a) * 6.6;
+    const post = MeshBuilder.CreateCylinder('cp-post', { diameter: 0.18, height: 0.8, tessellation: 8 }, scene);
+    post.position.set(px, 0.4, pz);
+    post.material = stoneMat;
+    post.isPickable = false;
+    postPts.push(new Vector3(px, 0.62, pz));
+  }
+  for (let i = 0; i < postPts.length - 1; i++) {
+    const a = postPts[i];
+    const b = postPts[i + 1];
+    const segLen = Vector3.Distance(a, b);
+    const rope = MeshBuilder.CreateCylinder('cp-rope-seg', { diameter: 0.06, height: segLen, tessellation: 6 }, scene);
+    rope.position.copyFrom(a.add(b).scale(0.5));
+    rope.position.y -= 0.06; // pancita
+    const dir = b.subtract(a);
+    rope.rotation.y = Math.atan2(dir.x, dir.z);
+    rope.rotation.x = Math.PI / 2;
+    rope.material = ropeMat;
+    rope.isPickable = false;
+  }
+
+  // estrella neón girando sobre la copa grande
+  const starRoot = new TransformNode('cp-star-root', scene);
+  starRoot.position.set(cx, 0, cz);
+  const starTex = new DynamicTexture('cp-star-tex', { width: 128, height: 128 }, scene, true);
+  const sc = starTex.getContext() as unknown as CanvasRenderingContext2D;
+  sc.clearRect(0, 0, 128, 128);
+  sc.fillStyle = '#ffe44d';
+  sc.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+    const r = i % 2 === 0 ? 58 : 24;
+    sc.lineTo(64 + Math.cos(a) * r, 64 + Math.sin(a) * r);
+  }
+  sc.closePath();
+  sc.fill();
+  starTex.update();
+  starTex.hasAlpha = true;
+  const starMat = new StandardMaterial('cp-star-mat', scene);
+  starMat.diffuseTexture = starTex;
+  starMat.emissiveTexture = starTex;
+  starMat.emissiveColor = new Color3(1, 1, 1);
+  starMat.useAlphaFromDiffuseTexture = true;
+  starMat.disableLighting = true;
+  starMat.backFaceCulling = false;
+  const star = MeshBuilder.CreatePlane('cp-star', { width: 1.5, height: 1.5 }, scene);
+  star.parent = starRoot;
+  star.position.y = 6.4;
+  star.material = starMat;
+  star.isPickable = false;
+  spinners.push({ node: starRoot, baseY: 0, phase: 2.6 });
+}
+
 // ─── Tienda: toldo a dos aguas rayado + mostrador + cartel + faroles ────
 function buildTienda(scene: Scene, def: TiendaDef, x: number, z: number, facing: number,
-  woodMat: StandardMaterial, woodDarkMat: StandardMaterial): void {
+  woodMat: StandardMaterial, woodDarkMat: StandardMaterial, spinners: Spinner[]): void {
   const root = new TransformNode(`tienda-${def.id}`, scene);
   root.position.set(x, 0, z);
   root.rotation.y = facing; // local +Z mira al centro del patio
@@ -237,6 +797,9 @@ function buildTienda(scene: Scene, def: TiendaDef, x: number, z: number, facing:
     add(crate, woodMat, cx, cy, cz);
     crate.rotation.y = cx * 1.7;
   }
+
+  // Ícono neón 3D del rubro flotando sobre el techo (gira + rebota)
+  buildNeonIcon(scene, def.id, spinners, root, RIDGE_Y + 0.55);
 }
 
 // ─── Escena completa ────────────────────────────────────────────────────
@@ -250,7 +813,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
 
   const camera = new ArcRotateCamera('cam', -Math.PI / 2, 1.12, 30, new Vector3(0, 1.4, 0), scene);
   camera.lowerRadiusLimit = 7;
-  camera.upperRadiusLimit = 58;
+  camera.upperRadiusLimit = 78; // el mapa extendido (cancha/copas/muñeco) entra en cuadro
   camera.lowerBetaLimit = 0.25;
   camera.upperBetaLimit = 1.46;
   camera.minZ = 0.1;
@@ -265,6 +828,11 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   const sun = new DirectionalLight('sun', new Vector3(-0.4, -1, -0.35), scene);
   sun.intensity = 0.9;
   sun.diffuse = new Color3(1.0, 0.96, 0.86);
+
+  // Glow para los neones (ratio bajo = barato en el Mali)
+  const glow = new GlowLayer('glow', scene, { mainTextureRatio: 0.5 });
+  glow.intensity = 0.85;
+  const spinners: Spinner[] = [];
 
   // Piso verde: la MISMA textura de pasto del juego, tileada igual (~7u/tile)
   const ground = MeshBuilder.CreateGround('patio-ground', { width: GROUND_SIZE, height: GROUND_SIZE, subdivisions: 1 }, scene);
@@ -315,7 +883,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const z = Math.sin(a) * RING_RADIUS;
     // local +Z debe apuntar al centro: yaw = atan2 hacia el origen
     const facing = Math.atan2(-x, -z);
-    buildTienda(scene, TIENDAS[i], x, z, facing, woodMat, woodDarkMat);
+    buildTienda(scene, TIENDAS[i], x, z, facing, woodMat, woodDarkMat, spinners);
   }
 
   // ─── Monumento central: base escalonada de piedra + copa dorada ──────
@@ -484,7 +1052,36 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     arch.isPickable = false;
   }
 
+  // ─── Caminitos a los sectores nuevos + faroles ────────────────────────
+  // Salen por los huecos ENTRE tiendas (mitad angular de cada gap).
+  const warmMat = neonMat(scene, 'lamp-warm', '#ffca6a');
+  const gapExit = (gapIdx: number): { x: number; z: number } => {
+    const a = GATE_ANGLE + GATE_HALF_GAP + (span * gapIdx) / TIENDAS.length;
+    return { x: Math.cos(a) * PROM_OUTER, z: Math.sin(a) * PROM_OUTER };
+  };
+  buildCaminito(scene, gapExit(2), { x: CANCHA.x - 9.2, z: CANCHA.z }, 2.2, woodDarkMat, warmMat);
+  buildCaminito(scene, gapExit(4), { x: COPAS.x - 1.5, z: COPAS.z - 6.8 }, -2.5, woodDarkMat, warmMat);
+  buildCaminito(scene, gapExit(8), { x: MUNECO.x + 4.4, z: MUNECO.z }, 2.0, woodDarkMat, warmMat);
+  // faroles en el sendero de entrada sur
+  buildLamp(scene, 2.1, -26, woodDarkMat, warmMat);
+  buildLamp(scene, -2.1, -33, woodDarkMat, warmMat);
+
+  // ─── Sectores: cancha + muñeco + copas ───────────────────────────────
+  buildCancha(scene, CANCHA.x, CANCHA.z, woodMat, woodDarkMat);
+  buildMuneco(scene, MUNECO.x, MUNECO.z, stoneMat, spinners);
+  buildCopas(scene, COPAS.x, COPAS.z, stoneMat, spinners);
+
   // ─── Robles y matas de pasto (billboards cruzados, estilo del juego) ──
+  // Despejado alrededor de los POIs nuevos y sus caminitos.
+  const nearPOI = (x: number, z: number): boolean => {
+    if (Math.abs(x - CANCHA.x) < 13.5 && Math.abs(z - CANCHA.z) < 17.5) return true; // cancha + arcos
+    if (Math.hypot(x - COPAS.x, z - COPAS.z) < 10.5) return true;
+    if (Math.hypot(x - MUNECO.x, z - MUNECO.z) < 8.5) return true;
+    for (const [mx, mz] of [[28, -4], [16, 21.5], [-24.5, -3.5]]) {  // corredores de caminitos
+      if (Math.hypot(x - mx, z - mz) < 5.5) return true;
+    }
+    return false;
+  };
   const rand = rng(20260611);
   const oakMat = new StandardMaterial('oak-mat', scene);
   const oakTex = new Texture(oakTreeUrl, scene);
@@ -499,6 +1096,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const tx = Math.cos(a) * r;
     const tz = Math.sin(a) * r;
     if (Math.abs(tx) < 3.5 && tz < -PROM_INNER) continue; // no tapar el sendero sur
+    if (nearPOI(tx, tz)) continue;
     const s = 4.2 + rand() * 2.2;
     for (const yaw of [0, Math.PI / 2]) {
       const plane = MeshBuilder.CreatePlane(`oak-${i}-${yaw > 0 ? 'b' : 'a'}`, { width: s, height: s }, scene);
@@ -533,6 +1131,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const pz = Math.sin(a) * r;
     if (Math.abs(px) < 2.2 && pz < 0) continue;                 // no en el sendero
     if (r < 7.6) continue;                                      // no entre banderas/monumento
+    if (nearPOI(px, pz)) continue;
     const s = 0.55 + rand() * 0.5;
     const yaw = rand() * Math.PI;
     Quaternion.RotationYawPitchRollToRef(yaw, 0, 0, scratchQ);
@@ -545,6 +1144,15 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   if (tm.length) tuftA.thinInstanceSetBuffer('matrix', new Float32Array(tm), 16, true);
   if (tm2.length) tuftB.thinInstanceSetBuffer('matrix', new Float32Array(tm2), 16, true);
 
+  // ─── Glow SOLO en los neones (los carteles/banderas usan emissive para
+  // legibilidad y no deben bloomear; neonMat marca disableLighting) ──────
+  for (const mesh of scene.meshes) {
+    const m = mesh.material;
+    if (m instanceof StandardMaterial && m.disableLighting) {
+      glow.addIncludedOnlyMesh(mesh as Mesh);
+    }
+  }
+
   // ─── Animación: banderas flameando + auto-órbita en reposo ───────────
   let lastInteract = performance.now();
   canvas.addEventListener('pointerdown', () => { lastInteract = performance.now(); }, { passive: true });
@@ -553,6 +1161,10 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const t = performance.now() / 1000;
     for (let i = 0; i < flags.length; i++) {
       flags[i].rotation.y = (-((i / FLAGS.length) * Math.PI * 2 + Math.PI / 8) + Math.PI / 2) + Math.sin(t * 2.2 + i * 1.7) * 0.16;
+    }
+    for (const s of spinners) { // íconos neón: giran + rebotan
+      s.node.rotation.y = t * 0.8 + s.phase;
+      s.node.position.y = s.baseY + Math.sin(t * 1.6 + s.phase) * 0.08;
     }
     if (performance.now() - lastInteract > 6000) {
       camera.alpha += 0.00011 * scene.getEngine().getDeltaTime();

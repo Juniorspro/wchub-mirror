@@ -19,12 +19,21 @@ await page.mouse.move(540, 1100);
 await page.mouse.wheel(0, 1200);
 await page.waitForTimeout(1500);
 await page.screenshot({ path: '/tmp/patio-v2-wide.png' });
-// vista del portal de entrada desde afuera (sur), a altura de jugador
-await page.evaluate(() => {
-  const cam = window.__maplab?.camera;
-  if (cam) { cam.alpha = Math.PI / 2; cam.beta = 1.38; cam.radius = 34; cam.target.y = 2; }
-});
-await page.waitForTimeout(800);
-await page.screenshot({ path: '/tmp/patio-v2-gate.png' });
+// vistas fijas: portal, tienda con ícono neón, cancha, copas, muñeco
+const views = [
+  ['gate',   { alpha: Math.PI / 2, beta: 1.38, radius: 34, tx: 0, ty: 2, tz: 0 }],
+  ['tienda', { alpha: -Math.PI / 2, beta: 1.25, radius: 12, tx: 4.9, ty: 3, tz: 16.8 }],
+  ['cancha', { alpha: Math.PI, beta: 1.05, radius: 30, tx: 44, ty: 1, tz: -5 }],
+  ['copas',  { alpha: -Math.PI / 2, beta: 1.15, radius: 17, tx: 20.5, ty: 2.5, tz: 32 }],
+  ['muneco', { alpha: -Math.PI / 2, beta: 1.25, radius: 13, tx: -31.7, ty: 2.5, tz: -4.3 }],
+];
+for (const [name, v] of views) {
+  await page.evaluate((v) => {
+    const cam = window.__maplab?.camera;
+    if (cam) { cam.alpha = v.alpha; cam.beta = v.beta; cam.radius = v.radius; cam.target.set(v.tx, v.ty, v.tz); }
+  }, v);
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: `/tmp/patio-v2-${name}.png` });
+}
 await browser.close();
 console.log('screenshots ok');
