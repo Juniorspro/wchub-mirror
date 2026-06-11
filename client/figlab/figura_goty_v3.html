@@ -37,6 +37,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
   <button class="chip" data-pose="TPOSE">✛ t-pose</button>
   <button class="chip" id="wbtn">🕸 malla</button>
   <button class="chip" id="bbtn">🦴 huesos</button>
+  <button class="chip" id="fprev">◀</button>
+  <button class="chip" id="fbtn">😀 1/48 · base</button>
+  <button class="chip" id="fnext">▶</button>
 </div>
 <div id="bar">
   <button class="chip on" data-p="ESTUDIO">💡</button>
@@ -100,7 +103,7 @@ function angDist(a,b){var d=Math.abs(a-b)%6.2832;return d>3.1416?6.2832-d:d}
 function gauss(x,s){return Math.exp(-(x*x)/(2*s*s))}
 /* ==================== [PURO] máquina de lofts orgánicos ==================== */
 var HUM={
-  SEG:{torso:22,head:24,arm:14,leg:14,foot:12},
+  SEG:{torso:22,head:30,arm:14,leg:14,foot:12},
   /* v3 PETISO: piernas y brazos cortos, torso compacto, CABEZÓN */
   L:{upper:0.21,fore:0.19,hand:0.135,thigh:0.27,shin:0.26,foot:0.21,shH:0.165,hipH:0.082,torso:0.44,head:0.26},
   /* tablas: [t, w, dFrente, dEspalda, exponente] */
@@ -113,15 +116,23 @@ var HUM={
          [0.84,0.188,0.103,0.103,2.8],
          [0.92,0.118,0.082,0.088,2.4],
          [1.00,0.056,0.054,0.058,2.0]],
-  /* v3.1: perfil ESFÉRICO — r(t)=R·√(1-(2t-1)²) sobre largo 0.26 */
+  /* v3.2: perfil ESFÉRICO denso — r(t)=R·√(1-(2t-1)²), anillo cada ~0.06
+     para que los rasgos de la cara (σt 0.03-0.085) tengan dónde vivir */
   HEAD:[[0.00,0.046,0.046,0.048,2.0],
-        [0.10,0.052,0.054,0.056,2.05],
-        [0.22,0.066,0.068,0.070,2.1],
-        [0.38,0.078,0.079,0.082,2.1],
-        [0.50,0.0813,0.0813,0.084,2.1],
-        [0.62,0.078,0.078,0.081,2.1],
-        [0.76,0.068,0.068,0.071,2.1],
-        [0.86,0.056,0.056,0.058,2.05],
+        [0.06,0.0386,0.0386,0.040,2.05],
+        [0.12,0.0528,0.0528,0.054,2.05],
+        [0.18,0.0625,0.0625,0.064,2.1],
+        [0.24,0.0694,0.0694,0.071,2.1],
+        [0.30,0.0745,0.0745,0.077,2.1],
+        [0.36,0.0780,0.0780,0.080,2.1],
+        [0.42,0.0803,0.0803,0.083,2.1],
+        [0.48,0.0812,0.0812,0.084,2.1],
+        [0.54,0.0810,0.0810,0.083,2.1],
+        [0.60,0.0797,0.0797,0.082,2.1],
+        [0.66,0.0770,0.0770,0.079,2.1],
+        [0.72,0.0730,0.0730,0.075,2.1],
+        [0.80,0.0650,0.0650,0.067,2.1],
+        [0.86,0.0564,0.0564,0.058,2.05],
         [0.93,0.0415,0.0415,0.043,2.0],
         [0.97,0.0277,0.0277,0.029,2.0],
         [0.995,0.0115,0.0115,0.012,2.0]],
@@ -303,18 +314,51 @@ function buildIndices(){
   }
   FIG.idx=new Uint16Array(idx);
 }
-/* cara: campo de desplazamiento radial (frente en θ=π/2) */
+/* ==================== [PURO] sistema de caras (v3.2) ====================
+   La cara es un descriptor de rasgos → headDisp lo esculpe en la esfera.
+   48 caras determinísticas por seed (la 0 es la cara base del v3). */
+var FACEN=48,FACEIDX=0,FACE=null;
+var FACENAMES=['base','el nene','doña rosa','tanque','flaco','cachetón','don angry',
+  'la nona','pibito','narigón','el ruso','toro','finito','el profe','morfón',
+  'orejudo','la jefa','chiquito','frentudo','el mago','duro','suavecito','tía marta',
+  'el capo','mandíbula','bebé','el viejo','picudo','redondito','serio','el primo',
+  'dormilón','vivo','la roca','ñato','el galán','tractor','mimoso','quijada',
+  'el bocha','pelado','grandote','el flequi','turbio','dulce','bestia','el crack','zen'];
+function makeFace(i){
+  var r=mulberry(1234+i*977);
+  function R(a,b){return a+(b-a)*r()}
+  /* amplitudes cartoon: ~×1.7 sobre el v3 para que se lean de lejos */
+  if(i===0)return{noseA:0.045,noseT:0.50,noseW:0.30,bridgeA:0.014,
+    eyeD:0.016,eyeSep:0.45,eyeT:0.625,eyeW:0.20,
+    chinA:0.020,chinT:0.20,mouthD:0.009,mouthT:0.345,lipA:0.006,
+    earA:0.024,earT:0.46,occA:0.013,
+    cheekA:0.014,cheekT:0.40,cheekSep:0.62,
+    browA:0.010,browT:0.66,jawA:0.007,frenteA:0.0};
+  return{
+    noseA:R(0.025,0.075),noseT:R(0.46,0.55),noseW:R(0.18,0.44),bridgeA:R(0.005,0.024),
+    eyeD:R(0.008,0.030),eyeSep:R(0.33,0.61),eyeT:R(0.60,0.665),eyeW:R(0.14,0.27),
+    chinA:R(0.006,0.038),chinT:R(0.15,0.27),mouthD:R(0.004,0.018),mouthT:R(0.32,0.37),lipA:R(0,0.014),
+    earA:R(0.008,0.045),earT:R(0.42,0.50),occA:R(0.008,0.024),
+    cheekA:R(0.003,0.030),cheekT:R(0.36,0.45),cheekSep:R(0.48,0.78),
+    browA:R(0.003,0.024),browT:R(0.64,0.70),jawA:R(0,0.022),frenteA:R(0,0.018)
+  };
+}
+FACE=makeFace(0);
+/* cara: campo de desplazamiento radial (frente en θ=π/2), lee FACE */
 function headDisp(th,t){
-  /* v3: amplitudes ×1.4 (cabeza más grande) + cachetes + mentón suave */
-  var F=1.5708,r=0;
-  r+=0.028*gauss(angDist(th,F),0.30)*gauss(t-0.50,0.085);
-  r+=0.010*gauss(angDist(th,F),0.80)*gauss(t-0.68,0.05);
-  r-=0.0105*(gauss(angDist(th,F-0.45),0.20)+gauss(angDist(th,F+0.45),0.20))*gauss(t-0.625,0.045);
-  r+=0.0126*gauss(angDist(th,F),0.40)*gauss(t-0.20,0.06);
-  r-=0.0056*gauss(angDist(th,F),0.30)*gauss(t-0.345,0.03);
-  r+=0.018*(gauss(angDist(th,0),0.22)+gauss(angDist(th,3.1416),0.22))*gauss(t-0.46,0.06);
-  r+=0.011*gauss(angDist(th,4.712),0.75)*gauss(t-0.70,0.10);
-  r+=0.009*(gauss(angDist(th,F-0.62),0.30)+gauss(angDist(th,F+0.62),0.30))*gauss(t-0.40,0.07);
+  var F=1.5708,C=FACE,r=0;
+  r+=C.noseA*gauss(angDist(th,F),C.noseW)*gauss(t-C.noseT,0.085);                                  /* nariz */
+  r+=C.bridgeA*gauss(angDist(th,F),0.42)*gauss(t-0.68,0.05);                                       /* puente/frente baja */
+  r-=C.eyeD*(gauss(angDist(th,F-C.eyeSep),C.eyeW)+gauss(angDist(th,F+C.eyeSep),C.eyeW))*gauss(t-C.eyeT,0.045); /* cuencas */
+  r+=C.browA*gauss(angDist(th,F),0.34)*gauss(t-C.browT,0.035);                                     /* ceja/arco */
+  r+=C.chinA*gauss(angDist(th,F),0.32)*gauss(t-C.chinT,0.06);                                      /* mentón */
+  r-=C.mouthD*gauss(angDist(th,F),0.30)*gauss(t-C.mouthT,0.03);                                    /* boca */
+  r+=C.lipA*gauss(angDist(th,F),0.22)*gauss(t-(C.mouthT-0.05),0.025);                              /* labio inferior */
+  r+=C.earA*(gauss(angDist(th,0),0.22)+gauss(angDist(th,3.1416),0.22))*gauss(t-C.earT,0.06);       /* orejas */
+  r+=C.occA*gauss(angDist(th,4.712),0.75)*gauss(t-0.70,0.10);                                      /* occipucio */
+  r+=C.cheekA*(gauss(angDist(th,F-C.cheekSep),0.30)+gauss(angDist(th,F+C.cheekSep),0.30))*gauss(t-C.cheekT,0.07); /* cachetes */
+  r+=C.jawA*(gauss(angDist(th,F-0.9),0.35)+gauss(angDist(th,F+0.9),0.35))*gauss(t-0.25,0.07);      /* mandíbula */
+  r+=C.frenteA*gauss(angDist(th,F),0.40)*gauss(t-0.80,0.06);                                       /* frente alta */
   return r;
 }
 /* ==================== [PURO] FK: ángulos → figura ==================== */
@@ -731,6 +775,17 @@ function setMat(n){
   skinMat.metalness=m[2];
   skinMat.clearcoat=m[3];
   skinMat.clearcoatRoughness=m[4];
+}
+/* re-esculpe la cara: regenera posiciones en bind pose (mismo layout,
+   mismos índices/pesos — solo cambia el campo de la cabeza) */
+function setFace(i){
+  FACEIDX=((i%FACEN)+FACEN)%FACEN;
+  FACE=makeFace(FACEIDX);
+  buildFigure(poseTarget('TPOSE'));
+  figGeo.attributes.position.needsUpdate=true;
+  figGeo.computeVertexNormals();
+  figGeo.attributes.normal.needsUpdate=true;
+  $('fbtn').textContent='😀 '+(FACEIDX+1)+'/'+FACEN+' · '+FACENAMES[FACEIDX];
 }
 /* ---------- osciladores por pose ---------- */
 var Jv=null;
@@ -1220,6 +1275,9 @@ function wireUI(){
       });
     })(achips[i]);
   }
+  $('fprev').addEventListener('click',function(){setFace(FACEIDX-1)});
+  $('fnext').addEventListener('click',function(){setFace(FACEIDX+1)});
+  $('fbtn').addEventListener('click',function(){setFace(1+Math.floor(Math.random()*(FACEN-1)))});
   $('wbtn').addEventListener('click',function(){
     wireMesh.visible=!wireMesh.visible;
     if(wireMesh.visible)$('wbtn').classList.add('on');else $('wbtn').classList.remove('on');
