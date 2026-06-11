@@ -19,6 +19,7 @@ import { startGame, type GameRuntimeHandle } from './babylon/game';
 import { Hud } from './babylon/hud';
 import { CameraDragZone, VirtualJoystick } from './babylon/touch';
 import { Landing, EnteringVeil } from './Landing';
+import { getAccessToken, getGameId } from './babylon/bridge';
 import {
   getGameSnapshot,
   hydrateEconomyFromStorage,
@@ -103,13 +104,26 @@ export default function App() {
         accessoryItems: o.accessoryItemIds.join(','),
       };
     };
+    // Host-App identity for server-side persistence (chat log, save games):
+    // token + platform gameId ride the join opts so the server can
+    // decodeIdentity() and write game_storage on our behalf. Fetched ONCE
+    // before the first attempt (the bridge resolves null instantly outside
+    // the App → guest session, nothing persisted) and reused on reconnects.
+    let identityOpts: { token?: string; gameId?: number } | null = null;
+    const fetchIdentityOpts = async () => {
+      if (identityOpts) return identityOpts;
+      const [token, gameId] = await Promise.all([getAccessToken(), getGameId()]);
+      identityOpts = { token: token ?? undefined, gameId: gameId ?? undefined };
+      return identityOpts;
+    };
     const connectLoop = async (net: NetClient) => {
       if (connecting) return;
       connecting = true;
+      const ident = await fetchIdentityOpts();
       for (let attempt = 0; !disposed; attempt++) {
         // Outfit re-read per attempt: a reconnect after the player changed
         // clothes should rejoin wearing the CURRENT outfit.
-        await net.connect(readRoomCode(), undefined, undefined, currentOutfit());
+        await net.connect(readRoomCode(), ident.token, ident.gameId, currentOutfit());
         if (disposed) {
           net.disconnect();
           break;

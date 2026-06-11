@@ -5,6 +5,8 @@
 import { GameState, Player, spawnAt } from "./state";
 import { registerMessages } from "./messages";
 import { step } from "./simulation";
+import { decodeIdentity } from "../plugins/auth/identity";
+import { attachIdentity, detachIdentity } from "../plugins/storage";
 
 export { registerMessages, step };
 export type { GameState } from "./state";
@@ -31,11 +33,18 @@ export function addPlayer(
   // ids carried back in by returning players.
   if (typeof opts?.textureItems === "string") p.textureItems = opts.textureItems.slice(0, 2800);
   if (typeof opts?.accessoryItems === "string") p.accessoryItems = opts.accessoryItems.slice(0, 256);
+  // Host-App identity (token + platform gameId in join opts, see client
+  // bridge.ts getAccessToken/getGameId). decode-only + per-room WeakMap
+  // registry — the token NEVER enters the schema (it would broadcast to
+  // every client). Browser guests have no token → null → no-op; they play
+  // fine, nothing persists on their behalf.
+  attachIdentity(state, sessionId, decodeIdentity(opts));
   spawnAt(p);
   state.players.set(sessionId, p);
 }
 
 export function removePlayer(state: GameState, sessionId: string): void {
+  detachIdentity(state, sessionId);
   state.players.delete(sessionId);
 }
 

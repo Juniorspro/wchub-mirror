@@ -136,3 +136,39 @@ export function openGameDetail(gameId: number | string): void {
     /* silent */
   }
 }
+
+// ── Identity token plumbing for server-side persistence ─────────────────────
+// The multiplayer persistence flow (see server/src/plugins/auth + storage):
+// the client fetches an access token + the platform gameId from the host App
+// BEFORE connecting, ships both in the Colyseus join opts, and the server
+// decodes the user identity from them to authorize game_storage reads/writes
+// (chat log persistence, save games). Outside the App both resolve null and
+// the game runs as a guest session — playable, nothing persisted.
+//
+// Hosts answer with loosely-shaped payloads (raw string, {token}, or
+// {gameId: '123'} — the App returns gameId as a STRING) — normalize all.
+
+export async function getAccessToken(): Promise<string | null> {
+  try {
+    const data = await callNative('getAccessToken');
+    if (typeof data === 'string' && data) return data;
+    const obj = data as Record<string, unknown> | undefined;
+    const token = obj && (obj.token ?? obj.accessToken);
+    return typeof token === 'string' && token ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getGameId(): Promise<number | null> {
+  try {
+    const data = await callNative('getGameId');
+    const raw = (typeof data === 'object' && data !== null)
+      ? (data as Record<string, unknown>).gameId
+      : data;
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}

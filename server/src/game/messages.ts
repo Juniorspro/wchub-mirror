@@ -18,6 +18,7 @@ import { TICK_HZ, MAP_W, MAP_H, PLAYER_SPEED } from "../shared/constants";
 import { movePlayer, normalizeInput, clamp } from "../shared/math";
 import { registerBettingEvent } from "./event";
 import { registerSoccerBall } from "./soccer";
+import { getIdentity, loadGameData, writeGameData } from "../plugins/storage";
 
 const DT = 1 / TICK_HZ;
 
@@ -88,9 +89,77 @@ export function registerMessages(room: Room<GameState>, state: GameState): void 
   // 'chat-request' → 'chat-history' round trip so everyone shares the same
   // chat box, not just whoever was online when a line was sent. Outlives
   // individual sessions because the room itself survives emptying
-  // (autoDispose=false in room.ts).
+  // (autoDispose=false in room.ts), and outlives the CONTAINER's idle sleep
+  // via Rezona game_storage below (when a token-bearing App player exists).
   const CHAT_LOG_CAP = 50;
-  const chatLog: Array<{ from: string; name: string; text: string; t: number }> = [];
+  type ChatLogEntry = { from: string; name: string; text: string; t: number };
+  const chatLog: ChatLogEntry[] = [];
+
+  // ── Chat persistence (Rezona game_storage via plugins/storage) ──────────
+  // Authorization rides any connected App player's identity (game_data is
+  // game-scoped; the identity only authenticates). Guest-only rooms skip
+  // both directions silently. Two guards from the persistence reference:
+  //   * single-flight load gate — the async restore must run once and must
+  //     never let a checkpoint overwrite real history before it lands;
+  //   * trailing-edge debounced checkpoint — at most one write per
+  //     CHAT_PERSIST_DEBOUNCE_MS, scheduled after the latest message, so a
+  //     burst of chatter costs one CAS write and the final message still
+  //     gets flushed.
+  const chatPersistKey = () => `chatlog:v1:${state.code}`;
+  const CHAT_PERSIST_DEBOUNCE_MS = 5_000;
+  let chatLoadStarted = false;
+  let chatLoadSettled = false;
+  let chatPersistTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const anyIdentity = () => {
+    for (const sid of state.players.keys()) {
+      const identity = getIdentity(state, sid);
+      if (identity) return identity;
+    }
+    return null;
+  };
+
+  const ensureChatLoaded = async (): Promise<void> => {
+    if (chatLoadStarted) return;
+    const identity = anyIdentity();
+    if (!identity) return; // guests only so far — retry on a later request
+    chatLoadStarted = true;
+    const raw = await loadGameData(identity, chatPersistKey());
+    chatLoadSettled = true;
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+      const seen = new Set(chatLog.map((m) => `${m.from}:${m.t}`));
+      const restored = parsed.filter((m): m is ChatLogEntry =>
+        !!m && typeof m === "object"
+        && typeof (m as ChatLogEntry).text === "string"
+        && typeof (m as ChatLogEntry).name === "string"
+        && typeof (m as ChatLogEntry).t === "number"
+        && !seen.has(`${(m as ChatLogEntry).from}:${(m as ChatLogEntry).t}`));
+      chatLog.unshift(...restored.slice(-CHAT_LOG_CAP));
+      chatLog.sort((a, b) => a.t - b.t);
+      while (chatLog.length > CHAT_LOG_CAP) chatLog.shift();
+    } catch {
+      /* corrupted persisted log — keep the in-memory one */
+    }
+  };
+
+  const scheduleChatPersist = (): void => {
+    if (chatPersistTimer) return; // a flush is already scheduled
+    chatPersistTimer = setTimeout(() => {
+      chatPersistTimer = null;
+      // Never checkpoint before the restore settles — an early write with a
+      // half-empty log would CAS-overwrite the real history.
+      if (chatLoadStarted && !chatLoadSettled) {
+        scheduleChatPersist();
+        return;
+      }
+      const identity = anyIdentity();
+      if (!identity) return; // everyone left / guests only — keep in memory
+      void writeGameData(identity, chatPersistKey(), JSON.stringify(chatLog));
+    }, CHAT_PERSIST_DEBOUNCE_MS);
+  };
 
   // Soccer ball — see ./soccer.ts. Sets up the tick + 'ball:request' handler.
   const soccerBall = registerSoccerBall(room, state);
@@ -168,14 +237,19 @@ export function registerMessages(room: Room<GameState>, state: GameState): void 
     chatLog.push(entry);
     while (chatLog.length > CHAT_LOG_CAP) chatLog.shift();
     room.broadcast("chat", entry);
+    scheduleChatPersist();
   });
 
   // Chat backfill — the client sends 'chat-request' AFTER it has registered
   // its 'chat-history' handler (a push on join would race the handler
   // registration and Colyseus drops messages without a handler). Targeted
-  // send, not a broadcast: only the requester needs the backlog.
+  // send, not a broadcast: only the requester needs the backlog. The
+  // request is also the restore trigger: the first token-bearing joiner
+  // pulls the persisted log back in (awaited, so even THEY see it).
   room.onMessage("chat-request", (client) => {
-    client.send("chat-history", { messages: chatLog });
+    void ensureChatLoaded().then(() => {
+      client.send("chat-history", { messages: chatLog });
+    });
   });
 
   room.onMessage<RenameMsg>("rename", (client, msg) => {
