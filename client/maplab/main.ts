@@ -1272,15 +1272,16 @@ function ragStart(vx: number, vz: number): void {
   const yaw = PLAYER.yaw;
   const fx = Math.sin(yaw);
   const fz = Math.cos(yaw);
+  const S = PSCALE;
   const defs: Array<[number, number, number, number, number, number]> = [
     // [ox, y, oz, radio, masa, patada]
-    [0, 0.60, 0, 0.15, 3, 0.4],
-    [fx * 0.02, 1.00, fz * 0.02, 0.15, 3, 1.2],
-    [fx * 0.04, 1.28, fz * 0.04, 0.16, 2, 1.8],
+    [0, 0.60 * S, 0, 0.15 * S, 3, 0.4],
+    [fx * 0.02, 1.00 * S, fz * 0.02, 0.15 * S, 3, 1.2],
+    [fx * 0.04, 1.28 * S, fz * 0.04, 0.16 * S, 2, 1.8],
     [-fz * 0.10, 0.10, fx * 0.10, 0.07, 1, -0.5],
     [fz * 0.10, 0.10, -fx * 0.10, 0.07, 1, -0.5],
-    [-fz * 0.30, 0.95, fx * 0.30, 0.07, 0.8, 1.4],
-    [fz * 0.30, 0.95, -fx * 0.30, 0.07, 0.8, 1.4],
+    [-fz * 0.30, 0.95 * S, fx * 0.30, 0.07, 0.8, 1.4],
+    [fz * 0.30, 0.95 * S, -fx * 0.30, 0.07, 0.8, 1.4],
   ];
   RAGD.P = defs.map(([ox, y, oz, r, mass, kick]) => {
     const body = new CANNON.Body({
@@ -1297,7 +1298,7 @@ function ragStart(vx: number, vz: number): void {
   });
   RAGD.cons = RAG_LINKS.map(([a, b, L]) => {
     const c = new CANNON.DistanceConstraint(
-      RAGD.P[a].body as CANNON.Body, RAGD.P[b].body as CANNON.Body, L, 90);
+      RAGD.P[a].body as CANNON.Body, RAGD.P[b].body as CANNON.Body, L * PSCALE, 90);
     (PHYS as CANNON.World).addConstraint(c);
     return c;
   });
@@ -1527,6 +1528,7 @@ function showEmote(scene: Scene, idx: number): void {
   EMOTE.start = performance.now() / 1000;
   EMOTE.type = idx; // 24 gestos únicos, uno por emoji
 }
+const PSCALE = 1.22; // personaje más grande
 const DEC_U = 48;
 const DEC_V = 28;
 const DEC_PHI = Math.PI; // wrap completo: la pintura cubre TODA la cabeza
@@ -1634,6 +1636,7 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
   nameP.isPickable = false;
 
   root.position.set(0, 0, -27); // spawn en el sendero sur
+  root.scaling.setAll(PSCALE);
   const player: Player = { root, mesh, decal, decalPos, normals, walkPh: 0, moveAmt: 0, yaw: 0, vx: 0, vz: 0 };
   PLAYER = player; // visible para equipHat/equipScarf
   if (OUTFIT_ST.hat >= 0) equipHat(scene, OUTFIT_ST.hat);
@@ -2180,7 +2183,10 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         const fwz = fz / fl;
         const mx = fwx * (-dy) + fwz * dx;   // derecha = (fwz, -fwx)
         const mz = fwz * (-dy) + (-fwx) * dx;
-        const SPEED = 4.2;
+        // joystick al centro = caminar, al límite = CORRER
+        const runT0 = Math.min(1, Math.max(0, (len - 0.5) / 0.45));
+        const runT = runT0 * runT0 * (3 - 2 * runT0);
+        const SPEED = 2.3 + 3.4 * runT;
         const p = PLAYER.root.position;
         PLAYER.vx = mx * SPEED;
         PLAYER.vz = mz * SPEED;
@@ -2220,7 +2226,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         while (dYaw < -Math.PI) dYaw += Math.PI * 2;
         PLAYER.yaw += dYaw * Math.min(1, dt * 12);
         PLAYER.root.rotation.y = PLAYER.yaw;
-        PLAYER.walkPh += dt * 7.5 * Math.min(1, len);
+        PLAYER.walkPh += dt * (5.2 + 4.0 * runT) * Math.min(1, len);
       }
       // bancos: detectar cercanía + botón de sentarse
       NEAR_BENCH = null;
@@ -2258,7 +2264,10 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       // mezcla idle↔caminata suave + FK → regenerar la malla esculpida
       PLAYER.moveAmt += ((moving && SIT.amt < 0.3 && !ragOn ? Math.min(1, len) : 0) - PLAYER.moveAmt) * Math.min(1, dt * 8);
       let J: Joints = poseCartoon(t, PLAYER.walkPh, PLAYER.moveAmt);
-      if (SIT.amt > 0.01) J = mixJoints(J, poseSit(t), SIT.amt);
+      if (SIT.amt > 0.01) {
+        J = mixJoints(J, poseSit(t), SIT.amt);
+        J.pelvisY -= 0.105 * SIT.amt; // compensa PSCALE: cola a altura de banco
+      }
       if (JUMP.active) { // piernas recogidas + brazos arriba en el aire
         const air = Math.min(1, JUMP.y / 0.5);
         J.kneeL += 1.1 * air;
@@ -2278,7 +2287,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
           const kdx = BALLB.position.x - PLAYER.root.position.x;
           const kdz = BALLB.position.z - PLAYER.root.position.z;
           const kd = Math.hypot(kdx, kdz);
-          if (kd < 0.85 && t - lastKick > 0.35 && !RAGD.on) {
+          if (kd < 1.0 && t - lastKick > 0.35 && !RAGD.on) {
             const sp = Math.hypot(PLAYER.vx, PLAYER.vz);
             const nx2 = kd > 0.01 ? kdx / kd : Math.sin(PLAYER.yaw);
             const nz2 = kd > 0.01 ? kdz / kd : Math.cos(PLAYER.yaw);
@@ -2330,9 +2339,9 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         const lz2 = ux * sy2 + uz * cy2;
         let rx = Math.atan2(lz2, Math.max(0.05, uy));
         let rz = -Math.atan2(lx2, Math.max(0.05, uy));
-        let pyy = Math.max(0, P0.y - uy * 0.56);
-        let ppx = P0.x - ux * 0.56;
-        let ppz = P0.z - uz * 0.56;
+        let pyy = Math.max(0, P0.y - uy * 0.56 * PSCALE);
+        let ppx = P0.x - ux * 0.56 * PSCALE;
+        let ppz = P0.z - uz * 0.56 * PSCALE;
         if (ragE > 2.6) { // levantarse suave
           const u = Math.min(1, (ragE - 2.6) / 0.6);
           const k = 1 - u * u * (3 - 2 * u);
@@ -2423,7 +2432,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       }
       camera.target.x += (PLAYER.root.position.x - camera.target.x) * 0.12;
       camera.target.z += (PLAYER.root.position.z - camera.target.z) * 0.12;
-      camera.target.y += (PLAYER.root.position.y + 1.0 - camera.target.y) * 0.12;
+      camera.target.y += (PLAYER.root.position.y + 1.0 * PSCALE - camera.target.y) * 0.12;
     } else if (performance.now() - lastInteract > 6000) {
       camera.alpha += 0.00011 * scene.getEngine().getDeltaTime();
     }
@@ -2749,11 +2758,65 @@ function boot(): void {
     } catch { /* sin storage, no pasa nada */ }
     validate();
 
+    // dino pixel art naranja (guía del estadio)
+    const DINO_PX = [
+      '..........ooooooo.',
+      '..........obwoooo.',
+      '..........ooooooo.',
+      '..........oooo....',
+      '..........ooooooo.',
+      'o........ooooo....',
+      'oo......oooooo....',
+      'ooo....ooooooodd..',
+      'oooo..ooooooooo...',
+      'ooooooooooooooo...',
+      'oooooooooooooo....',
+      '.oooooooooooo.....',
+      '..oooooooooo......',
+      '...oooooooo.......',
+      '....ooo..oo.......',
+      '....oo....oo......',
+      '....oo.....oo.....',
+      '....ooo....ooo....',
+    ];
+    const dcv = $id('dinocv') as HTMLCanvasElement;
+    const dc = dcv.getContext('2d') as CanvasRenderingContext2D;
+    const DCOLS: Record<string, string> = { o: '#ff7a2d', d: '#d95f1e', w: '#ffffff', b: '#14171f' };
+    for (let y = 0; y < DINO_PX.length; y++) {
+      for (let x = 0; x < DINO_PX[y].length; x++) {
+        const ch = DINO_PX[y][x];
+        if (ch === '.') continue;
+        dc.fillStyle = DCOLS[ch];
+        dc.fillRect(x, y, 1, 1);
+      }
+    }
+    const dino = $id('dino');
+    $id('dinobub').addEventListener('pointerdown', () => { dino.style.display = 'none'; });
+    dcv.addEventListener('pointerdown', () => { dino.style.display = 'none'; });
+    // horizontal SÍ O SÍ: fullscreen + lock landscape (gesto del usuario)
+    const goLandscape = (): void => {
+      try {
+        const el = document.documentElement as HTMLElement & { requestFullscreen?: () => Promise<void> };
+        const lock = (): void => {
+          const o = screen.orientation as ScreenOrientation & { lock?: (m: string) => Promise<void> };
+          if (o && o.lock) o.lock('landscape').catch(() => { /* desktop */ });
+        };
+        if (el.requestFullscreen && !document.fullscreenElement) {
+          el.requestFullscreen().then(lock).catch(lock);
+        } else {
+          lock();
+        }
+      } catch { /* sin soporte */ }
+    };
     $id('mplay').addEventListener('click', () => {
       CINE = false;
+      goLandscape();
       $id('menu').style.display = 'none';
       $id('intro').style.display = 'flex';
+      dino.style.display = 'flex'; // el dino te tira la data del estadio
       engine2.resize();
+      setTimeout(() => engine2.resize(), 600); // tras el giro a landscape
+      setTimeout(() => engine.resize(), 600);
     });
 
     const enterGame = (): void => {
@@ -2786,6 +2849,7 @@ function boot(): void {
       engine2.stopRenderLoop();
       engine2.dispose();
       $id('intro').style.display = 'none';
+      $id('dino').style.display = 'none';
       $id('joy').style.display = 'block';
       $id('emobtn').style.display = 'flex';
       $id('jumpbtn').style.display = 'flex';
