@@ -2499,7 +2499,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
 
   // ─── Mástiles con banderas animadas alrededor del monumento ──────────
   const poleMat = stdMat(scene, 'pole-mat', '#e8e4da');
-  const flags: Mesh[] = [];
+  const flags: TransformNode[] = [];
   for (let i = 0; i < FLAGS.length; i++) {
     const a = (i / FLAGS.length) * Math.PI * 2 + Math.PI / 8;
     const fx = Math.cos(a) * FLAG_RADIUS;
@@ -2518,16 +2518,17 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     fmat.emissiveColor = new Color3(0.35, 0.35, 0.35);
     fmat.specularColor = new Color3(0, 0, 0);
     fmat.backFaceCulling = false;
+    // raíz EN el poste: el borde interno de la bandera queda clavado al
+    // mástil y el flameo gira alrededor del palo (sin atravesarlo)
+    const froot = new TransformNode(`flag-root-${i}`, scene);
+    froot.position.set(fx, 4.55, fz);
+    froot.rotation.y = -a + Math.PI / 2;
     const flag = MeshBuilder.CreatePlane(`flag-${i}`, { width: 1.25, height: 0.8 }, scene);
-    flag.position.set(fx, 4.55, fz);
+    flag.parent = froot;
+    flag.position.x = 0.638; // borde -x del plano sobre el poste
     flag.material = fmat;
     flag.isPickable = false;
-    // pivote en el borde del mástil: corro el plano medio ancho
-    flag.setPivotPoint(new Vector3(-0.625, 0, 0));
-    flag.position.x += 0.625 * Math.cos(a + Math.PI / 2);
-    flag.position.z += 0.625 * Math.sin(a + Math.PI / 2);
-    flag.rotation.y = -a + Math.PI / 2;
-    flags.push(flag);
+    flags.push(froot);
   }
 
   // ─── Banderines (thin instances de triángulos, 4 colores) ────────────
