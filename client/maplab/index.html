@@ -6,162 +6,206 @@
   <meta name="theme-color" content="#aecbe8" />
   <title>PATIO v2 · maplab</title>
   <style>
+    :root {
+      --font: 'Inter', 'SF Pro Display', -apple-system, 'Segoe UI', Roboto, system-ui, sans-serif;
+      --glass: rgba(18, 22, 34, 0.62);
+      --glass-soft: rgba(255, 255, 255, 0.10);
+      --line: rgba(255, 255, 255, 0.14);
+      --txt: #f4f6fb;
+      --accent: #ffd34d;
+    }
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #aecbe8; }
     #scene { width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
-    /* VHS header strip */
+    /* ── HUD minimal ── */
     #hud {
-      position: fixed; top: 0; left: 0; right: 0; z-index: 10;
-      display: flex; justify-content: space-between; align-items: center;
-      padding: calc(env(safe-area-inset-top, 0px) + 6px) 12px 6px 12px;
-      font: 700 12px/1.3 ui-monospace, 'Courier New', monospace;
-      color: #f4f7e8; text-shadow: 0 1px 0 #0008, 0 0 6px #0006;
-      pointer-events: none; letter-spacing: 0.08em;
+      position: fixed; top: calc(env(safe-area-inset-top, 0px) + 10px);
+      left: 50%; transform: translateX(-50%); z-index: 10;
+      padding: 6px 14px; border-radius: 999px;
+      background: var(--glass); backdrop-filter: blur(12px);
+      border: 1px solid var(--line);
+      font: 600 12px/1 var(--font); color: var(--txt);
+      letter-spacing: 0.14em; pointer-events: none;
     }
-    #hud .rec { color: #ff5b4d; animation: blink 1.2s steps(2) infinite; }
-    @keyframes blink { 50% { opacity: 0.15; } }
-    #hint {
-      position: fixed; bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
-      left: 0; right: 0; text-align: center; z-index: 10;
-      font: 600 11px/1.4 ui-monospace, 'Courier New', monospace;
-      color: #ffffffd9; text-shadow: 0 1px 2px #0009;
-      pointer-events: none; letter-spacing: 0.06em;
-      transition: opacity 1s ease;
+    #hint, #phint {
+      position: fixed; left: 50%; transform: translateX(-50%); z-index: 10;
+      padding: 8px 16px; border-radius: 999px;
+      background: var(--glass); backdrop-filter: blur(12px);
+      border: 1px solid var(--line);
+      font: 500 12px/1.35 var(--font); color: var(--txt);
+      pointer-events: none; text-align: center; max-width: 86vw;
+      transition: opacity 0.8s ease;
     }
-    /* sutiles scanlines PS1/VHS */
-    #scan {
-      position: fixed; inset: 0; z-index: 9; pointer-events: none;
-      background: repeating-linear-gradient(0deg, #0000 0px, #0000 3px, #00000010 3px, #00000010 4px);
-      mix-blend-mode: multiply;
-    }
+    #hint { bottom: calc(env(safe-area-inset-bottom, 0px) + 152px); }
+    #phint { display: none; bottom: calc(env(safe-area-inset-bottom, 0px) + 152px); border-color: var(--accent); }
     #err {
       position: fixed; left: 0; top: 0; right: 0; z-index: 99;
-      background: #300; color: #f99; font: 12px ui-monospace, monospace;
+      background: #300; color: #f99; font: 12px var(--font);
       padding: 10px; white-space: pre-wrap; display: none;
     }
-    /* ── entrada obligatoria: dibujá tu cara + nombre ── */
+    /* ── MENÚ DE INICIO (cinemática de fondo) ── */
+    #menu {
+      position: fixed; inset: 0; z-index: 60; display: flex;
+      flex-direction: column; align-items: center; justify-content: flex-end;
+      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 40px);
+      background: linear-gradient(180deg, rgba(8,10,18,0.25) 0%, rgba(8,10,18,0.0) 35%, rgba(8,10,18,0.55) 100%);
+    }
+    #mttl {
+      font: 800 clamp(34px, 9vw, 56px)/1 var(--font); color: #fff;
+      letter-spacing: 0.04em; text-shadow: 0 4px 30px rgba(0,0,0,0.45);
+      margin-bottom: 6px;
+    }
+    #mttl em { font-style: normal; color: var(--accent); }
+    #msub {
+      font: 500 13px/1 var(--font); color: rgba(255,255,255,0.75);
+      letter-spacing: 0.32em; text-transform: uppercase; margin-bottom: 28px;
+    }
+    #mplay {
+      border: 0; cursor: pointer; margin-bottom: 22px;
+      padding: 16px 64px; border-radius: 999px;
+      background: var(--accent); color: #14171f;
+      font: 800 17px/1 var(--font); letter-spacing: 0.18em;
+      box-shadow: 0 10px 36px rgba(255, 211, 77, 0.35);
+    }
+    #mplay:active { transform: scale(0.96); }
+    #mopts { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+    .mopt {
+      display: flex; align-items: center; gap: 14px; justify-content: space-between;
+      min-width: 280px; padding: 8px 14px; border-radius: 14px;
+      background: var(--glass); backdrop-filter: blur(12px); border: 1px solid var(--line);
+      font: 600 12px/1 var(--font); color: rgba(255,255,255,0.8);
+    }
+    .seg { display: flex; gap: 4px; }
+    .seg b {
+      font: 600 12px/1 var(--font); color: rgba(255,255,255,0.65);
+      padding: 7px 12px; border-radius: 999px; cursor: pointer;
+    }
+    .seg b.on { background: rgba(255,255,255,0.16); color: #fff; }
+    #mclock { font: 500 12px/1 var(--font); color: rgba(255,255,255,0.6); letter-spacing: 0.06em; }
+    /* ── entrada: pintá tu cabeza ── */
     #intro {
-      position: fixed; inset: 0; z-index: 50; display: flex;
+      position: fixed; inset: 0; z-index: 50; display: none;
       align-items: center; justify-content: center;
-      background: rgba(10, 14, 24, 0.82); backdrop-filter: blur(3px);
+      background: rgba(10, 13, 22, 0.55); backdrop-filter: blur(10px);
     }
     #ibox {
-      background: #141a2a; border: 2px solid #e8c84a; border-radius: 14px;
-      padding: 18px 20px calc(env(safe-area-inset-bottom, 0px) + 18px) 20px;
-      display: flex; flex-direction: column; align-items: center; gap: 10px;
-      font: 700 13px/1.4 ui-monospace, 'Courier New', monospace; color: #f3ecd9;
-      max-width: 92vw;
+      background: var(--glass); border: 1px solid var(--line); border-radius: 22px;
+      padding: 20px 22px calc(env(safe-area-inset-bottom, 0px) + 20px) 22px;
+      display: flex; flex-direction: column; align-items: center; gap: 11px;
+      font: 600 13px/1.4 var(--font); color: var(--txt);
+      max-width: 92vw; backdrop-filter: blur(18px);
     }
-    #ibox .ittl { font-size: 18px; letter-spacing: 0.12em; color: #e8c84a; }
-    #ibox .isub { font-size: 11px; opacity: 0.8; font-weight: 600; }
+    #ibox .ittl { font: 800 19px/1 var(--font); letter-spacing: 0.06em; }
+    #ibox .isub { font: 500 11px/1.4 var(--font); opacity: 0.7; }
     #ballwrap { display: flex; align-items: center; gap: 12px; }
     #ballcv {
       width: min(56vw, 250px); height: min(56vw, 250px);
-      border-radius: 14px; border: 2px solid #3a4666; touch-action: none;
+      border-radius: 18px; border: 1px solid var(--line); touch-action: none;
       background: #0b0e18; cursor: crosshair;
     }
     #ballrot {
       width: 64px; height: 64px; border-radius: 50%;
-      background: #0d1220; border: 2px solid #3a4666;
+      background: var(--glass-soft); border: 1px solid var(--line);
       display: flex; align-items: center; justify-content: center;
-      touch-action: none; cursor: grab; font-size: 22px; color: #8a90a8;
+      touch-action: none; cursor: grab; font-size: 22px;
       user-select: none; -webkit-user-select: none;
     }
-    #ballrot:active { border-color: #e8c84a; }
+    #ballrot:active { border-color: var(--accent); }
     .inkrow { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-    #baserow {
-      display: flex; gap: 7px; align-items: center;
-      font-size: 11px; color: #8a90a8;
-    }
+    #baserow { display: flex; gap: 7px; align-items: center; font: 500 11px var(--font); color: rgba(255,255,255,0.6); }
     #baserow .tool { width: 26px; height: 26px; }
     .tool {
-      width: 34px; height: 34px; border-radius: 50%; border: 2px solid #ffffff44;
-      cursor: pointer; font: 700 14px ui-monospace, monospace;
+      width: 34px; height: 34px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.22);
+      cursor: pointer; font: 700 14px var(--font);
       display: flex; align-items: center; justify-content: center;
     }
-    .tool.on { border-color: #e8c84a; box-shadow: 0 0 8px #e8c84a88; }
+    .tool.on { border-color: var(--accent); box-shadow: 0 0 10px rgba(255,211,77,0.45); }
     #iname {
-      width: 100%; box-sizing: border-box; padding: 9px 12px;
-      border-radius: 8px; border: 2px solid #3a4666; background: #0d1220;
-      color: #f3ecd9; font: 700 14px ui-monospace, monospace; text-align: center;
-      outline: none;
+      width: 100%; box-sizing: border-box; padding: 11px 12px;
+      border-radius: 12px; border: 1px solid var(--line); background: rgba(0,0,0,0.3);
+      color: var(--txt); font: 600 14px var(--font); text-align: center; outline: none;
     }
-    #iname:focus { border-color: #e8c84a; }
+    #iname:focus { border-color: var(--accent); }
     #ienter {
-      width: 100%; padding: 11px; border-radius: 8px; border: 0;
-      background: #e8c84a; color: #1d2540; font: 800 14px ui-monospace, monospace;
-      letter-spacing: 0.1em; cursor: pointer;
+      width: 100%; padding: 13px; border-radius: 12px; border: 0;
+      background: var(--accent); color: #14171f; font: 800 14px var(--font);
+      letter-spacing: 0.12em; cursor: pointer;
     }
-    #ienter:disabled { background: #4a5068; color: #9aa0b8; cursor: not-allowed; }
-    /* ── botones de acción (sentarse / emotes / saltar / ragdoll / tienda) ── */
+    #ienter:disabled { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); cursor: not-allowed; }
+    /* ── botones de acción ── */
     #sitbtn, #emobtn, #jumpbtn, #ragbtn, #shopbtn {
       position: fixed; z-index: 12; display: none;
       width: 56px; height: 56px; border-radius: 50%;
-      background: rgba(16, 32, 74, 0.9); border: 2px solid #e8c84a;
-      color: #f3ecd9; font: 700 22px ui-monospace, monospace;
+      background: var(--glass); backdrop-filter: blur(12px);
+      border: 1px solid var(--line);
+      color: var(--txt); font: 600 22px var(--font);
       align-items: center; justify-content: center; cursor: pointer;
       touch-action: none; user-select: none; -webkit-user-select: none;
     }
+    #sitbtn:active, #emobtn:active, #jumpbtn:active, #ragbtn:active, #shopbtn:active { background: rgba(255,255,255,0.22); }
     #emobtn  { right: 16px;  bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
     #jumpbtn { right: 82px;  bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
     #ragbtn  { right: 148px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
     #sitbtn  { right: 16px;  bottom: calc(env(safe-area-inset-bottom, 0px) + 82px); font-size: 24px; }
     #shopbtn { right: 82px;  bottom: calc(env(safe-area-inset-bottom, 0px) + 82px); }
-    #shoppanel {
+    #shoppanel, #emopanel {
       position: fixed; right: 12px; z-index: 14; display: none;
-      bottom: calc(env(safe-area-inset-bottom, 0px) + 150px);
-      background: rgba(16, 32, 74, 0.95); border: 2px solid #e8c84a;
-      border-radius: 14px; padding: 12px; max-width: 86vw;
-      font: 700 12px ui-monospace, monospace; color: #f3ecd9;
-      touch-action: none;
+      background: var(--glass); backdrop-filter: blur(16px);
+      border: 1px solid var(--line); border-radius: 18px; padding: 12px;
+      font: 600 12px var(--font); color: var(--txt);
+      touch-action: none; max-width: 86vw;
     }
-    .shoptitle { margin-bottom: 8px; letter-spacing: 0.06em; color: #e8c84a; }
+    #shoppanel { bottom: calc(env(safe-area-inset-bottom, 0px) + 150px); }
+    #emopanel  { bottom: calc(env(safe-area-inset-bottom, 0px) + 86px); grid-template-columns: repeat(6, 44px); gap: 6px; }
+    .shoptitle { margin-bottom: 9px; letter-spacing: 0.08em; color: var(--accent); }
     .swrow { display: flex; flex-wrap: wrap; gap: 7px; max-width: 280px; }
-    .sw {
-      width: 34px; height: 34px; border-radius: 50%;
-      border: 2px solid #ffffff55; cursor: pointer;
-    }
-    .sw:active { border-color: #e8c84a; }
+    .sw { width: 34px; height: 34px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.3); cursor: pointer; }
+    .sw:active { border-color: var(--accent); }
     .shopitem {
-      padding: 8px 10px; border-radius: 9px; background: #0d1220;
-      border: 1px solid #ffffff22; cursor: pointer; font-size: 13px;
+      padding: 9px 11px; border-radius: 11px; background: rgba(255,255,255,0.08);
+      border: 1px solid transparent; cursor: pointer; font: 600 13px var(--font);
     }
-    .shopitem:active { background: #e8c84a; color: #1d2540; }
-    .shopclose { margin-top: 8px; text-align: center; }
-    #emopanel {
-      position: fixed; right: 12px; z-index: 13; display: none;
-      bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
-      background: rgba(16, 32, 74, 0.94); border: 2px solid #e8c84a;
-      border-radius: 14px; padding: 10px;
-      grid-template-columns: repeat(6, 44px); gap: 6px;
-      touch-action: none;
-    }
+    .shopitem:active { background: var(--accent); color: #14171f; }
+    .shopclose { margin-top: 9px; text-align: center; }
     .emo {
-      width: 44px; height: 44px; border-radius: 10px; border: 1px solid #ffffff22;
-      background: #0d1220; font-size: 24px; display: flex;
+      width: 44px; height: 44px; border-radius: 12px;
+      background: rgba(255,255,255,0.07); font-size: 24px; display: flex;
       align-items: center; justify-content: center; cursor: pointer;
       user-select: none; -webkit-user-select: none;
     }
-    .emo:active { background: #e8c84a; }
-    /* ── joystick táctil ── */
+    .emo:active { background: var(--accent); }
+    /* ── joystick ── */
     #joy {
       position: fixed; left: 18px; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
       width: 124px; height: 124px; border-radius: 50%; z-index: 12;
-      background: rgba(255,255,255,0.08); border: 2px solid rgba(255,255,255,0.25);
-      touch-action: none; display: none;
+      background: rgba(255,255,255,0.07); border: 1px solid var(--line);
+      backdrop-filter: blur(6px); touch-action: none; display: none;
     }
     #knob {
       position: absolute; left: 50%; top: 50%; width: 52px; height: 52px;
-      border-radius: 50%; background: rgba(255,255,255,0.35);
-      border: 2px solid rgba(255,255,255,0.5);
+      border-radius: 50%; background: rgba(255,255,255,0.30);
+      border: 1px solid rgba(255,255,255,0.45);
       transform: translate(-50%, -50%); pointer-events: none;
     }
   </style>
 </head>
 <body>
-  <div id="hud"><span><span class="rec">●</span> PATIO v2</span><span>WCHUB · MAPLAB</span></div>
+  <div id="hud">PATIO MUNDIAL</div>
   <canvas id="scene"></canvas>
-  <div id="scan"></div>
   <div id="hint">arrastrá para girar · pellizcá para zoom</div>
+  <div id="menu">
+    <div id="mttl">PATIO <em>MUNDIAL</em></div>
+    <div id="msub">world cup hub</div>
+    <button id="mplay">JUGAR</button>
+    <div id="mopts">
+      <div class="mopt"><span>Resolución</span>
+        <div id="resopt" class="seg"><b data-r="0.7">Baja</b><b data-r="1" class="on">Media</b><b data-r="1.6">Alta</b></div>
+      </div>
+      <div class="mopt"><span>Gráficos</span>
+        <div id="gfxopt" class="seg"><b data-g="0" class="on">Clásico</b><b data-g="1">Cine·PBR</b></div>
+      </div>
+    </div>
+    <div id="mclock">🕒 …</div>
+  </div>
   <div id="joy"><div id="knob"></div></div>
   <div id="sitbtn">🪑</div>
   <div id="emobtn">😀</div>

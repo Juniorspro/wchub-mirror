@@ -15,10 +15,12 @@ import {
   ArcRotateCamera,
   Color3,
   Color4,
+  DefaultRenderingPipeline,
   DirectionalLight,
   DynamicTexture,
   Engine,
   GlowLayer,
+  ImageProcessingConfiguration,
   HemisphericLight,
   Matrix,
   Mesh,
@@ -70,6 +72,8 @@ const ESTADIO = { x: 0, z: 68 };
 const EST_B = 26;                  // semieje z (el juego: 52.5)
 const EST_A = EST_B * 1.4;         // semieje x (mismo ratio oval)
 const EST_WALL_H = 15;             // alto de pared (el juego: 26)
+const EST_IN_A = EST_A - 6.4;      // borde interior de tribunas
+const EST_IN_B = EST_B - 6.4;
 // Cerca perimetral del parque (como buildParkFence del juego)
 const FENCE = { x0: -52, z0: -44, x1: 58, z1: 98 };
 
@@ -227,6 +231,7 @@ function buildNeonIcon(scene: Scene, id: string, spinners: Spinner[], parent: Tr
 
 // Farol de caminito: poste de madera + cabeza cálida que brilla.
 function buildLamp(scene: Scene, x: number, z: number, woodDarkMat: StandardMaterial, warmMat: StandardMaterial): void {
+  COLLIDERS.push({ x, z, r: 0.25 });
   const post = MeshBuilder.CreateCylinder('lamp-post', { diameter: 0.16, height: 3.4, tessellation: 8 }, scene);
   post.position.set(x, 1.7, z);
   post.material = woodDarkMat;
@@ -413,6 +418,7 @@ function buildMuneco(scene: Scene, cx: number, cz: number, stoneMat: StandardMat
   discMat.diffuseTexture = discTex;
   disc.material = discMat;
   disc.isPickable = false;
+  COLLIDERS.push({ x: cx, z: cz, r: 2.2 }); // pedestal del muñeco
   const ped1 = MeshBuilder.CreateCylinder('mu-ped1', { height: 0.6, diameter: 3.4, tessellation: 24 }, scene);
   ped1.position.set(cx, 0.3, cz);
   ped1.material = stoneMat;
@@ -570,6 +576,7 @@ function buildCopas(scene: Scene, cx: number, cz: number, stoneMat: StandardMate
     rim.position.set(px, baseY + 1.95 * scale, pz);
     rim.material = mat;
   };
+  COLLIDERS.push({ x: cx, z: cz, r: 2.1 }); // copa gigante
   trophy(cx, cz, 1.35, gold, 1.8);
   for (const [dx, dz] of [[3.8, 1.5], [-3.8, 1.5], [2.6, -3.4], [-2.6, -3.4]] as const) {
     trophy(cx + dx, cz + dz, 0.62, silver, 0.9);
@@ -1106,6 +1113,8 @@ interface Player {
   walkPh: number;
   moveAmt: number;
   yaw: number;
+  vx: number;
+  vz: number;
 }
 let PLAYER: Player | null = null;
 const INPUT = { kx: 0, ky: 0, jx: 0, jy: 0 };
@@ -1172,9 +1181,75 @@ let HATNODE: TransformNode | null = null;
 let SCARFNODE: TransformNode | null = null;
 const SHOPS: Array<{ x: number; z: number; id: string; nombre: string }> = [];
 let NEAR_SHOP: { x: number; z: number; id: string; nombre: string } | null = null;
-// salto + ragdoll
+// salto + ragdoll FÍSICO (verlet: partículas + palitos, piso de verdad)
 const JUMP = { y: 0, vy: 0, active: false };
-const RAG = { start: -10 };
+interface RagP { x: number; y: number; z: number; px: number; py: number; pz: number; r: number }
+const RAGD = { on: false, t0: -10, P: [] as RagP[] };
+const RAG_LINKS: Array<[number, number, number]> = [
+  [0, 1, 0.40], [1, 2, 0.30],   // pelvis–pecho, pecho–cabeza
+  [0, 3, 0.50], [0, 4, 0.50],   // pelvis–pies
+  [1, 5, 0.42], [1, 6, 0.42],   // pecho–manos
+  [3, 4, 0.26], [5, 6, 0.55],   // separaciones
+];
+function ragStart(vx: number, vz: number): void {
+  if (!PLAYER) return;
+  const p = PLAYER.root.position;
+  const yaw = PLAYER.yaw;
+  const fx = Math.sin(yaw);
+  const fz = Math.cos(yaw);
+  const mk = (ox: number, y: number, oz: number, r: number, kick: number): RagP => ({
+    x: p.x + ox, y: y + JUMP.y, z: p.z + oz, r,
+    px: p.x + ox - vx * 0.04 - fx * kick * 0.03,
+    py: y + JUMP.y - 0.015,
+    pz: p.z + oz - vz * 0.04 - fz * kick * 0.03,
+  });
+  RAGD.P = [
+    mk(0, 0.60, 0, 0.15, 0.2),
+    mk(fx * 0.02, 1.00, fz * 0.02, 0.15, 0.8),
+    mk(fx * 0.04, 1.28, fz * 0.04, 0.16, 1.3),
+    mk(-fz * 0.10, 0.08, fx * 0.10, 0.07, -0.4),
+    mk(fz * 0.10, 0.08, -fx * 0.10, 0.07, -0.4),
+    mk(-fz * 0.30, 0.95, fx * 0.30, 0.07, 1.0),
+    mk(fz * 0.30, 0.95, -fx * 0.30, 0.07, 1.0),
+  ];
+  RAGD.on = true;
+  RAGD.t0 = performance.now() / 1000;
+}
+function ragStep(dt: number): void {
+  const sub = Math.min(dt, 0.033);
+  const G = 13;
+  for (const q of RAGD.P) {
+    const nx = q.x + (q.x - q.px) * 0.985;
+    const ny = q.y + (q.y - q.py) * 0.985 - G * sub * sub;
+    const nz = q.z + (q.z - q.pz) * 0.985;
+    q.px = q.x; q.py = q.y; q.pz = q.z;
+    q.x = nx; q.y = ny; q.z = nz;
+    if (q.y < q.r) { // PISO: nadie lo atraviesa — rebote + fricción
+      const vy = q.y - q.py;
+      q.y = q.r;
+      q.py = q.y + vy * 0.35;
+      q.px = q.x - (q.x - q.px) * 0.55;
+      q.pz = q.z - (q.z - q.pz) * 0.55;
+    }
+  }
+  for (let it = 0; it < 3; it++) {
+    for (const [a, b, L] of RAG_LINKS) {
+      const A = RAGD.P[a];
+      const B = RAGD.P[b];
+      let dx = B.x - A.x;
+      let dy = B.y - A.y;
+      let dz = B.z - A.z;
+      const d = Math.hypot(dx, dy, dz) || 1;
+      const corr = (d - L) / d / 2;
+      dx *= corr; dy *= corr; dz *= corr;
+      A.x += dx; A.y += dy; A.z += dz;
+      B.x -= dx; B.y -= dy; B.z -= dz;
+    }
+  }
+}
+// colisiones del mapa (círculos) + luces para día/noche
+const COLLIDERS: Array<{ x: number; z: number; r: number }> = [];
+let LIGHTS: { hemi: HemisphericLight; sun: DirectionalLight } | null = null;
 
 function hex2v3(h: string): [number, number, number] {
   return [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
@@ -1453,7 +1528,7 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
   nameP.isPickable = false;
 
   root.position.set(0, 0, -27); // spawn en el sendero sur
-  const player: Player = { root, mesh, decal, decalPos, normals, walkPh: 0, moveAmt: 0, yaw: 0 };
+  const player: Player = { root, mesh, decal, decalPos, normals, walkPh: 0, moveAmt: 0, yaw: 0, vx: 0, vz: 0 };
   PLAYER = player; // visible para equipHat/equipScarf
   if (OUTFIT_ST.hat >= 0) equipHat(scene, OUTFIT_ST.hat);
   if (OUTFIT_ST.scarf >= 0) equipScarf(scene, OUTFIT_ST.scarf);
@@ -1486,6 +1561,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   const sun = new DirectionalLight('sun', new Vector3(-0.4, -1, -0.35), scene);
   sun.intensity = 0.9;
   sun.diffuse = new Color3(1.0, 0.96, 0.86);
+  LIGHTS = { hemi, sun };
 
   // Glow para los neones (ratio bajo = barato en el Mali); intensidad
   // contenida: el neón se nota pero no come la silueta del ícono.
@@ -1544,6 +1620,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const facing = Math.atan2(-x, -z);
     buildTienda(scene, TIENDAS[i], x, z, facing, woodMat, woodDarkMat, spinners);
     SHOPS.push({ x, z, id: TIENDAS[i].id, nombre: TIENDAS[i].nombre });
+    COLLIDERS.push({ x, z, r: 2.0 });
   }
 
   // ─── Monumento central: base escalonada de piedra + copa dorada ──────
@@ -1553,6 +1630,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     tier.material = stoneMat;
     tier.isPickable = false;
   }
+  COLLIDERS.push({ x: 0, z: 0, r: 2.9 }); // monumento central
   const goldMat = stdMat(scene, 'gold-mat', '#e8c84a', '#604d12');
   goldMat.specularColor = new Color3(0.9, 0.85, 0.5);
   const stem = MeshBuilder.CreateCylinder('mon-stem', { diameterTop: 0.35, diameterBottom: 0.7, height: 1.6, tessellation: 16 }, scene);
@@ -1593,6 +1671,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const a = (i / FLAGS.length) * Math.PI * 2 + Math.PI / 8;
     const fx = Math.cos(a) * FLAG_RADIUS;
     const fz = Math.sin(a) * FLAG_RADIUS;
+    COLLIDERS.push({ x: fx, z: fz, r: 0.2 });
     const pole = MeshBuilder.CreateCylinder(`pole-${i}`, { diameter: 0.1, height: 5.2, tessellation: 8 }, scene);
     pole.position.set(fx, 2.6, fz);
     pole.material = poleMat;
@@ -1669,6 +1748,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   const GATE_R = RING_RADIUS;
   const gateHalfWidth = Math.sin(GATE_HALF_GAP) * GATE_R + 1.2;
   for (const sx of [-1, 1]) {
+    COLLIDERS.push({ x: sx * gateHalfWidth, z: -GATE_R, r: 0.9 });
     const pillar = MeshBuilder.CreateBox('gate-pillar', { width: 0.9, height: 3.6, depth: 0.9 }, scene);
     pillar.position.set(sx * gateHalfWidth, 1.8, -GATE_R);
     pillar.material = stoneMat;
@@ -1772,6 +1852,10 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   // ─── Carteles del juego original ──────────────────────────────────────
   // Tablón de fixtures camino a la cancha + láminas del mundial en stands.
   buildFixtureBoard(scene, 28, 11, Math.atan2(-28, -11), woodDarkMat);
+  COLLIDERS.push({ x: 28, z: 11, r: 1.4 });
+  COLLIDERS.push({ x: -13, z: 22, r: 0.9 });
+  COLLIDERS.push({ x: -25, z: -14, r: 1.1 });
+  COLLIDERS.push({ x: 33, z: -20, r: 0.9 });
   buildCartel(scene, portraitUrl, 2.2, 3.0, -13, 22, Math.atan2(13, -22), woodDarkMat);
   buildCartel(scene, bannerUrl, 4.6, 1.7, -25, -14, Math.atan2(25, 14), woodDarkMat);
   buildCartel(scene, portraitUrl, 2.2, 3.0, 33, -20, Math.atan2(-33, 20), woodDarkMat);
@@ -1788,8 +1872,8 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     { url: 'https://web.rezona.ai/share/game/OTMzMzI4NA', label: 'Ball Juggler', cover: coverJugglerUrl, angle: Math.PI - Math.PI / 6 },
     { url: '', label: 'Festejo GOTY', cover: coverCardsUrl, angle: Math.PI + Math.PI / 4 },
   ];
-  const IN_A = EST_A - 6.4; // borde interior de las tribunas (4 niveles × 1.5)
-  const IN_B = EST_B - 6.4;
+  const IN_A = EST_IN_A;
+  const IN_B = EST_IN_B;
   for (let i = 0; i < PORTALES.length; i++) {
     const a = PORTALES[i].angle;
     const px = ESTADIO.x + Math.cos(a) * IN_A;
@@ -1904,6 +1988,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     if (Math.abs(tx) < 3.5 && tz < -PROM_INNER) continue; // no tapar el sendero sur
     if (nearPOI(tx, tz)) continue;
     const s = 7.2 + rand() * 3.8; // robles grandes (piden presencia)
+    COLLIDERS.push({ x: tx, z: tz, r: 0.85 }); // tronco
     for (const yaw of [0, Math.PI / 2]) {
       const plane = MeshBuilder.CreatePlane(`oak-${i}-${yaw > 0 ? 'b' : 'a'}`, { width: s, height: s }, scene);
       plane.position.set(tx, s / 2 - s * 0.07, tz); // hundido: el tronco toca el piso
@@ -1979,8 +2064,9 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       const len = Math.hypot(dx, dy);
       if (len > 1) { dx /= len; dy /= len; }
       const moving = len > 0.08;
+      if (!moving) { PLAYER.vx *= 0.8; PLAYER.vz *= 0.8; }
       if (moving && SIT.target === 1) SIT.target = 0; // moverse = pararse
-      if (moving && SIT.amt < 0.3) {
+      if (moving && SIT.amt < 0.3 && !RAGD.on) {
         const fx = camera.target.x - camera.position.x;
         const fz = camera.target.z - camera.position.z;
         const fl = Math.hypot(fx, fz) || 1;
@@ -1990,8 +2076,38 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         const mz = fwz * (-dy) + (-fwx) * dx;
         const SPEED = 4.2;
         const p = PLAYER.root.position;
+        PLAYER.vx = mx * SPEED;
+        PLAYER.vz = mz * SPEED;
         p.x = Math.max(-50, Math.min(56, p.x + mx * SPEED * dt));
         p.z = Math.max(-42, Math.min(95, p.z + mz * SPEED * dt));
+        // COLISIONES: círculos de las estructuras
+        for (const c of COLLIDERS) {
+          const ddx = p.x - c.x;
+          const ddz = p.z - c.z;
+          const d = Math.hypot(ddx, ddz);
+          const min = c.r + 0.32;
+          if (d < min && d > 1e-4) {
+            p.x = c.x + ddx / d * min;
+            p.z = c.z + ddz / d * min;
+          }
+        }
+        // banda de tribunas/pared del estadio (salvo el túnel del portón)
+        const ex2 = p.x - ESTADIO.x;
+        const ez2 = p.z - ESTADIO.z;
+        const fi = (ex2 / EST_IN_A) ** 2 + (ez2 / EST_IN_B) ** 2;
+        const fo = (ex2 / EST_A) ** 2 + (ez2 / EST_B) ** 2;
+        const inTunnel = Math.abs(p.x) < 2.6 && p.z > ESTADIO.z - EST_B - 3 && p.z < ESTADIO.z - EST_IN_B + 2;
+        if (fi > 1 && fo < 1.1 && !inTunnel) {
+          if (fi < 1.55) { // cerca del campo → empujar adentro
+            const ang = Math.atan2(ez2 / EST_IN_B, ex2 / EST_IN_A);
+            p.x = ESTADIO.x + Math.cos(ang) * EST_IN_A * 0.985;
+            p.z = ESTADIO.z + Math.sin(ang) * EST_IN_B * 0.985;
+          } else { // del lado del parque → empujar afuera
+            const ang = Math.atan2(ez2 / EST_B, ex2 / EST_A);
+            p.x = ESTADIO.x + Math.cos(ang) * EST_A * 1.035;
+            p.z = ESTADIO.z + Math.sin(ang) * EST_B * 1.035;
+          }
+        }
         const targetYaw = Math.atan2(mx, mz); // la figura mira a +Z local
         let dYaw = targetYaw - PLAYER.yaw;
         while (dYaw > Math.PI) dYaw -= Math.PI * 2;
@@ -2031,8 +2147,8 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
           JUMP.active = false;
         }
       }
-      const ragE = t - RAG.start;
-      const ragOn = ragE >= 0 && ragE < 3.0;
+      const ragE = t - RAGD.t0;
+      const ragOn = RAGD.on;
       // mezcla idle↔caminata suave + FK → regenerar la malla esculpida
       PLAYER.moveAmt += ((moving && SIT.amt < 0.3 && !ragOn ? Math.min(1, len) : 0) - PLAYER.moveAmt) * Math.min(1, dt * 8);
       let J: Joints = poseCartoon(t, PLAYER.walkPh, PLAYER.moveAmt);
@@ -2046,9 +2162,43 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         J.shAbdL += 0.9 * air;
         J.shAbdR += 0.9 * air;
       }
-      if (ragOn) ragdollJ(J, ragE, t);
-      PLAYER.root.position.y = JUMP.y;
-      PLAYER.root.rotation.x = ragRotX(ragE);
+      if (ragOn) {
+        ragStep(dt);
+        ragdollJ(J, Math.min(ragE, 2.1), t); // manoteo de extremidades
+        const P0 = RAGD.P[0];
+        const P1 = RAGD.P[1];
+        let ux = P1.x - P0.x;
+        let uy = P1.y - P0.y;
+        let uz = P1.z - P0.z;
+        const ul = Math.hypot(ux, uy, uz) || 1;
+        ux /= ul; uy /= ul; uz /= ul;
+        const cy2 = Math.cos(PLAYER.yaw);
+        const sy2 = Math.sin(PLAYER.yaw);
+        const lx2 = ux * cy2 - uz * sy2; // up en frame local del root
+        const lz2 = ux * sy2 + uz * cy2;
+        let rx = Math.atan2(lz2, Math.max(0.05, uy));
+        let rz = -Math.atan2(lx2, Math.max(0.05, uy));
+        let pyy = Math.max(0, P0.y - uy * 0.56);
+        let ppx = P0.x - ux * 0.56;
+        let ppz = P0.z - uz * 0.56;
+        if (ragE > 2.6) { // levantarse suave
+          const u = Math.min(1, (ragE - 2.6) / 0.6);
+          const k = 1 - u * u * (3 - 2 * u);
+          rx *= k; rz *= k; pyy *= k;
+          ppx = ppx + (PLAYER.root.position.x - ppx) * (1 - k);
+          ppz = ppz + (PLAYER.root.position.z - ppz) * (1 - k);
+          if (u >= 1) RAGD.on = false;
+        }
+        PLAYER.root.rotation.x = rx;
+        PLAYER.root.rotation.z = rz;
+        PLAYER.root.position.x = ppx;
+        PLAYER.root.position.z = ppz;
+        PLAYER.root.position.y = pyy;
+      } else {
+        PLAYER.root.rotation.x = 0;
+        PLAYER.root.rotation.z = 0;
+        PLAYER.root.position.y = JUMP.y;
+      }
       // emote: gesto + globito sobre la cabeza
       const eT = t - EMOTE.start;
       if (eT >= 0 && eT < 2.4) {
@@ -2144,8 +2294,102 @@ function boot(): void {
     engine.runRenderLoop(() => scene.render());
     window.addEventListener('resize', () => engine.resize());
 
-    // ─── ENTRADA OBLIGATORIA: pintá tu cabeza en la BOLA 3D + nombre ────
     const $id = (s: string): HTMLElement => document.getElementById(s) as HTMLElement;
+
+    // ─── MENÚ DE INICIO: cinemática de fondo + ajustes + reloj ──────────
+    let CINE = true;
+    const cam0 = scene.activeCamera as ArcRotateCamera;
+    const SHOTS = [
+      { tx: 0, ty: 2, tz: 12, a: -1.25, b: 1.12, r: 26 },        // patio
+      { tx: 0, ty: 7, tz: 52, a: -Math.PI / 2, b: 1.18, r: 46 }, // estadio
+      { tx: 44, ty: 1.5, tz: -5, a: 2.4, b: 1.0, r: 22 },        // cancha
+      { tx: 20.5, ty: 3, tz: 32, a: -1.7, b: 1.05, r: 15 },      // copas
+      { tx: -31.7, ty: 2.5, tz: -4.3, a: -2.1, b: 1.15, r: 12 }, // muñeco
+      { tx: 0, ty: 3, tz: -17.5, a: 1.35, b: 1.28, r: 16 },      // portal
+    ];
+    let shotI = 0;
+    let shotT = performance.now();
+    const applyShot = (s: typeof SHOTS[0]): void => {
+      cam0.target.set(s.tx, s.ty, s.tz);
+      cam0.alpha = s.a;
+      cam0.beta = s.b;
+      cam0.radius = s.r;
+    };
+    applyShot(SHOTS[0]);
+    scene.onBeforeRenderObservable.add(() => {
+      if (!CINE) return;
+      cam0.alpha += 0.00005 * scene.getEngine().getDeltaTime(); // paneo lento
+      if (performance.now() - shotT > 7000) {
+        shotI = (shotI + 1) % SHOTS.length;
+        shotT = performance.now();
+        applyShot(SHOTS[shotI]);
+      }
+    });
+    // ajustes: resolución
+    document.querySelectorAll('#resopt b').forEach((el) => {
+      el.addEventListener('click', () => {
+        document.querySelectorAll('#resopt b').forEach((x) => x.classList.remove('on'));
+        el.classList.add('on');
+        const r = parseFloat((el as HTMLElement).dataset.r as string);
+        const eff = r >= 1.5 ? Math.min(window.devicePixelRatio || 1, 1.75) : r;
+        engine.setHardwareScalingLevel(1 / eff);
+      });
+    });
+    // ajustes: gráficos Cine·PBR (tonemapping ACES + bloom + FXAA + viñeta)
+    let pipeline: DefaultRenderingPipeline | null = null;
+    document.querySelectorAll('#gfxopt b').forEach((el) => {
+      el.addEventListener('click', () => {
+        document.querySelectorAll('#gfxopt b').forEach((x) => x.classList.remove('on'));
+        el.classList.add('on');
+        const g = (el as HTMLElement).dataset.g as string;
+        if (g === '1') {
+          if (!pipeline) {
+            pipeline = new DefaultRenderingPipeline('cine', true, scene, [cam0]);
+            pipeline.fxaaEnabled = true;
+            pipeline.bloomEnabled = true;
+            pipeline.bloomThreshold = 0.72;
+            pipeline.bloomWeight = 0.22;
+            pipeline.imageProcessing.toneMappingEnabled = true;
+            pipeline.imageProcessing.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
+            pipeline.imageProcessing.contrast = 1.18;
+            pipeline.imageProcessing.exposure = 1.12;
+            pipeline.imageProcessing.vignetteEnabled = true;
+            pipeline.imageProcessing.vignetteWeight = 1.4;
+          }
+        } else if (pipeline) {
+          pipeline.dispose();
+          pipeline = null;
+        }
+      });
+    });
+    // reloj real: hora local del dispositivo YA, y la API por IP la refina
+    const mclock = $id('mclock');
+    const nightMode = (): void => {
+      if (!LIGHTS) return;
+      const NSKY = '#1b2238';
+      scene.clearColor = Color4.FromHexString(`${NSKY}ff`);
+      scene.fogColor = Color3.FromHexString(NSKY);
+      LIGHTS.hemi.intensity = 0.4;
+      LIGHTS.sun.intensity = 0.22;
+      LIGHTS.sun.diffuse = new Color3(0.7, 0.78, 1.0);
+    };
+    const showHour = (hh: number, mm: number, lugar: string): void => {
+      mclock.textContent = '🕒 ' + String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + (lugar ? ' · ' + lugar : '');
+      if (hh >= 19 || hh < 7) nightMode();
+    };
+    const dl = new Date();
+    showHour(dl.getHours(), dl.getMinutes(), '');
+    fetch('https://ipapi.co/json/')
+      .then((r) => r.json())
+      .then((d: { city?: string; timezone?: string }) => {
+        if (!d.timezone) return;
+        const parts = new Intl.DateTimeFormat('es-AR', { timeZone: d.timezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+        const [hh, mm] = parts.split(':').map((n) => parseInt(n, 10));
+        showHour(hh, mm, d.city ?? '');
+      })
+      .catch(() => { /* sin red: queda la hora local */ });
+
+    // ─── ENTRADA OBLIGATORIA: pintá tu cabeza en la BOLA 3D + nombre ────
     const iname = $id('iname') as HTMLInputElement;
     const ienter = $id('ienter') as HTMLButtonElement;
     // capas de pintura: trazos (transparente) + color base → compuesto
@@ -2350,6 +2594,13 @@ function boot(): void {
     } catch { /* sin storage, no pasa nada */ }
     validate();
 
+    $id('mplay').addEventListener('click', () => {
+      CINE = false;
+      $id('menu').style.display = 'none';
+      $id('intro').style.display = 'flex';
+      engine2.resize();
+    });
+
     const enterGame = (): void => {
       if (PLAYER) return;
       const nombre = iname.value.trim().slice(0, 14) || 'WACHO';
@@ -2449,8 +2700,7 @@ function boot(): void {
     jb.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const ragE2 = performance.now() / 1000 - RAG.start;
-      if (!JUMP.active && SIT.target === 0 && !(ragE2 >= 0 && ragE2 < 3)) {
+      if (!JUMP.active && SIT.target === 0 && !RAGD.on) {
         JUMP.active = true;
         JUMP.vy = 5.4;
       }
@@ -2459,10 +2709,8 @@ function boot(): void {
     rb.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const now = performance.now() / 1000;
-      if (now - RAG.start > 3.2 && SIT.target === 0) {
-        RAG.start = now;
-        SIT.target = 0;
+      if (!RAGD.on && SIT.target === 0 && PLAYER) {
+        ragStart(PLAYER.vx, PLAYER.vz);
       }
     });
 
