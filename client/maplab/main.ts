@@ -2089,9 +2089,9 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   oakMat.diffuseTexture = oakTex; // recorte nítido, sin halos ni problemas de orden
   oakMat.backFaceCulling = false;
   oakMat.specularColor = new Color3(0, 0, 0);
-  for (let i = 0; i < 16; i++) {
+  for (let i = 0; i < 38; i++) { // parque bien arbolado
     const a = rand() * Math.PI * 2;
-    const r = PROM_OUTER + 6 + rand() * 22;
+    const r = PROM_OUTER + 5 + rand() * 27;
     const tx = Math.cos(a) * r;
     const tz = Math.sin(a) * r;
     if (Math.abs(tx) < 3.5 && tz < -PROM_INNER) continue; // no tapar el sendero sur
@@ -2424,7 +2424,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         if (nearPortal) {
           PHINT.style.display = 'block';
           PHINT.textContent = nearPortal.url
-            ? '⚽ ' + nearPortal.label + ' — tocá la puerta para jugar'
+            ? '⚽ ' + nearPortal.label + (((window as unknown as Record<string, unknown>).__doorTxt as string) || ' — tocá la puerta para jugar')
             : '🚧 ' + nearPortal.label;
         } else {
           PHINT.style.display = 'none';
@@ -2459,6 +2459,82 @@ function boot(): void {
     window.addEventListener('resize', () => engine.resize());
 
     const $id = (s: string): HTMLElement => document.getElementById(s) as HTMLElement;
+
+    // ─── idiomas (ES / EN / PT) ─────────────────────────────────────────
+    const I18N: Record<string, Record<string, string>> = {
+      es: {
+        play: 'JUGAR', lang: 'Idioma', res: 'Resolución', low: 'Baja', med: 'Media', high: 'Alta',
+        gfx: 'Gráficos', classic: 'Clásico', paint: '🎨 pintá tu propia cara',
+        isub: 'pintá tu cabeza en la bola 3D<br/>(girala con el 🔄) y poné tu nombre',
+        isubName: 'poné tu nombre y entrá<br/>(la cara la podés pintar desde el menú)',
+        name: 'tu nombre…', enter: 'ENTRAR AL PATIO',
+        hintCam: 'arrastrá para girar · pellizcá para zoom',
+        hintJoy: 'joystick para caminar (al límite corrés) · arrastrá para girar',
+        door: ' — tocá la puerta para jugar',
+        dino: '¡Eaa, bienvenido al patio! 🦖⚽<br/>¿Querés jugar <b>minijuegos</b>? Metete al <b>ESTADIO</b> — está lleno de puertas-portal con juegos. <span style="opacity:0.55">(tocá para cerrar)</span>',
+        remove: '✕ sacar', close: 'cerrar',
+      },
+      en: {
+        play: 'PLAY', lang: 'Language', res: 'Resolution', low: 'Low', med: 'Medium', high: 'High',
+        gfx: 'Graphics', classic: 'Classic', paint: '🎨 paint your own face',
+        isub: 'paint your head on the 3D ball<br/>(spin it with 🔄) and type your name',
+        isubName: 'type your name and jump in<br/>(you can paint your face from the menu)',
+        name: 'your name…', enter: 'ENTER THE PLAZA',
+        hintCam: 'drag to look around · pinch to zoom',
+        hintJoy: 'joystick to walk (push to the edge to run) · drag to look',
+        door: ' — tap the door to play',
+        dino: 'Heyo, welcome to the plaza! 🦖⚽<br/>Want to play <b>minigames</b>? Head into the <b>STADIUM</b> — it is packed with game portals. <span style="opacity:0.55">(tap to close)</span>',
+        remove: '✕ remove', close: 'close',
+      },
+      pt: {
+        play: 'JOGAR', lang: 'Idioma', res: 'Resolução', low: 'Baixa', med: 'Média', high: 'Alta',
+        gfx: 'Gráficos', classic: 'Clássico', paint: '🎨 pinte seu próprio rosto',
+        isub: 'pinte sua cabeça na bola 3D<br/>(gire com o 🔄) e digite seu nome',
+        isubName: 'digite seu nome e entre<br/>(você pode pintar o rosto no menu)',
+        name: 'seu nome…', enter: 'ENTRAR NO PÁTIO',
+        hintCam: 'arraste para girar · belisque para zoom',
+        hintJoy: 'joystick para andar (no limite você corre) · arraste para girar',
+        door: ' — toque na porta para jogar',
+        dino: 'Eaí, bem-vindo ao pátio! 🦖⚽<br/>Quer jogar <b>minigames</b>? Entre no <b>ESTÁDIO</b> — está cheio de portais com jogos. <span style="opacity:0.55">(toque para fechar)</span>',
+        remove: '✕ tirar', close: 'fechar',
+      },
+    };
+    let LANG = 'es';
+    try { LANG = localStorage.getItem('maplab_lang') || 'es'; } catch { /* sin storage */ }
+    const T = (k: string): string => (I18N[LANG] && I18N[LANG][k]) || I18N.es[k] || k;
+    const applyLang = (): void => {
+      $id('mplay').textContent = T('play');
+      $id('llang').textContent = T('lang');
+      $id('lres').textContent = T('res');
+      $id('lgfx').textContent = T('gfx');
+      $id('paintbtn').textContent = T('paint');
+      const resBs = document.querySelectorAll('#resopt b');
+      resBs[0].textContent = T('low');
+      resBs[1].textContent = T('med');
+      resBs[2].textContent = T('high');
+      (document.querySelectorAll('#gfxopt b')[0] as HTMLElement).textContent = T('classic');
+      $id('iname').setAttribute('placeholder', T('name'));
+      $id('ienter').textContent = T('enter');
+      $id('dinobub').innerHTML = T('dino');
+      const hint0 = document.getElementById('hint');
+      if (hint0 && !PLAYER) hint0.textContent = T('hintCam');
+    };
+    document.querySelectorAll('#langopt b').forEach((el) => {
+      el.addEventListener('click', () => {
+        document.querySelectorAll('#langopt b').forEach((x) => x.classList.remove('on'));
+        el.classList.add('on');
+        LANG = (el as HTMLElement).dataset.l as string;
+        try { localStorage.setItem('maplab_lang', LANG); } catch { /* ídem */ }
+        applyLang();
+      });
+    });
+    document.querySelectorAll('#langopt b').forEach((el) => {
+      if ((el as HTMLElement).dataset.l === LANG) {
+        document.querySelectorAll('#langopt b').forEach((x) => x.classList.remove('on'));
+        el.classList.add('on');
+      }
+    });
+    applyLang();
 
     // ─── MENÚ DE INICIO: cinemática de fondo + ajustes + reloj ──────────
     let CINE = true;
@@ -2808,16 +2884,36 @@ function boot(): void {
         }
       } catch { /* sin soporte */ }
     };
-    $id('mplay').addEventListener('click', () => {
+    // cara DEFAULT si nunca pintaste (dos ojos + sonrisa al frente)
+    const defaultFace = (): void => {
+      if (drew > 0) return;
+      sctx.fillStyle = '#2b1c12';
+      sctx.beginPath(); sctx.arc(512 - 64, 188, 17, 0, 7); sctx.fill();
+      sctx.beginPath(); sctx.arc(512 + 64, 188, 17, 0, 7); sctx.fill();
+      sctx.strokeStyle = '#2b1c12';
+      sctx.lineWidth = 13;
+      sctx.lineCap = 'round';
+      sctx.beginPath(); sctx.arc(512, 252, 58, Math.PI * 0.15, Math.PI * 0.85); sctx.stroke();
+      drew = 1;
+      validate();
+      compose();
+    };
+    const openIntro = (paintMode: boolean): void => {
       CINE = false;
       goLandscape();
       $id('menu').style.display = 'none';
       $id('intro').style.display = 'flex';
+      $id('ileft').style.display = paintMode ? 'flex' : 'none';
+      ($id('ibox').querySelector('.isub') as HTMLElement).innerHTML = paintMode ? T('isub') : T('isubName');
+      if (!paintMode) defaultFace(); // pintar es OPCIONAL: JUGAR usa la default/guardada
       dino.style.display = 'flex'; // el dino te tira la data del estadio
       engine2.resize();
       setTimeout(() => engine2.resize(), 600); // tras el giro a landscape
       setTimeout(() => engine.resize(), 600);
-    });
+      applyLang();
+    };
+    $id('mplay').addEventListener('click', () => openIntro(false));
+    $id('paintrow').addEventListener('click', () => openIntro(true));
 
     const enterGame = (): void => {
       if (PLAYER) return;
@@ -2859,9 +2955,10 @@ function boot(): void {
       cam.beta = 1.22;
       cam.radius = 9;
       cam.lowerRadiusLimit = 4;
+      (window as unknown as Record<string, unknown>).__doorTxt = T('door');
       const hint = document.getElementById('hint');
       if (hint) {
-        hint.textContent = 'joystick para caminar · arrastrá para girar';
+        hint.textContent = T('hintJoy');
         hint.style.opacity = '1';
         setTimeout(() => { hint.style.opacity = '0'; }, 7000);
       }
@@ -2996,19 +3093,19 @@ function boot(): void {
       } else if (shop.id === 'shoes') {
         shopPanel.appendChild(swatchRow(PALETA.concat(['#3dbf5a']), (c) => { OUTFIT_ST.zapas = c; repaintOutfit(); }));
       } else if (shop.id === 'hats') {
-        shopPanel.appendChild(itemRow(['✕ sacar', '🧢 gorra', '🎩 galera', '🤕 vincha', '👒 piluso', '👑 corona', '🥶 beanie'], (i) => equipHat(scene, i)));
+        shopPanel.appendChild(itemRow([T('remove'), '🧢 gorra', '🎩 galera', '🤕 vincha', '👒 piluso', '👑 corona', '🥶 beanie'], (i) => equipHat(scene, i)));
       } else if (shop.id === 'glasses') {
-        shopPanel.appendChild(itemRow(['✕ sacar', '🕶 redondos', '😎 grandes', '🥽 deportivos', '🤓 cuadrados'], (i) => {
+        shopPanel.appendChild(itemRow([T('remove'), '🕶 redondos', '😎 grandes', '🥽 deportivos', '🤓 cuadrados'], (i) => {
           OUTFIT_ST.glasses = i;
           saveOutfit();
           paintPlayerFace();
         }));
       } else if (shop.id === 'scarves') {
-        shopPanel.appendChild(itemRow(['✕ sacar', '🧣 roja', '🧣 amarilla', '🧣 rosa', '🧣 violeta', '🧣 celeste', '🧣 naranja'], (i) => equipScarf(scene, i)));
+        shopPanel.appendChild(itemRow([T('remove'), '🧣 roja', '🧣 amarilla', '🧣 rosa', '🧣 violeta', '🧣 celeste', '🧣 naranja'], (i) => equipScarf(scene, i)));
       }
       const cls = document.createElement('div');
       cls.className = 'shopitem shopclose';
-      cls.textContent = 'cerrar';
+      cls.textContent = T('close');
       cls.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
