@@ -991,11 +991,11 @@ function buildCartel(scene: Scene, url: string, w: number, h: number,
   }
 }
 
-// Tablón de fixtures (el fixture board del original, pintado a mano).
-function buildFixtureBoard(scene: Scene, x: number, z: number, yaw: number,
-  woodDarkMat: StandardMaterial): void {
-  const tex = new DynamicTexture('fixture-tex', { width: 512, height: 320 }, scene, true);
-  const c = tex.getContext() as unknown as CanvasRenderingContext2D;
+// Tablón de fixtures EN VIVO (misma fuente que el original: openfootball)
+let FIXTURE_TEX: DynamicTexture | null = null;
+function paintFixtureBoard(rows: string[]): void {
+  if (!FIXTURE_TEX) return;
+  const c = FIXTURE_TEX.getContext() as unknown as CanvasRenderingContext2D;
   c.fillStyle = '#10204a';
   c.fillRect(0, 0, 512, 320);
   c.strokeStyle = '#e8c84a';
@@ -1003,13 +1003,18 @@ function buildFixtureBoard(scene: Scene, x: number, z: number, yaw: number,
   c.strokeRect(4, 4, 504, 312);
   c.fillStyle = '#e8c84a';
   c.textAlign = 'center';
-  c.font = 'bold 40px ui-monospace, monospace';
-  c.fillText('★ FIXTURE · COPA ★', 256, 48);
-  c.font = 'bold 28px ui-monospace, monospace';
+  c.font = 'bold 38px Inter, system-ui, sans-serif';
+  c.fillText('★ WORLD CUP 2026 ★', 256, 48);
+  c.font = 'bold 27px Inter, system-ui, sans-serif';
   c.fillStyle = '#f3ecd9';
-  const rows = ['ARG 2-1 BRA', 'GER 0-0 FRA', 'URU 3-2 MEX', 'ITA 1-1 ESP', 'CRO 2-0 ???'];
-  for (let i = 0; i < rows.length; i++) c.fillText(rows[i], 256, 100 + i * 44);
-  tex.update();
+  for (let i = 0; i < Math.min(5, rows.length); i++) c.fillText(rows[i], 256, 100 + i * 44, 480);
+  FIXTURE_TEX.update();
+}
+function buildFixtureBoard(scene: Scene, x: number, z: number, yaw: number,
+  woodDarkMat: StandardMaterial): void {
+  const tex = new DynamicTexture('fixture-tex', { width: 512, height: 320 }, scene, true);
+  FIXTURE_TEX = tex;
+  paintFixtureBoard(['cargando…']);
   const root = new TransformNode('fixture-board', scene);
   root.position.set(x, 0, z);
   root.rotation.y = yaw;
@@ -1218,28 +1223,28 @@ function applyGesture(J: Joints, type: number, e: number, t: number): void {
   switch (type) {
     case 0: J.shAbdR += 2.1 * env; J.elbowR += (0.5 + 0.5 * o) * env; break;                              // 😀 saludo
     case 1: J.spineFwd += Math.abs(Math.sin(t * 8)) * 0.3 * env; J.headNod -= 0.25 * env; J.jaw += 0.06 * env; break; // 😂 carcajada
-    case 2: J.shFwdL += 1.25 * env; J.shFwdR += 1.25 * env; J.elbowL += 1.6 * env; J.elbowR += 1.6 * env; J.headTilt += 0.18 * env; break; // 😍 manos al corazón
-    case 3: J.shFwdL += 0.9 * env; J.shFwdR += 0.9 * env; J.elbowL += 1.35 * env; J.elbowR += 1.35 * env; J.headTilt -= 0.15 * env; J.spineFwd -= 0.08 * env; break; // 😎 canchero
-    case 4: J.shFwdR += 1.3 * env; J.elbowR += 1.9 * env; J.headTilt += 0.2 * env; J.headTurn += Math.sin(t * 1.5) * 0.3 * env; break; // 🤔 pensando
-    case 5: J.shFwdL += 1.35 * env; J.shFwdR += 1.35 * env; J.elbowL += 1.85 * env; J.elbowR += 1.85 * env; J.headNod += 0.35 * env; J.spineFwd += 0.2 * env; break; // 😭 llanto
+    case 2: J.shFwdL -= 1.25 * env; J.shFwdR -= 1.25 * env; J.elbowL += 1.6 * env; J.elbowR += 1.6 * env; J.headTilt += 0.18 * env; break; // 😍 manos al corazón
+    case 3: J.shFwdL -= 0.9 * env; J.shFwdR -= 0.9 * env; J.elbowL += 1.35 * env; J.elbowR += 1.35 * env; J.headTilt -= 0.15 * env; J.spineFwd -= 0.08 * env; break; // 😎 canchero
+    case 4: J.shFwdR -= 1.3 * env; J.elbowR += 1.9 * env; J.headTilt += 0.2 * env; J.headTurn += Math.sin(t * 1.5) * 0.3 * env; break; // 🤔 pensando
+    case 5: J.shFwdL -= 1.35 * env; J.shFwdR -= 1.35 * env; J.elbowL += 1.85 * env; J.elbowR += 1.85 * env; J.headNod += 0.35 * env; J.spineFwd += 0.2 * env; break; // 😭 llanto
     case 6: J.elbowL += 0.5 * env; J.elbowR += 0.5 * env; J.twist += Math.sin(t * 16) * 0.18 * env; J.headNod += 0.15 * env; break; // 😡 furia temblando
     case 7: J.pelvisY += Math.abs(Math.sin(e * 9)) * 0.14 * env; J.shAbdL += 2.2 * env; J.shAbdR += 2.2 * env; break; // 🥳 salto festejo
-    case 8: J.shFwdR += 1.25 * env; J.elbowR += 0.25 * env; break;                                          // 👍 pulgar
-    case 9: J.shFwdR += 1.1 * env; J.elbowR += 0.3 * env; J.headTurn += Math.sin(t * 7) * 0.3 * env; break; // 👎 no no
-    case 10: J.shFwdL += 1.1 * env; J.shFwdR += 1.1 * env; J.elbowL += (0.9 + 0.35 * Math.sin(t * 14)) * env; J.elbowR += (0.9 - 0.35 * Math.sin(t * 14)) * env; break; // 👏 aplauso
+    case 8: J.shFwdR -= 1.25 * env; J.elbowR += 0.25 * env; break;                                          // 👍 pulgar
+    case 9: J.shFwdR -= 1.1 * env; J.elbowR += 0.3 * env; J.headTurn += Math.sin(t * 7) * 0.3 * env; break; // 👎 no no
+    case 10: J.shFwdL -= 1.1 * env; J.shFwdR -= 1.1 * env; J.elbowL += (0.9 + 0.35 * Math.sin(t * 14)) * env; J.elbowR += (0.9 - 0.35 * Math.sin(t * 14)) * env; break; // 👏 aplauso
     case 11: J.shAbdL += (2.2 + 0.25 * Math.sin(t * 9)) * env; J.shAbdR += (2.2 - 0.25 * Math.sin(t * 9)) * env; J.pelvisY += Math.abs(Math.sin(t * 4.5)) * 0.04 * env; break; // 🙌 olé olé
     case 12: J.shAbdR += 1.25 * env; J.elbowR += 2.05 * env; J.headTurn -= 0.45 * env; break;               // 💪 músculo
-    case 13: J.shAbdR += 1.4 * env; J.shFwdR += 0.85 * env; J.elbowR += 2.3 * env; J.spineFwd -= 0.05 * env; break; // 🫡 saludo militar
+    case 13: J.shAbdR += 1.4 * env; J.shFwdR -= 0.85 * env; J.elbowR += 2.3 * env; J.spineFwd -= 0.05 * env; break; // 🫡 saludo militar
     case 14: J.shAbdL += 1.6 * env; J.shAbdR += 1.6 * env; J.elbowL += 1.5 * env; J.elbowR += 1.5 * env; J.headNod -= 0.12 * env; break; // ❤️ corazón arriba
     case 15: J.twist += Math.sin(t * 9) * 0.55 * env; J.shAbdL += 1.1 * env; J.shAbdR += 1.1 * env; J.elbowL += 0.9 * env; J.elbowR += 0.9 * env; break; // 🔥 prendido fuego
-    case 16: J.hipFwdR += Math.max(0, Math.sin(e * 5.5)) * 1.25 * env; J.kneeR += Math.max(0, -Math.sin(e * 5.5)) * 0.8 * env; J.shFwdL += 0.7 * env; J.spineFwd += 0.1 * env; break; // ⚽ patada
-    case 17: J.shAbdL += 0.5 * env; J.shAbdR += 0.5 * env; J.shFwdL += 1.55 * env; J.shFwdR += 1.55 * env; J.elbowL += 0.8 * env; J.elbowR += 0.8 * env; J.headNod -= 0.25 * env; break; // 🏆 levantar la copa
+    case 16: J.hipFwdR -= Math.max(0, Math.sin(e * 5.5)) * 1.25 * env; J.kneeR += Math.max(0, -Math.sin(e * 5.5)) * 0.8 * env; J.shFwdL -= 0.7 * env; J.spineFwd += 0.1 * env; break; // ⚽ patada
+    case 17: J.shAbdL += 0.5 * env; J.shAbdR += 0.5 * env; J.shFwdL -= 1.55 * env; J.shFwdR -= 1.55 * env; J.elbowL += 0.8 * env; J.elbowR += 0.8 * env; J.headNod -= 0.25 * env; break; // 🏆 levantar la copa
     case 18: J.shAbdL += (1.8 + 0.5 * Math.sin(t * 8)) * env; J.shAbdR += (1.8 - 0.5 * Math.sin(t * 8)) * env; J.pelvisY += Math.abs(Math.sin(t * 8)) * 0.06 * env; J.twist += Math.sin(t * 4) * 0.2 * env; break; // 🎉 fiesta
     case 19: J.headTilt += 0.5 * env; J.headNod += 0.3 * env; J.spineSide += 0.18 * env; J.spineFwd += 0.12 * env; J.jaw += 0.05 * env; break; // 😴 mimido
-    case 20: J.shAbdL += 1.2 * env; J.shAbdR += 1.2 * env; J.shFwdL += 1.1 * env; J.shFwdR += 1.1 * env; J.elbowL += 2.2 * env; J.elbowR += 2.2 * env; J.headNod -= 0.2 * env; break; // 🤯 manos a la cabeza
-    case 21: J.shFwdL += 1.15 * env; J.shFwdR += 1.15 * env; J.elbowL += 1.7 * env; J.elbowR += 1.7 * env; J.headNod += 0.28 * env; break; // 🙏 plegaria
+    case 20: J.shAbdL += 1.2 * env; J.shAbdR += 1.2 * env; J.shFwdL -= 1.1 * env; J.shFwdR -= 1.1 * env; J.elbowL += 2.2 * env; J.elbowR += 2.2 * env; J.headNod -= 0.2 * env; break; // 🤯 manos a la cabeza
+    case 21: J.shFwdL -= 1.15 * env; J.shFwdR -= 1.15 * env; J.elbowL += 1.7 * env; J.elbowR += 1.7 * env; J.headNod += 0.28 * env; break; // 🙏 plegaria
     case 22: J.swayX += Math.sin(t * 6.5) * 0.09 * env; J.twist += Math.sin(t * 6.5) * 0.4 * env; J.shAbdL += 2.1 * env; J.elbowL += 0.6 * env; J.pelvisY += Math.abs(Math.sin(t * 6.5)) * 0.03 * env; break; // 💃 baile
-    default: J.shFwdR += 1.15 * env; J.elbowR += 0.15 * env; J.spineFwd += 0.16 * env; J.headNod += 0.1 * env; break; // 🤝 trato hecho
+    default: J.shFwdR -= 1.15 * env; J.elbowR += 0.15 * env; J.spineFwd += 0.16 * env; J.headNod += 0.1 * env; break; // 🤝 trato hecho
   }
 }
 
@@ -1515,6 +1520,77 @@ function resetBall(): void {
 // colisiones del mapa (círculos) + luces para día/noche
 const COLLIDERS: Array<{ x: number; z: number; r: number }> = [];
 let LIGHTS: { hemi: HemisphericLight; sun: DirectionalLight } | null = null;
+// cartel del arco de entrada: repintable según idioma
+let ARCH_TEX: DynamicTexture | null = null;
+function paintArch(txt: string): void {
+  if (!ARCH_TEX) return;
+  const ac = ARCH_TEX.getContext() as unknown as CanvasRenderingContext2D;
+  ac.fillStyle = '#28406b';
+  ac.fillRect(0, 0, 1024, 192);
+  ac.strokeStyle = '#e8c84a';
+  ac.lineWidth = 14;
+  ac.strokeRect(7, 7, 1010, 178);
+  ac.fillStyle = '#f3ecd9';
+  ac.textAlign = 'center';
+  ac.textBaseline = 'middle';
+  ac.font = 'bold 88px Inter, system-ui, sans-serif';
+  ac.fillText('★ ' + txt + ' ★', 512, 96, 980);
+  ARCH_TEX.update();
+}
+// CIELO: domo gradiente + sol que se mueve con la hora real + luna/estrellas
+let SKY: { dome: Mesh; domeTex: DynamicTexture; sun: Mesh; moon: Mesh; stars: Mesh } | null = null;
+let GODRAYS_MESH: Mesh | null = null;
+function applySky(h: number): void {
+  if (!SKY || !LIGHTS) return;
+  const day = h >= 6 && h < 18;
+  const a = day ? ((h - 6) / 12) * Math.PI : (((h >= 18 ? h - 18 : h + 6)) / 12) * Math.PI;
+  const R = 230;
+  const px = -Math.cos(a) * R;
+  const py = Math.sin(a) * R * 0.8 + 8;
+  const pz = 70;
+  if (day) {
+    SKY.sun.position.set(px, py, pz);
+    SKY.sun.isVisible = true;
+    SKY.moon.isVisible = false;
+  } else {
+    SKY.moon.position.set(px, py, pz);
+    SKY.moon.isVisible = true;
+    SKY.sun.isVisible = false;
+  }
+  SKY.stars.isVisible = !day;
+  if (GODRAYS_MESH) GODRAYS_MESH.position.set(px, py, pz);
+  // luz direccional DESDE el astro (punto de luz de verdad)
+  const dl = Math.hypot(px, py, pz) || 1;
+  LIGHTS.sun.direction.set(-px / dl, -py / dl, -pz / dl);
+  const elev = Math.max(0, Math.sin(a));
+  const alto = Math.min(1, elev * 2.5); // 0 = horizonte (atardecer), 1 = alto
+  LIGHTS.sun.intensity = day ? 0.35 + 0.6 * elev : 0.18;
+  LIGHTS.sun.diffuse = day
+    ? Color3.Lerp(new Color3(1, 0.6, 0.36), new Color3(1, 0.96, 0.86), alto)
+    : new Color3(0.6, 0.68, 1);
+  LIGHTS.hemi.intensity = day ? 0.5 + 0.3 * elev : 0.32;
+  // domo: gradiente cenit→horizonte (celeste de día, profundo de noche)
+  const top = day
+    ? Color3.Lerp(new Color3(0.2, 0.38, 0.7), new Color3(0.4, 0.66, 0.93), alto)
+    : new Color3(0.04, 0.06, 0.15);
+  const hor = day
+    ? Color3.Lerp(new Color3(0.97, 0.62, 0.4), new Color3(0.74, 0.86, 0.97), alto)
+    : new Color3(0.1, 0.13, 0.25);
+  const c = SKY.domeTex.getContext() as unknown as CanvasRenderingContext2D;
+  const grad = c.createLinearGradient(0, 0, 0, 256);
+  const hx = (cc: Color3): string => '#' + cc.toHexString().slice(1);
+  grad.addColorStop(0, hx(hor));
+  grad.addColorStop(0.45, hx(hor));
+  grad.addColorStop(1, hx(top));
+  c.fillStyle = grad;
+  c.fillRect(0, 0, 16, 256);
+  SKY.domeTex.update(false);
+  if (LIGHTS) {
+    const sc2 = SKY.dome.getScene();
+    sc2.fogColor = hor;
+    sc2.clearColor = Color4.FromColor3(hor, 1);
+  }
+}
 // sombras dinámicas: emisores registrados al construir el mapa
 const SHADOW_CASTERS: Mesh[] = [];
 const TREE_CASTERS: Mesh[] = [];
@@ -1810,11 +1886,57 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
 // ─── Escena completa ────────────────────────────────────────────────────
 function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   const scene = new Scene(engine);
-  const SKY = '#aecbe8';
-  scene.clearColor = Color4.FromHexString(`${SKY}ff`);
+  const SKYCOL = '#aecbe8';
+  scene.clearColor = Color4.FromHexString(`${SKYCOL}ff`);
   scene.fogMode = Scene.FOGMODE_EXP2;
   scene.fogDensity = 0.0048; // el estadio al norte tiene que leerse desde el patio
-  scene.fogColor = Color3.FromHexString(SKY);
+  scene.fogColor = Color3.FromHexString(SKYCOL);
+
+  // ─── CIELO: domo + sol + luna + estrellas (se mueven con la hora) ────
+  const domeTex = new DynamicTexture('sky-tex', { width: 16, height: 256 }, scene, false);
+  const dome = MeshBuilder.CreateSphere('sky-dome', { diameter: 560, segments: 16, sideOrientation: Mesh.BACKSIDE }, scene);
+  const domeMat = new StandardMaterial('sky-mat', scene);
+  domeMat.emissiveTexture = domeTex;
+  domeMat.diffuseColor = Color3.Black();
+  domeMat.specularColor = Color3.Black();
+  domeMat.disableLighting = true;
+  dome.material = domeMat;
+  dome.isPickable = false;
+  dome.applyFog = false;
+  const sunMesh = MeshBuilder.CreateSphere('sky-sun', { diameter: 17, segments: 12 }, scene);
+  sunMesh.material = neonMat(scene, 'sky-sun-mat', '#fff3c0');
+  sunMesh.isPickable = false;
+  sunMesh.applyFog = false;
+  const moonMesh = MeshBuilder.CreateSphere('sky-moon', { diameter: 12, segments: 12 }, scene);
+  moonMesh.material = neonMat(scene, 'sky-moon-mat', '#dfe7f4');
+  moonMesh.isPickable = false;
+  moonMesh.applyFog = false;
+  moonMesh.isVisible = false;
+  // estrellas: thin instances de un puntito sobre el domo
+  const star = MeshBuilder.CreatePlane('sky-stars', { size: 0.9 }, scene);
+  star.material = neonMat(scene, 'sky-star-mat', '#ffffff');
+  star.billboardMode = Mesh.BILLBOARDMODE_ALL;
+  star.isPickable = false;
+  star.applyFog = false;
+  const srand = rng(99);
+  const smats: number[] = [];
+  const sq = Quaternion.Identity();
+  const sm2 = Matrix.Identity();
+  for (let i = 0; i < 240; i++) {
+    const az = srand() * Math.PI * 2;
+    const el2 = 0.15 + srand() * 1.3;
+    const sr = 262;
+    const sx = Math.cos(az) * Math.cos(el2) * sr;
+    const sy = Math.sin(el2) * sr;
+    const sz = Math.sin(az) * Math.cos(el2) * sr;
+    const ss = 0.5 + srand() * 1.1;
+    Matrix.ComposeToRef(new Vector3(ss, ss, ss), sq, new Vector3(sx, sy, sz), sm2);
+    for (let j = 0; j < 16; j++) smats.push(sm2.m[j]);
+  }
+  star.thinInstanceSetBuffer('matrix', new Float32Array(smats), 16, true);
+  star.isVisible = false;
+  SKY = { dome, domeTex, sun: sunMesh, moon: moonMesh, stars: star };
+  applySky(12);
 
   const camera = new ArcRotateCamera('cam', -Math.PI / 2, 1.12, 30, new Vector3(0, 1.4, 0), scene);
   camera.lowerRadiusLimit = 7;
@@ -2043,18 +2165,8 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     }
   }
   const archTex = new DynamicTexture('arch-sign', { width: 1024, height: 192 }, scene, true);
-  const ac = archTex.getContext() as unknown as CanvasRenderingContext2D;
-  ac.fillStyle = '#28406b';
-  ac.fillRect(0, 0, 1024, 192);
-  ac.strokeStyle = '#e8c84a';
-  ac.lineWidth = 14;
-  ac.strokeRect(7, 7, 1010, 178);
-  ac.fillStyle = '#f3ecd9';
-  ac.textAlign = 'center';
-  ac.textBaseline = 'middle';
-  ac.font = 'bold 96px ui-monospace, monospace';
-  ac.fillText('★ PATIO MUNDIAL ★', 512, 96, 980);
-  archTex.update();
+  ARCH_TEX = archTex;
+  paintArch('PATIO MUNDIAL'); // applyLang lo repinta según idioma
   const archMat = new StandardMaterial('arch-mat', scene);
   archMat.diffuseTexture = archTex;
   archMat.emissiveTexture = archTex;
@@ -2590,8 +2702,8 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         const air = Math.min(1, JUMP.y / 0.5);
         J.kneeL += 1.1 * air;
         J.kneeR += 1.1 * air;
-        J.hipFwdL += 0.5 * air;
-        J.hipFwdR += 0.5 * air;
+        J.hipFwdL -= 0.5 * air;
+        J.hipFwdR -= 0.5 * air;
         J.shAbdL += 0.9 * air;
         J.shAbdR += 0.9 * air;
       }
@@ -2822,6 +2934,8 @@ function boot(): void {
         hintCam: 'arrastrá para girar · pellizcá para zoom',
         hintJoy: 'joystick para caminar (al límite corrés) · arrastrá para girar',
         door: ' — tocá la puerta para jugar',
+        arch: 'PATIO MUNDIAL',
+        fixprev: 'PRÓXIMOS PARTIDOS · MUNDIAL',
         dino: '¡Eaa, bienvenido al patio! 🦖⚽<br/>¿Querés jugar <b>minijuegos</b>? Metete al <b>ESTADIO</b> — está lleno de puertas-portal con juegos. <span style="opacity:0.55">(tocá para cerrar)</span>',
         remove: '✕ sacar', close: 'cerrar',
       },
@@ -2834,6 +2948,8 @@ function boot(): void {
         hintCam: 'drag to look around · pinch to zoom',
         hintJoy: 'joystick to walk (push to the edge to run) · drag to look',
         door: ' — tap the door to play',
+        arch: 'WORLD CUP PLAZA',
+        fixprev: 'UPCOMING WORLD CUP MATCHES',
         dino: 'Heyo, welcome to the plaza! 🦖⚽<br/>Want to play <b>minigames</b>? Head into the <b>STADIUM</b> — it is packed with game portals. <span style="opacity:0.55">(tap to close)</span>',
         remove: '✕ remove', close: 'close',
       },
@@ -2846,6 +2962,8 @@ function boot(): void {
         hintCam: 'arraste para girar · belisque para zoom',
         hintJoy: 'joystick para andar (no limite você corre) · arraste para girar',
         door: ' — toque na porta para jogar',
+        arch: 'PÁTIO MUNDIAL',
+        fixprev: 'PRÓXIMOS JOGOS · COPA',
         dino: 'Eaí, bem-vindo ao pátio! 🦖⚽<br/>Quer jogar <b>minigames</b>? Entre no <b>ESTÁDIO</b> — está cheio de portais com jogos. <span style="opacity:0.55">(toque para fechar)</span>',
         remove: '✕ tirar', close: 'fechar',
       },
@@ -2867,6 +2985,7 @@ function boot(): void {
       $id('iname').setAttribute('placeholder', T('name'));
       $id('ienter').textContent = T('enter');
       $id('dinobub').innerHTML = T('dino');
+      paintArch(T('arch')); // el cartel del arco cambia con el idioma
       const hint0 = document.getElementById('hint');
       if (hint0 && !PLAYER) hint0.textContent = T('hintCam');
     };
@@ -2944,7 +3063,7 @@ function boot(): void {
       if (pipeline) { pipeline.dispose(); pipeline = null; }
       if (shadowGen) { shadowGen.dispose(); shadowGen = null; }
       if (ssao) { ssao.dispose(); ssao = null; }
-      if (godrays) { godrays.dispose(cam0); godrays = null; }
+      if (godrays) { godrays.dispose(cam0); godrays = null; GODRAYS_MESH = null; }
       for (const l of lampLights) l.dispose();
       lampLights = [];
     };
@@ -3003,7 +3122,8 @@ function boot(): void {
         }
         // rayos del sol: disco brillante + scattering volumétrico
         godrays = new VolumetricLightScatteringPostProcess('rayos', 1.0, cam0, undefined as never, 60, Texture.BILINEAR_SAMPLINGMODE, engine, false);
-        godrays.mesh.position.set(55, 110, 48); // opuesto a la dirección del sol
+        GODRAYS_MESH = godrays.mesh;
+        if (SKY) godrays.mesh.position.copyFrom(SKY.sun.isVisible ? SKY.sun.position : SKY.moon.position);
         godrays.mesh.scaling.setAll(28);
         godrays.exposure = 0.18;
         godrays.decay = 0.967;
@@ -3027,19 +3147,14 @@ function boot(): void {
     });
     // reloj real: hora local del dispositivo YA, y la API por IP la refina
     const mclock = $id('mclock');
-    const nightMode = (): void => {
-      if (!LIGHTS) return;
-      const NSKY = '#1b2238';
-      scene.clearColor = Color4.FromHexString(`${NSKY}ff`);
-      scene.fogColor = Color3.FromHexString(NSKY);
-      LIGHTS.hemi.intensity = 0.4;
-      LIGHTS.sun.intensity = 0.22;
-      LIGHTS.sun.diffuse = new Color3(0.7, 0.78, 1.0);
-    };
     const showHour = (hh: number, mm: number, lugar: string): void => {
       mclock.textContent = '🕒 ' + String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + (lugar ? ' · ' + lugar : '');
-      if (hh >= 19 || hh < 7) nightMode();
+      applySky(hh + mm / 60); // el sol/la luna a su posición horaria
     };
+    setInterval(() => { // el cielo sigue al reloj mientras jugás
+      const d2 = new Date();
+      applySky(d2.getHours() + d2.getMinutes() / 60);
+    }, 60000);
     const dl = new Date();
     showHour(dl.getHours(), dl.getMinutes(), '');
     fetch('https://ipapi.co/json/')
@@ -3376,6 +3491,7 @@ function boot(): void {
       $id('chatbtn').style.display = 'flex';
       $id('coins').style.display = 'block';
       $id('pausebtn').style.display = 'flex';
+      $id('dicebtn').style.display = 'flex';
       updCoins();
       const cam = scene.activeCamera as ArcRotateCamera;
       cam.alpha = -Math.PI / 2;
@@ -3644,6 +3760,95 @@ function boot(): void {
         el.classList.add('on');
         setGraphics((el as HTMLElement).dataset.g as string);
       });
+    });
+
+    // ─── DADO: previa de los partidos del mundial que se vienen ─────────
+    // EN TIEMPO REAL desde openfootball (la misma fuente del original);
+    // si no hay red queda la grilla local.
+    let PARTIDOS: Array<[string, string, string]> = [
+      ['VIE 12', 'MEX', 'RSA'],
+      ['VIE 12', 'CAN', 'ITA'],
+      ['SÁB 13', 'USA', 'PAR'],
+      ['SÁB 13', 'ARG', 'AUS'],
+      ['DOM 14', 'BRA', 'MAR'],
+      ['DOM 14', 'FRA', 'SEN'],
+    ];
+    const cod = (n: string): string => {
+      const m: Record<string, string> = {
+        'Mexico': 'MEX', 'South Africa': 'RSA', 'South Korea': 'KOR', 'Czech Republic': 'CZE',
+        'United States': 'USA', 'Canada': 'CAN', 'Argentina': 'ARG', 'Brazil': 'BRA',
+        'Germany': 'GER', 'France': 'FRA', 'England': 'ENG', 'Spain': 'ESP', 'Portugal': 'POR',
+        'Netherlands': 'NED', 'Uruguay': 'URU', 'Croatia': 'CRO', 'Japan': 'JPN', 'Morocco': 'MAR',
+        'Australia': 'AUS', 'Switzerland': 'SUI', 'Belgium': 'BEL', 'Italy': 'ITA', 'Colombia': 'COL',
+        'Ecuador': 'ECU', 'Senegal': 'SEN', 'Ghana': 'GHA', 'New Zealand': 'NZL', 'Norway': 'NOR',
+      };
+      return m[n] || n.slice(0, 3).toUpperCase();
+    };
+    fetch('https://raw.githubusercontent.com/openfootball/world-cup.json/master/2026/worldcup.json')
+      .then((r) => r.json())
+      .then((d: { matches?: Array<{ date: string; team1: string; team2: string; score?: { ft?: number[] } }> }) => {
+        if (!d.matches) return;
+        // tablón: últimos resultados REALES
+        const jugados = d.matches.filter((m) => m.score && m.score.ft);
+        const filas = jugados.slice(-5).map((m) =>
+          `${cod(m.team1)} ${(m.score as { ft: number[] }).ft[0]}-${(m.score as { ft: number[] }).ft[1]} ${cod(m.team2)}`);
+        if (filas.length) paintFixtureBoard(filas);
+        // dado: próximos partidos reales
+        const DIAS = ['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'];
+        const proximos = d.matches.filter((m) => !m.score || !m.score.ft).slice(0, 6);
+        if (proximos.length) {
+          PARTIDOS = proximos.map((m) => {
+            const f = new Date(m.date + 'T12:00:00');
+            return [`${DIAS[f.getDay()]} ${f.getDate()}`, cod(m.team1), cod(m.team2)] as [string, string, string];
+          });
+        }
+      })
+      .catch(() => { /* sin red: grilla local */ });
+    $id('dicebtn').addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      shopPanel.innerHTML = '';
+      const title = document.createElement('div');
+      title.className = 'shoptitle';
+      title.textContent = '🎲 ' + T('fixprev');
+      shopPanel.appendChild(title);
+      for (const [dia, t1, t2] of PARTIDOS) {
+        const row = document.createElement('div');
+        row.className = 'fixrow';
+        const lbl = document.createElement('span');
+        lbl.textContent = '📅 ' + dia;
+        row.appendChild(lbl);
+        for (const eq of [t1, t2]) {
+          const b = document.createElement('div');
+          b.className = 'fixbet';
+          b.textContent = '⚽ ' + eq + ' · 25🪙';
+          b.addEventListener('pointerdown', (e2) => {
+            e2.preventDefault();
+            e2.stopPropagation();
+            if (BET.active) return;
+            tryBuy(25, () => {
+              BET.active = true;
+              BET.team = eq;
+              BET.amount = 25;
+              BET.resolveAt = performance.now() / 1000 + 45;
+              showChat(scene, '🎲 25 🪙 a ' + eq + ' — en 45s sale');
+              closeShop();
+            });
+          });
+          row.appendChild(b);
+        }
+        shopPanel.appendChild(row);
+      }
+      const cls = document.createElement('div');
+      cls.className = 'shopitem shopclose';
+      cls.textContent = T('close');
+      cls.addEventListener('pointerdown', (e3) => {
+        e3.preventDefault();
+        e3.stopPropagation();
+        closeShop();
+      });
+      shopPanel.appendChild(cls);
+      shopPanel.style.display = 'block';
     });
 
     // ─── teclado (desktop) ──────────────────────────────────────────────

@@ -556,8 +556,8 @@ export function poseSit(t: number): Joints {
   J.pelvisY = -0.04;
   J.spineFwd = -0.05;
   J.spineSide = Math.sin(t * 0.45) * 0.03;
-  J.shFwdL = 0.32;
-  J.shFwdR = 0.32;
+  J.shFwdL = -0.32; // manos al regazo (adelante)
+  J.shFwdR = -0.32;
   J.elbowL = 0.6;
   J.elbowR = 0.6;
   J.headTurn = Math.sin(t * 0.3) * 0.3 + Math.sin(t * 0.7) * 0.08;

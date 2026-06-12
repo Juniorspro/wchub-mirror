@@ -182,7 +182,7 @@
       color: #14171f; font: 800 13px var(--font); padding: 9px 16px; cursor: pointer;
     }
     /* ── pausa + ajustes ── */
-    #pausebtn {
+    #pausebtn, #dicebtn {
       position: fixed; top: calc(env(safe-area-inset-top, 0px) + 10px);
       left: 14px; z-index: 11; display: none;
       width: 44px; height: 44px; border-radius: 50%;
@@ -191,6 +191,17 @@
       font: 600 18px var(--font); align-items: center; justify-content: center;
       cursor: pointer; touch-action: none; user-select: none;
     }
+    #dicebtn { left: 66px; }
+    .fixrow {
+      display: flex; align-items: center; gap: 8px; justify-content: space-between;
+      padding: 4px 0; font: 600 12px var(--font);
+    }
+    .fixrow span { opacity: 0.75; min-width: 64px; }
+    .fixbet {
+      padding: 7px 10px; border-radius: 9px; background: rgba(255,255,255,0.08);
+      border: 1px solid var(--line); cursor: pointer; font: 700 12px var(--font);
+    }
+    .fixbet:active { background: var(--accent); color: #14171f; }
     #pausemenu {
       position: fixed; inset: 0; z-index: 65; display: none;
       align-items: center; justify-content: center;
@@ -296,6 +307,7 @@
   <div id="joy"><div id="knob"></div></div>
   <div id="coins">🪙 0</div>
   <div id="pausebtn">☰</div>
+  <div id="dicebtn">🎲</div>
   <div id="pausemenu">
     <div id="pausebox">
       <div class="ittl">PAUSA</div>
