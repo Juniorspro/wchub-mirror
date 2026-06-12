@@ -181,6 +181,35 @@
       border: 0; border-radius: 999px; background: var(--accent);
       color: #14171f; font: 800 13px var(--font); padding: 9px 16px; cursor: pointer;
     }
+    /* ── pausa + ajustes ── */
+    #pausebtn {
+      position: fixed; top: calc(env(safe-area-inset-top, 0px) + 10px);
+      left: 14px; z-index: 11; display: none;
+      width: 44px; height: 44px; border-radius: 50%;
+      background: var(--glass); backdrop-filter: blur(12px);
+      border: 1px solid var(--line); color: var(--txt);
+      font: 600 18px var(--font); align-items: center; justify-content: center;
+      cursor: pointer; touch-action: none; user-select: none;
+    }
+    #pausemenu {
+      position: fixed; inset: 0; z-index: 65; display: none;
+      align-items: center; justify-content: center;
+      background: rgba(8, 10, 18, 0.6); backdrop-filter: blur(8px);
+    }
+    #pausebox {
+      background: var(--glass); border: 1px solid var(--line); border-radius: 22px;
+      padding: 22px 24px; display: flex; flex-direction: column; gap: 12px;
+      font: 600 13px var(--font); color: var(--txt); min-width: 300px;
+      backdrop-filter: blur(18px); align-items: stretch;
+    }
+    #pausebox .ittl { font: 800 18px var(--font); text-align: center; letter-spacing: 0.1em; }
+    .pbtn {
+      padding: 12px; border-radius: 12px; border: 1px solid var(--line);
+      background: rgba(255,255,255,0.08); color: var(--txt);
+      font: 700 13px var(--font); text-align: center; cursor: pointer;
+    }
+    .pbtn.primary { background: var(--accent); color: #14171f; border: 0; }
+    .pbtn:active { transform: scale(0.97); }
     /* ── botones de acción ── */
     #sitbtn, #emobtn, #jumpbtn, #ragbtn, #shopbtn, #chatbtn, #betbtn {
       position: fixed; z-index: 12; display: none;
@@ -266,6 +295,20 @@
   </div>
   <div id="joy"><div id="knob"></div></div>
   <div id="coins">🪙 0</div>
+  <div id="pausebtn">☰</div>
+  <div id="pausemenu">
+    <div id="pausebox">
+      <div class="ittl">PAUSA</div>
+      <div class="mopt"><span id="plres">Resolución</span>
+        <div id="presopt" class="seg"><b data-r="0.7">Baja</b><b data-r="1" class="on">Media</b><b data-r="1.6">Alta</b></div>
+      </div>
+      <div class="mopt"><span id="plgfx">Gráficos</span>
+        <div id="pgfxopt" class="seg"><b data-g="0" class="on">Clásico</b><b data-g="1">PBR</b><b data-g="2">RTX</b></div>
+      </div>
+      <div class="pbtn primary" id="presume">▶ Reanudar</div>
+      <div class="pbtn" id="pexit">↩ Salir al menú</div>
+    </div>
+  </div>
   <div id="sitbtn">🪑</div>
   <div id="emobtn">😀</div>
   <div id="jumpbtn">🦘</div>

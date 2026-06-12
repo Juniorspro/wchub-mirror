@@ -544,8 +544,10 @@ export function mixJoints(a: Joints, b: Joints, m: number): Joints {
 export function poseSit(t: number): Joints {
   const J = J0();
   J.breath = 0.5 + 0.5 * Math.sin(t * 1.05);
-  J.hipFwdL = 1.25; // muslos apenas caídos: sentado natural, no piernas arriba
-  J.hipFwdR = 1.25;
+  // OJO: en este FK hipFwd POSITIVO manda la pierna para ATRÁS (-Z);
+  // sentado = muslos ADELANTE → negativo
+  J.hipFwdL = -1.25;
+  J.hipFwdR = -1.25;
   // piernitas colgando que se hamacan alternadas (el petiso no llega al piso)
   J.kneeL = 1.45 + Math.sin(t * 1.6) * 0.16;
   J.kneeR = 1.45 + Math.sin(t * 1.6 + 2.4) * 0.16;
@@ -563,6 +565,69 @@ export function poseSit(t: number): Joints {
   J.headTilt = Math.sin(t * 0.4) * 0.04;
   J.jaw = 0.04 + 0.03 * Math.sin(t * 1.05);
   return J;
+}
+
+// posiciones (locales al root) de las 11 articulaciones del esqueleto
+// para la pose J — el ragdoll arranca EXACTAMENTE desde acá.
+// Orden: pelvis, pecho, cabeza, rodillaL, pieL, rodillaR, pieR,
+//        codoL, manoL, codoR, manoR
+export function skeletonPoints(J: Joints): V3[] {
+  const L = HUM.L;
+  const pel: V3 = [J.swayX, 0.56 + J.pelvisY, J.swayZ];
+  const axF: V3 = [0, 1, 0];
+  vrotX(axF, axF, J.spineFwd);
+  vrotZ(axF, axF, J.spineSide);
+  const chest = vmadd([0, 0, 0], pel, axF, L.torso * 0.86);
+  const neckTop = vmadd([0, 0, 0], pel, axF, L.torso);
+  const hax = axF.slice() as V3;
+  vrotX(hax, hax, J.headNod);
+  vrotZ(hax, hax, J.headTilt);
+  const head = vmadd([0, 0, 0], neckTop, hax, L.head * 0.55);
+  const arm = (s: number, abd: number, fwd: number, elb: number): { E: V3; H: V3 } => {
+    const S: V3 = [0, 0, 0];
+    vmadd(S, pel, axF, L.torso * 0.855);
+    S[0] += s * L.shH;
+    S[1] -= 0.014;
+    const d1: V3 = [0, -1, 0];
+    vrotZ(d1, d1, s * abd);
+    vrotX(d1, d1, fwd);
+    const ab = Math.min(1, Math.abs(Math.sin(abd)));
+    const bt: V3 = [0, ab, 1 - ab];
+    vnorm(bt, bt);
+    const ax: V3 = [0, 0, 0];
+    vcross(ax, d1, bt);
+    if (vlen(ax) < 0.15) vset(ax, -1, 0, 0);
+    vnorm(ax, ax);
+    const d2: V3 = [0, 0, 0];
+    vrotAxis(d2, d1, ax, elb);
+    const E = vmadd([0, 0, 0], S, d1, L.upper);
+    const H = vmadd([0, 0, 0], E, d2, L.fore + L.hand * 0.5);
+    return { E, H };
+  };
+  const leg = (s: number, hf: number, ha: number, kn: number): { K: V3; A: V3 } => {
+    const Hp: V3 = [pel[0] + s * L.hipH, pel[1] + 0.04, pel[2]];
+    const d1: V3 = [0, -1, 0];
+    vrotZ(d1, d1, s * ha);
+    vrotX(d1, d1, hf);
+    const ax: V3 = [0, 0, 0];
+    vcross(ax, d1, [0, 0, 1]);
+    if (vlen(ax) < 0.15) vset(ax, -1, 0, 0);
+    vnorm(ax, ax);
+    const d2: V3 = [0, 0, 0];
+    vrotAxis(d2, d1, ax, -kn);
+    const K = vmadd([0, 0, 0], Hp, d1, L.thigh);
+    const A = vmadd([0, 0, 0], K, d2, L.shin);
+    return { K, A };
+  };
+  const aL = arm(1, J.shAbdL, J.shFwdL, J.elbowL);
+  const aR = arm(-1, J.shAbdR, J.shFwdR, J.elbowR);
+  const lL = leg(1, J.hipFwdL, J.hipAbdL, J.kneeL);
+  const lR = leg(-1, J.hipFwdR, J.hipAbdR, J.kneeR);
+  return [
+    [pel[0], pel[1] + 0.04, pel[2]], chest, head,
+    lL.K, lL.A, lR.K, lR.A,
+    aL.E, aL.H, aR.E, aR.H,
+  ];
 }
 
 // outfit por vértice (remera blanca / pantalón negro / zapas verdes)

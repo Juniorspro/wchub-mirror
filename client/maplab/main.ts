@@ -57,7 +57,7 @@ import coverJugglerUrl from '../src/assets/sprite/sprite_portal-cover-juggler_fe
 import coverRacingUrl from '../src/assets/sprite/sprite_portal-cover-racing_c7b1b5.webp';
 import portraitUrl from '../src/assets/portrait/portrait_poster-worldcup-portrait_69e0b1.webp';
 // el humanoide esculpido del viewer (figlab) porteado: malla por frame
-import { FIG, buildFigure, J0, poseCartoon, poseSit, mixJoints, paintOutfit, decalPositions, headFrame, type Joints } from './figura';
+import { FIG, buildFigure, J0, poseCartoon, poseSit, mixJoints, paintOutfit, decalPositions, headFrame, skeletonPoints, type Joints } from './figura';
 // física REAL (ragdoll + pelota): cannon-es
 import * as CANNON from 'cannon-es';
 
@@ -1187,6 +1187,8 @@ interface Player {
   vz: number;
 }
 let PLAYER: Player | null = null;
+let LASTJ: Joints | null = null; // última pose construida (para el ragdoll)
+let PAUSED = false;
 const INPUT = { kx: 0, ky: 0, jx: 0, jy: 0 };
 // puertas-portal del estadio (hint de cercanía + pulso)
 const PORTAL_DOORS: Array<{ x: number; z: number; url: string; label: string; mat: StandardMaterial }> = [];
@@ -1282,37 +1284,34 @@ function initPhysics(): void {
 function ragStart(vx: number, vz: number): void {
   if (!PLAYER || !PHYS) return;
   ragClear();
-  const p = PLAYER.root.position;
+  SIT.target = 0;
+  // [radio, masa, patada] por hueso (mismo orden que skeletonPoints)
+  const spec: Array<[number, number, number]> = [
+    [0.14, 3, 0.3], [0.14, 3, 0.9], [0.16, 2, 1.5],
+    [0.06, 0.8, 0.1], [0.07, 0.7, -0.3], [0.06, 0.8, 0.1], [0.07, 0.7, -0.3],
+    [0.06, 0.6, 0.7], [0.06, 0.5, 1.1], [0.06, 0.6, 0.7], [0.06, 0.5, 1.1],
+  ];
+  // pose ACTUAL → posiciones de mundo (el ragdoll arranca tal cual estabas)
+  const J = LASTJ ?? J0();
+  const pts = skeletonPoints(J);
+  PLAYER.root.computeWorldMatrix(true);
+  const wm = PLAYER.root.getWorldMatrix();
   const yaw = PLAYER.yaw;
   const fx = Math.sin(yaw);
   const fz = Math.cos(yaw);
-  const S = PSCALE;
-  const defs: Array<[number, number, number, number, number, number]> = [
-    // [ox, y, oz, radio, masa, patada] — esqueleto completo
-    [0, 0.60 * S, 0, 0.14 * S, 3, 0.4],                       // 0 pelvis
-    [fx * 0.02, 1.00 * S, fz * 0.02, 0.14 * S, 3, 1.2],       // 1 pecho
-    [fx * 0.04, 1.28 * S, fz * 0.04, 0.16 * S, 2, 1.8],       // 2 cabeza
-    [-fz * 0.10, 0.34 * S, fx * 0.10, 0.06, 0.8, 0.1],        // 3 rodilla L
-    [-fz * 0.11, 0.08, fx * 0.11, 0.07, 0.7, -0.5],           // 4 pie L
-    [fz * 0.10, 0.34 * S, -fx * 0.10, 0.06, 0.8, 0.1],        // 5 rodilla R
-    [fz * 0.11, 0.08, -fx * 0.11, 0.07, 0.7, -0.5],           // 6 pie R
-    [-fz * 0.24, 0.80 * S, fx * 0.24, 0.06, 0.6, 0.9],        // 7 codo L
-    [-fz * 0.32, 0.62 * S, fx * 0.32, 0.06, 0.5, 1.4],        // 8 mano L
-    [fz * 0.24, 0.80 * S, -fx * 0.24, 0.06, 0.6, 0.9],        // 9 codo R
-    [fz * 0.32, 0.62 * S, -fx * 0.32, 0.06, 0.5, 1.4],        // 10 mano R
-  ];
-  RAGD.P = defs.map(([ox, y, oz, r, mass, kick]) => {
+  RAGD.P = spec.map(([r, mass, kick], i) => {
+    const w = Vector3.TransformCoordinates(_rv.set(pts[i][0], pts[i][1], pts[i][2]), wm);
     const body = new CANNON.Body({
       mass,
       shape: new CANNON.Sphere(r),
-      position: new CANNON.Vec3(p.x + ox, y + JUMP.y + 0.05, p.z + oz),
-      velocity: new CANNON.Vec3(vx * 1.4 + fx * kick, 1.6 + kick * 0.8, vz * 1.4 + fz * kick),
+      position: new CANNON.Vec3(w.x, Math.max(r + 0.01, w.y), w.z),
+      velocity: new CANNON.Vec3(vx * 1.4 + fx * kick, 1.2 + kick * 0.6, vz * 1.4 + fz * kick),
       linearDamping: 0.25,
       angularDamping: 0.4,
       material: PHYS_MAT as CANNON.Material,
     });
     (PHYS as CANNON.World).addBody(body);
-    return { x: p.x + ox, y: y + JUMP.y, z: p.z + oz, r, body };
+    return { x: w.x, y: w.y, z: w.z, r, body };
   });
   RAGD.cons = RAG_LINKS.map(([a, b, L]) => {
     const c = new CANNON.DistanceConstraint(
@@ -2487,8 +2486,8 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     }
     // ─── jugador (LA FIGURA): caminar + malla regenerada por frame ───────
     if (PLAYER) {
-      let dx = INPUT.kx + INPUT.jx;
-      let dy = INPUT.ky + INPUT.jy;
+      let dx = PAUSED ? 0 : INPUT.kx + INPUT.jx;
+      let dy = PAUSED ? 0 : INPUT.ky + INPUT.jy;
       const len = Math.hypot(dx, dy);
       if (len > 1) { dx /= len; dy /= len; }
       const moving = len > 0.08;
@@ -2706,6 +2705,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       } else if (emoPlane) {
         emoPlane.isVisible = false;
       }
+      LASTJ = J;
       buildFigure(J);
       PLAYER.mesh.updateVerticesData('position', FIG.pos as Float32Array);
       VertexData.ComputeNormals(FIG.pos, FIG.idx, PLAYER.normals);
@@ -2937,6 +2937,10 @@ function boot(): void {
     let godrays: VolumetricLightScatteringPostProcess | null = null;
     let lampLights: PointLight[] = [];
     const gfxTeardown = (): void => {
+      if (LIGHTS) {
+        LIGHTS.hemi.intensity = 0.78;
+        LIGHTS.hemi.groundColor = new Color3(0.5, 0.58, 0.42);
+      }
       if (pipeline) { pipeline.dispose(); pipeline = null; }
       if (shadowGen) { shadowGen.dispose(); shadowGen = null; }
       if (ssao) { ssao.dispose(); ssao = null; }
@@ -2957,7 +2961,7 @@ function boot(): void {
       pipeline.imageProcessing.vignetteEnabled = true;
       pipeline.imageProcessing.vignetteWeight = 1.3;
     };
-    const mkShadows = (size: number, pcf: boolean, conArboles: boolean): void => {
+    const mkShadows = (size: number, pcf: boolean, todo: boolean): void => {
       if (!LIGHTS) return;
       shadowGen = new ShadowGenerator(size, LIGHTS.sun);
       if (pcf) shadowGen.usePercentageCloserFiltering = true;
@@ -2965,7 +2969,16 @@ function boot(): void {
       shadowGen.transparencyShadow = true; // respeta el alpha de los robles
       shadowGen.bias = 0.0012;
       for (const m of SHADOW_CASTERS) shadowGen.addShadowCaster(m);
-      if (conArboles) for (const m of TREE_CASTERS) shadowGen.addShadowCaster(m);
+      if (todo) {
+        // RTX: TODO tira sombra (salvo pisos, billboards de UI y cielo)
+        const skip = ['patio-ground', 'paseo', 'sendero', 'caminito', 'est-apron', 'est-floor',
+          'cancha', 'pl-name', 'chat-plane', 'emo-plane', 'player-cara', 'plaza', 'mu-disc', 'cp-disc', 'tuft'];
+        for (const m of scene.meshes) {
+          if (skip.some((s) => m.name.startsWith(s))) continue;
+          shadowGen.addShadowCaster(m as Mesh);
+        }
+        for (const m of TREE_CASTERS) shadowGen.addShadowCaster(m);
+      }
     };
     const setGraphics = (g: string): void => {
       gfxTeardown();
@@ -2974,11 +2987,20 @@ function boot(): void {
         mkShadows(512, false, false);
       } else if (g === '2') { // RTX: todos los chiches
         mkPipeline(0.10); // bloom no tan alto
-        mkShadows(1024, true, true);
+        mkShadows(2048, true, true);
         ssao = new SSAO2RenderingPipeline('ssao', scene, 0.5, [cam0]);
         ssao.radius = 0.6;
-        ssao.totalStrength = 1.0;
+        ssao.totalStrength = 1.1;
         ssao.samples = 12;
+        // iluminación global aproximada: rebote del pasto + luz de relleno
+        if (LIGHTS) {
+          LIGHTS.hemi.intensity = 0.88;
+          LIGHTS.hemi.groundColor = new Color3(0.38, 0.52, 0.3);
+          const fill = new DirectionalLight('gi-fill', new Vector3(0.5, -0.6, 0.45), scene);
+          fill.intensity = 0.18;
+          fill.diffuse = new Color3(0.75, 0.85, 1.0);
+          lampLights.push(fill as unknown as PointLight);
+        }
         // rayos del sol: disco brillante + scattering volumétrico
         godrays = new VolumetricLightScatteringPostProcess('rayos', 1.0, cam0, undefined as never, 60, Texture.BILINEAR_SAMPLINGMODE, engine, false);
         godrays.mesh.position.set(55, 110, 48); // opuesto a la dirección del sol
@@ -3353,6 +3375,7 @@ function boot(): void {
       $id('ragbtn').style.display = 'flex';
       $id('chatbtn').style.display = 'flex';
       $id('coins').style.display = 'block';
+      $id('pausebtn').style.display = 'flex';
       updCoins();
       const cam = scene.activeCamera as ArcRotateCamera;
       cam.alpha = -Math.PI / 2;
@@ -3586,6 +3609,41 @@ function boot(): void {
       });
       shopPanel.appendChild(cls);
       shopPanel.style.display = 'block';
+    });
+
+    // ─── menú de PAUSA con ajustes ──────────────────────────────────────
+    const pauseBtn = $id('pausebtn');
+    const pauseMenu = $id('pausemenu');
+    pauseBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      PAUSED = true;
+      pauseMenu.style.display = 'flex';
+    });
+    $id('presume').addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      PAUSED = false;
+      pauseMenu.style.display = 'none';
+    });
+    $id('pexit').addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      location.reload();
+    });
+    document.querySelectorAll('#presopt b').forEach((el) => {
+      el.addEventListener('click', () => {
+        document.querySelectorAll('#presopt b, #resopt b').forEach((x) => x.classList.remove('on'));
+        el.classList.add('on');
+        const r = parseFloat((el as HTMLElement).dataset.r as string);
+        const eff = r >= 1.5 ? Math.min(window.devicePixelRatio || 1, 1.75) : r;
+        engine.setHardwareScalingLevel(1 / eff);
+      });
+    });
+    document.querySelectorAll('#pgfxopt b').forEach((el) => {
+      el.addEventListener('click', () => {
+        document.querySelectorAll('#pgfxopt b, #gfxopt b').forEach((x) => x.classList.remove('on'));
+        el.classList.add('on');
+        setGraphics((el as HTMLElement).dataset.g as string);
+      });
     });
 
     // ─── teclado (desktop) ──────────────────────────────────────────────
