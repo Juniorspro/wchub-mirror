@@ -49,6 +49,10 @@ import cutStoneUrl from '../src/assets/sprite/sprite_tex-cut-stone_525147.webp';
 import turfUrl from '../src/assets/sprite/sprite_stadium-turf_f0a345.png';
 import crowdUrl from '../src/assets/sprite/sprite_stadium-crowd_1c49a4.png';
 import bannerUrl from '../src/assets/bg/bg_poster-worldcup-banner_e92888.webp';
+// estampados de remera (assets del original)
+import shirtGalaxyUrl from '../src/assets/sprite/sprite_shirt-galaxy_f0ec76.png';
+import shirtGeoUrl from '../src/assets/sprite/sprite_shirt-geometric_82bec3.png';
+import shirtTropUrl from '../src/assets/sprite/sprite_shirt-tropical_a99ba7.png';
 // música del original (loop de feria + calma de estadio, switch por zona)
 import bgmFairUrl from '../src/assets/bgm/bgm_bgm-fair-loop_2f7397.mp3';
 import bgmCalmUrl from '../src/assets/bgm/bgm_bgm-stadium-calm_060593.mp3';
@@ -63,6 +67,9 @@ import portraitUrl from '../src/assets/portrait/portrait_poster-worldcup-portrai
 import { FIG, buildFigure, J0, poseCartoon, poseSit, mixJoints, paintOutfit, decalPositions, headFrame, skeletonPoints, type Joints } from './figura';
 // física REAL (ragdoll + pelota): cannon-es
 import * as CANNON from 'cannon-es';
+// ONLINE (como el original): cliente Colyseus — se activa con ?ws=URL
+// o localStorage 'maplab_ws' (la sala está en server/src/maplab-room.ts)
+import { Client as ColyseusClient, type Room as ColyseusRoom } from 'colyseus.js';
 
 // ─── Constantes del layout (portables a world.ts) ───────────────────────
 const RING_RADIUS = 17.5;        // radio del anillo de tiendas
@@ -1197,8 +1204,174 @@ interface Player {
 let PLAYER: Player | null = null;
 let LASTJ: Joints | null = null; // última pose construida (para el ragdoll)
 let PAUSED = false;
+// jugadores remotos (capsulita + nombre + globo) sincronizados a 10Hz
+interface Remote {
+  root: TransformNode;
+  tx: number;
+  tz: number;
+  tyaw: number;
+  bubble: Mesh | null;
+  bubbleTex: DynamicTexture | null;
+  bubbleUntil: number;
+}
+const REMOTES = new Map<string, Remote>();
+let NETROOM: ColyseusRoom | null = null;
+let lastNetSend = 0;
+function remoteFor(scene: Scene, id: string, name: string): Remote {
+  let r = REMOTES.get(id);
+  if (r) return r;
+  const root = new TransformNode('remote-' + id, scene);
+  // colores por hash del id
+  let hh = 0;
+  for (const ch of id) hh = (hh * 31 + ch.charCodeAt(0)) | 0;
+  const col = PALETA[Math.abs(hh) % PALETA.length];
+  const body = MeshBuilder.CreateCapsule('rem-body', { radius: 0.26, height: 1.05, tessellation: 10 }, scene);
+  body.parent = root;
+  body.position.y = 0.62;
+  body.material = stdMat(scene, 'rem-mat-' + id, col);
+  body.isPickable = false;
+  const head = MeshBuilder.CreateSphere('rem-head', { diameter: 0.5, segments: 10 }, scene);
+  head.parent = root;
+  head.position.y = 1.42;
+  head.material = stdMat(scene, 'rem-skin-' + id, '#e8b88f');
+  head.isPickable = false;
+  const ntex = new DynamicTexture('rem-name-' + id, { width: 256, height: 64 }, scene, true);
+  const nc2 = ntex.getContext() as unknown as CanvasRenderingContext2D;
+  nc2.clearRect(0, 0, 256, 64);
+  nc2.lineWidth = 7;
+  nc2.strokeStyle = '#10204a';
+  nc2.textAlign = 'center';
+  nc2.textBaseline = 'middle';
+  nc2.font = 'bold 36px Inter, system-ui, sans-serif';
+  nc2.strokeText(name, 128, 32, 240);
+  nc2.fillStyle = '#ffffff';
+  nc2.fillText(name, 128, 32, 240);
+  ntex.update();
+  ntex.hasAlpha = true;
+  const nmat = new StandardMaterial('rem-name-mat-' + id, scene);
+  nmat.diffuseTexture = ntex;
+  nmat.emissiveColor = new Color3(1, 1, 1);
+  nmat.useAlphaFromDiffuseTexture = true;
+  nmat.disableLighting = true;
+  nmat.backFaceCulling = false;
+  const np = MeshBuilder.CreatePlane('rem-name-pl', { width: 1.3, height: 0.34 }, scene);
+  np.parent = root;
+  np.position.y = 1.95;
+  np.billboardMode = Mesh.BILLBOARDMODE_Y;
+  np.material = nmat;
+  np.isPickable = false;
+  r = { root, tx: 0, tz: 0, tyaw: 0, bubble: null, bubbleTex: null, bubbleUntil: 0 };
+  REMOTES.set(id, r);
+  return r;
+}
+function connectNet(scene: Scene, nombre: string): void {
+  let url = '';
+  try {
+    url = new URLSearchParams(location.search).get('ws') || localStorage.getItem('maplab_ws') || '';
+  } catch { /* sin storage */ }
+  if (!url) return; // offline: el online se prende con ?ws= o maplab_ws
+  try {
+    const client = new ColyseusClient(url);
+    client.joinOrCreate('patio', { name: nombre }).then((room) => {
+      NETROOM = room as ColyseusRoom;
+      room.onMessage('pos', (d: { id: string; x: number; z: number; yaw: number; name: string }) => {
+        const r = remoteFor(scene, d.id, d.name || 'wacho');
+        r.tx = d.x;
+        r.tz = d.z;
+        r.tyaw = d.yaw;
+      });
+      room.onMessage('chat', (d: { id: string; txt: string }) => {
+        const r = REMOTES.get(d.id);
+        if (r) remoteBubble(scene, r, d.txt);
+      });
+      room.onMessage('leave', (id: string) => {
+        const r = REMOTES.get(id);
+        if (r) {
+          r.root.dispose(false, true);
+          REMOTES.delete(id);
+        }
+      });
+    }).catch(() => { /* server caído: seguimos offline */ });
+  } catch { /* ídem */ }
+}
+function remoteBubble(scene: Scene, r: Remote, txt: string): void {
+  if (!r.bubble) {
+    r.bubbleTex = new DynamicTexture('rem-bub', { width: 512, height: 160 }, scene, true);
+    r.bubbleTex.hasAlpha = true;
+    const m = new StandardMaterial('rem-bub-mat', scene);
+    m.diffuseTexture = r.bubbleTex;
+    m.emissiveColor = new Color3(1, 1, 1);
+    m.useAlphaFromDiffuseTexture = true;
+    m.disableLighting = true;
+    m.backFaceCulling = false;
+    r.bubble = MeshBuilder.CreatePlane('rem-bub-pl', { width: 2.0, height: 0.62 }, scene);
+    r.bubble.parent = r.root;
+    r.bubble.billboardMode = Mesh.BILLBOARDMODE_ALL;
+    r.bubble.position.y = 2.4;
+    r.bubble.material = m;
+    r.bubble.isPickable = false;
+  }
+  const c = (r.bubbleTex as DynamicTexture).getContext() as unknown as CanvasRenderingContext2D;
+  c.save();
+  c.clearRect(0, 0, 512, 160);
+  c.translate(0, 160);
+  c.scale(1, -1);
+  c.fillStyle = '#ffffff';
+  c.beginPath();
+  (c as CanvasRenderingContext2D & { roundRect: (x: number, y: number, w: number, h: number, rr: number) => void }).roundRect(8, 8, 496, 116, 26);
+  c.fill();
+  c.fillStyle = '#1b2030';
+  fitText(c, txt.slice(0, 48), 256, 66, 460, 34, '600');
+  c.restore();
+  (r.bubbleTex as DynamicTexture).update(false);
+  r.bubble.isVisible = true;
+  r.bubbleUntil = performance.now() / 1000 + 5;
+}
 let BGM_FAIR: HTMLAudioElement | null = null;
 let BGM_CALM: HTMLAudioElement | null = null;
+// dino pixel art (el guía y los pósters de la mascota)
+const DINO_PX = [
+  '..........ooooooo.',
+  '..........obwoooo.',
+  '..........ooooooo.',
+  '..........oooo....',
+  '..........ooooooo.',
+  'o........ooooo....',
+  'oo......oooooo....',
+  'ooo....ooooooodd..',
+  'oooo..ooooooooo...',
+  'ooooooooooooooo...',
+  'oooooooooooooo....',
+  '.oooooooooooo.....',
+  '..oooooooooo......',
+  '...oooooooo.......',
+  '....ooo..oo.......',
+  '....oo....oo......',
+  '....oo.....oo.....',
+  '....ooo....ooo....',
+];
+const DCOLS: Record<string, string> = { o: '#ff7a2d', d: '#d95f1e', w: '#ffffff', b: '#14171f' };
+function drawDino(c: CanvasRenderingContext2D, px: number, ox: number, oy: number): void {
+  for (let y = 0; y < DINO_PX.length; y++) {
+    for (let x = 0; x < DINO_PX[y].length; x++) {
+      const ch = DINO_PX[y][x];
+      if (ch === '.') continue;
+      c.fillStyle = DCOLS[ch];
+      c.fillRect(ox + x * px, oy + y * px, px, px);
+    }
+  }
+}
+// texto centrado SIN cortes: achica la fuente hasta que entre
+function fitText(c: CanvasRenderingContext2D, txt: string, cx: number, cy: number, maxW: number, size: number, weight = '800'): void {
+  let s = size;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  do {
+    c.font = `${weight} ${s}px Inter, system-ui, sans-serif`;
+    s -= 2;
+  } while (c.measureText(txt).width > maxW && s > 10);
+  c.fillText(txt, cx, cy);
+}
 const INPUT = { kx: 0, ky: 0, jx: 0, jy: 0 };
 // puertas-portal del estadio (hint de cercanía + pulso)
 const PORTAL_DOORS: Array<{ x: number; z: number; url: string; label: string; mat: StandardMaterial }> = [];
@@ -1255,8 +1428,85 @@ function applyGesture(J: Joints, type: number, e: number, t: number): void {
 
 // ─── outfit equipable (tiendas como el original) ────────────────────────
 const PALETA = ['#f2f2ee', '#c14444', '#3a6ea5', '#e8c84a', '#9bd96b', '#d96bc4', '#e89c4a', '#a85dd9', '#1d1d22', '#4aa3a3', '#ff7a5c', '#6bd0ff'];
-const OUTFIT_ST = { remera: '#f2f2ee', pantalon: '#1d1d22', zapas: '#3dbf5a', piel: '#e8b88f', hat: -1, glasses: -1, scarf: -1 };
-let COLORS_BUF: Float32Array | null = null;
+const OUTFIT_ST = { remera: '#f2f2ee', remeraPat: -1, pantalon: '#1d1d22', zapas: '#3dbf5a', piel: '#e8b88f', hat: -1, glasses: -1, scarf: -1 };
+// bandas v de la textura de outfit por parte del cuerpo
+const BANDS: Record<number, [number, number]> = {
+  0: [0.02, 0.22],  // torso
+  1: [0.26, 0.36],  // brazo L
+  2: [0.38, 0.48],  // brazo R
+  3: [0.52, 0.62],  // pierna L
+  5: [0.64, 0.74],  // pierna R
+  4: [0.78, 0.84],  // pie L
+  6: [0.86, 0.92],  // pie R
+  7: [0.94, 0.995], // cabeza
+};
+let OUTFIT_TEX: DynamicTexture | null = null;
+const PAT_IMGS: Record<number, HTMLImageElement> = {};
+function patImg(idx: number, url: string): HTMLImageElement {
+  if (!PAT_IMGS[idx]) {
+    const im = new Image();
+    im.onload = () => paintOutfitTex();
+    im.src = url;
+    PAT_IMGS[idx] = im;
+  }
+  return PAT_IMGS[idx];
+}
+function paintOutfitTex(): void {
+  if (!OUTFIT_TEX) return;
+  const c = OUTFIT_TEX.getContext() as unknown as CanvasRenderingContext2D;
+  const W = 256;
+  const H = 512;
+  // franja [v0,v1] → píxeles (v=1 arriba de la textura)
+  const strip = (v0: number, v1: number): [number, number] => [(1 - v1) * H, (v1 - v0) * H];
+  const fill = (v0: number, v1: number, col: string): void => {
+    const [y, h] = strip(v0, v1);
+    c.fillStyle = col;
+    c.fillRect(0, y, W, h);
+  };
+  c.fillStyle = OUTFIT_ST.piel;
+  c.fillRect(0, 0, W, H);
+  // TORSO: estampado o color (el cuello t>=0.92 queda piel)
+  const tb = BANDS[0];
+  const tTop = tb[0] + 0.92 * (tb[1] - tb[0]);
+  const [ty, th] = strip(tb[0], tTop);
+  if (OUTFIT_ST.remeraPat >= 3) { // assets reales del juego
+    const urls = [shirtGalaxyUrl, shirtGeoUrl, shirtTropUrl];
+    const im = patImg(OUTFIT_ST.remeraPat, urls[OUTFIT_ST.remeraPat - 3]);
+    c.fillStyle = OUTFIT_ST.remera;
+    c.fillRect(0, ty, W, th);
+    if (im.complete && im.naturalWidth > 0) c.drawImage(im, 0, ty, W, th);
+  } else if (OUTFIT_ST.remeraPat === 0) { // rayas verticales
+    for (let i = 0; i < 8; i++) {
+      c.fillStyle = i % 2 === 0 ? OUTFIT_ST.remera : '#f4f1e6';
+      c.fillRect(i * (W / 8), ty, W / 8, th);
+    }
+  } else if (OUTFIT_ST.remeraPat === 1) { // aros horizontales
+    for (let i = 0; i < 6; i++) {
+      c.fillStyle = i % 2 === 0 ? OUTFIT_ST.remera : '#f4f1e6';
+      c.fillRect(0, ty + i * (th / 6), W, th / 6);
+    }
+  } else if (OUTFIT_ST.remeraPat === 2) { // mitades
+    c.fillStyle = OUTFIT_ST.remera;
+    c.fillRect(0, ty, W / 2, th);
+    c.fillStyle = '#f4f1e6';
+    c.fillRect(W / 2, ty, W / 2, th);
+  } else {
+    c.fillStyle = OUTFIT_ST.remera;
+    c.fillRect(0, ty, W, th);
+  }
+  // MANGAS: t<0.30 de cada brazo con el color de la remera
+  for (const part of [1, 2]) {
+    const b = BANDS[part];
+    const vS = b[0] + 0.30 * (b[1] - b[0]);
+    fill(b[0], vS, OUTFIT_ST.remera);
+  }
+  // PIERNAS pantalón, PIES zapas
+  fill(BANDS[3][0], BANDS[3][1], OUTFIT_ST.pantalon);
+  fill(BANDS[5][0], BANDS[5][1], OUTFIT_ST.pantalon);
+  fill(BANDS[4][0], BANDS[4][1], OUTFIT_ST.zapas);
+  fill(BANDS[6][0], BANDS[6][1], OUTFIT_ST.zapas);
+  OUTFIT_TEX.update();
+}
 let FACETEX: DynamicTexture | null = null;
 let FACECV: HTMLCanvasElement | null = null;
 let HATNODE: TransformNode | null = null;
@@ -1418,10 +1668,38 @@ function flashCoins(): void {
   el.classList.add('nofunds');
   setTimeout(() => el.classList.remove('nofunds'), 600);
 }
+let POOL = 0;
+try { POOL = parseFloat(localStorage.getItem('maplab_pool') || '0'); } catch { /* sin storage */ }
+let OB_TEX: DynamicTexture | null = null;
+function paintObelisk(): void {
+  if (!OB_TEX) return;
+  const oc2 = OB_TEX.getContext() as unknown as CanvasRenderingContext2D;
+  const pct = Math.min(100, Math.round((POOL / 200) * 100));
+  oc2.fillStyle = '#10204a';
+  oc2.fillRect(0, 0, 256, 384);
+  oc2.strokeStyle = '#ffd34d';
+  oc2.lineWidth = 8;
+  oc2.strokeRect(4, 4, 248, 376);
+  oc2.fillStyle = '#ffd34d';
+  fitText(oc2, 'TOP HERO', 128, 56, 220, 38);
+  oc2.fillStyle = '#2a3a64';
+  oc2.fillRect(38, 120, 180, 36);
+  oc2.fillStyle = '#ffd34d';
+  oc2.fillRect(38, 120, 180 * (pct / 100), 36);
+  oc2.fillStyle = '#f3ecd9';
+  fitText(oc2, pct + '%', 128, 210, 200, 32, '700');
+  fitText(oc2, POOL.toFixed(0) + ' / 200 🪙', 128, 262, 220, 24, '600');
+  OB_TEX.update();
+}
 function tryBuy(price: number, fn: () => void): void {
   if (price <= 0 || COINS >= price) {
     COINS -= Math.max(0, price);
     updCoins();
+    if (price > 0) { // lo gastado alimenta el POOL del obelisco
+      POOL += price;
+      try { localStorage.setItem('maplab_pool', String(POOL)); } catch { /* ídem */ }
+      paintObelisk();
+    }
     fn();
   } else {
     flashCoins();
@@ -1608,9 +1886,7 @@ function saveOutfit(): void {
   try { localStorage.setItem('maplab_outfit', JSON.stringify(OUTFIT_ST)); } catch { /* sin storage */ }
 }
 function repaintOutfit(): void {
-  if (!PLAYER || !COLORS_BUF) return;
-  paintOutfit(COLORS_BUF, hex2v3(OUTFIT_ST.remera), hex2v3(OUTFIT_ST.pantalon), hex2v3(OUTFIT_ST.zapas), hex2v3(OUTFIT_ST.piel));
-  PLAYER.mesh.updateVerticesData('color', COLORS_BUF);
+  paintOutfitTex();
   saveOutfit();
 }
 // cara del jugador: el compuesto pintado en la bola mapea 1:1 + anteojos
@@ -1789,16 +2065,27 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
   const normals = new Float32Array(FIG.vc * 3);
   VertexData.ComputeNormals(FIG.pos, FIG.idx, normals);
   vd.normals = normals;
-  const colors = new Float32Array(FIG.vc * 4);
-  COLORS_BUF = colors;
   try { // outfit guardado de sesiones anteriores
     const saved = localStorage.getItem('maplab_outfit');
     if (saved) Object.assign(OUTFIT_ST, JSON.parse(saved));
   } catch { /* sin storage */ }
-  paintOutfit(colors, hex2v3(OUTFIT_ST.remera), hex2v3(OUTFIT_ST.pantalon), hex2v3(OUTFIT_ST.zapas), hex2v3(OUTFIT_ST.piel));
-  vd.colors = colors;
+  // UVs: u = vuelta alrededor (θ/2π), v = banda por parte del cuerpo
+  const meta = FIG.meta as number[];
+  const ouvs = new Float32Array(FIG.vc * 2);
+  for (let i = 0; i < FIG.vc; i++) {
+    const part = meta[i * 3];
+    const tt = meta[i * 3 + 1];
+    const th = meta[i * 3 + 2];
+    const b = BANDS[part] || BANDS[7];
+    ouvs[i * 2] = th < 0 ? 0.5 : th / 6.2832;
+    ouvs[i * 2 + 1] = b[0] + tt * (b[1] - b[0]);
+  }
+  vd.uvs = ouvs;
   vd.applyToMesh(mesh, true);
+  OUTFIT_TEX = new DynamicTexture('outfit-tex', { width: 256, height: 512 }, scene, true);
+  paintOutfitTex();
   const mat = new StandardMaterial('player-mat', scene);
+  mat.diffuseTexture = OUTFIT_TEX;
   mat.diffuseColor = new Color3(1, 1, 1);
   mat.specularColor = new Color3(0.05, 0.05, 0.05);
   mat.backFaceCulling = false; // el port viene de un mundo diestro
@@ -2289,15 +2576,12 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   phoTop.position.set(PHO.x, 2.5, PHO.z);
   phoTop.material = woodDarkMat;
   phoTop.isPickable = false;
-  const phoTex = new DynamicTexture('pho-tex', { width: 256, height: 64 }, scene, true);
+  const phoTex = new DynamicTexture('pho-tex', { width: 512, height: 96 }, scene, true);
   const ph2 = phoTex.getContext() as unknown as CanvasRenderingContext2D;
   ph2.fillStyle = '#e8c84a';
-  ph2.fillRect(0, 0, 256, 64);
+  ph2.fillRect(0, 0, 512, 96);
   ph2.fillStyle = '#10204a';
-  ph2.textAlign = 'center';
-  ph2.textBaseline = 'middle';
-  ph2.font = '800 36px Inter, system-ui, sans-serif';
-  ph2.fillText('📸 PHOTO SPOT', 128, 34);
+  fitText(ph2, '📸 PHOTO SPOT', 256, 50, 470, 52);
   phoTex.update();
   const phoMat2 = new StandardMaterial('pho-sign-mat', scene);
   phoMat2.diffuseTexture = phoTex;
@@ -2305,10 +2589,57 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   phoMat2.emissiveColor = new Color3(0.5, 0.5, 0.5);
   phoMat2.specularColor = new Color3(0, 0, 0);
   phoMat2.backFaceCulling = false;
-  const phoSign = MeshBuilder.CreatePlane('pho-sign', { width: 2.4, height: 0.55 }, scene);
+  const phoSign = MeshBuilder.CreatePlane('pho-sign', { width: 2.9, height: 0.55 }, scene);
   phoSign.position.set(PHO.x, 2.95, PHO.z);
   phoSign.material = phoMat2;
   phoSign.isPickable = false;
+
+  // ─── Pósters de la MASCOTA (como el original, arte procedural) ───────
+  const POSES_DINO: Array<[number, number, number, string, string]> = [
+    [12, 24, Math.atan2(-12, -24), '¡VAMOS!', '#3a6ea5'],
+    [30, -4, Math.atan2(-30, 4), '¡GOLAZO!', '#c14444'],
+    [-8, -22, Math.atan2(8, 22), '¡HOLA! 👋', '#1d7a3a'],
+  ];
+  for (const [mx2, mz2, myaw, frase, bg2] of POSES_DINO) {
+    const ptex = new DynamicTexture('mascot-poster', { width: 384, height: 512 }, scene, true);
+    const pc3 = ptex.getContext() as unknown as CanvasRenderingContext2D;
+    pc3.fillStyle = bg2;
+    pc3.fillRect(0, 0, 384, 512);
+    pc3.strokeStyle = '#ffd34d';
+    pc3.lineWidth = 12;
+    pc3.strokeRect(6, 6, 372, 500);
+    drawDino(pc3, 16, 44, 70);
+    pc3.fillStyle = '#ffffff';
+    fitText(pc3, frase, 192, 430, 340, 56);
+    ptex.update();
+    const root2 = new TransformNode('mascot-stand', scene);
+    root2.position.set(mx2, 0, mz2);
+    root2.rotation.y = myaw;
+    COLLIDERS.push({ x: mx2, z: mz2, r: 0.9 });
+    const fr2 = MeshBuilder.CreateBox('mp-frame', { width: 2.0, height: 2.7, depth: 0.09 }, scene);
+    fr2.parent = root2;
+    fr2.position.y = 2.35;
+    fr2.material = stdMat(scene, 'mp-frame-mat', '#2e2a24');
+    fr2.isPickable = false;
+    const pm3 = new StandardMaterial('mp-mat', scene);
+    pm3.diffuseTexture = ptex;
+    pm3.emissiveTexture = ptex;
+    pm3.emissiveColor = new Color3(0.42, 0.42, 0.42);
+    pm3.specularColor = new Color3(0, 0, 0);
+    const pp3 = MeshBuilder.CreatePlane('mp-img', { width: 1.8, height: 2.5 }, scene);
+    pp3.parent = root2;
+    pp3.rotation.y = Math.PI;
+    pp3.position.set(0, 2.35, 0.06);
+    pp3.material = pm3;
+    pp3.isPickable = false;
+    for (const sx of [-0.7, 0.7]) {
+      const post3 = MeshBuilder.CreateCylinder('mp-post', { diameter: 0.13, height: 1.1, tessellation: 8 }, scene);
+      post3.parent = root2;
+      post3.position.set(sx, 0.55, 0);
+      post3.material = woodDarkMat;
+      post3.isPickable = false;
+    }
+  }
 
   // ─── Picnic (como el plot del original): mantel a cuadros + canasta ──
   const picTex = new DynamicTexture('picnic-tex', { width: 128, height: 128 }, scene, true);
@@ -2349,26 +2680,8 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   SHADOW_CASTERS.push(obelisco);
   COLLIDERS.push({ x: -16, z: -20, r: 1.4 });
   const obTex = new DynamicTexture('ob-tex', { width: 256, height: 384 }, scene, true);
-  const oc2 = obTex.getContext() as unknown as CanvasRenderingContext2D;
-  oc2.fillStyle = '#10204a';
-  oc2.fillRect(0, 0, 256, 384);
-  oc2.strokeStyle = '#ffd34d';
-  oc2.lineWidth = 8;
-  oc2.strokeRect(4, 4, 248, 376);
-  oc2.fillStyle = '#ffd34d';
-  oc2.textAlign = 'center';
-  oc2.font = '800 38px Inter, system-ui, sans-serif';
-  oc2.fillText('TOP HERO', 128, 56);
-  oc2.fillStyle = '#2a3a64';
-  oc2.fillRect(38, 120, 180, 36);
-  oc2.fillStyle = '#ffd34d';
-  oc2.fillRect(38, 120, 180 * 0.65, 36);
-  oc2.fillStyle = '#f3ecd9';
-  oc2.font = '700 30px Inter, system-ui, sans-serif';
-  oc2.fillText('65%', 128, 210);
-  oc2.font = '600 22px Inter, system-ui, sans-serif';
-  oc2.fillText('pool del patio', 128, 260);
-  obTex.update();
+  OB_TEX = obTex;
+  paintObelisk(); // FUNCIONAL: muestra el pool real de lo gastado
   const obMat = new StandardMaterial('ob-mat', scene);
   obMat.diffuseTexture = obTex;
   obMat.emissiveTexture = obTex;
@@ -2580,10 +2893,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   cc2.lineWidth = 8;
   cc2.strokeRect(4, 4, 504, 120);
   cc2.fillStyle = '#f3ecd9';
-  cc2.textAlign = 'center';
-  cc2.textBaseline = 'middle';
-  cc2.font = '800 52px Inter, system-ui, sans-serif';
-  cc2.fillText('🌲 COMING SOON 🌲', 256, 64, 480);
+  fitText(cc2, '🌲 COMING SOON 🌲', 256, 64, 470, 52);
   csTex.update();
   const csMat = new StandardMaterial('cs-sign-mat', scene);
   csMat.diffuseTexture = csTex;
@@ -2912,6 +3222,20 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         if (SCARFNODE) {
           SCARFNODE.position.set(hf.neckTop[0], hf.neckTop[1] + 0.01, hf.neckTop[2]);
           SCARFNODE.rotation.set(tiltX, 0, tiltZ);
+        }
+      }
+      // ONLINE: mando mi pos a 10Hz e interpolo a los demás
+      if (NETROOM) {
+        if (t - lastNetSend > 0.1) {
+          lastNetSend = t;
+          NETROOM.send('pos', { x: PLAYER.root.position.x, z: PLAYER.root.position.z, yaw: PLAYER.yaw, name: (localStorage.getItem('maplab_name') || 'wacho') });
+        }
+        for (const r of REMOTES.values()) {
+          const k3 = Math.min(1, dt * 8);
+          r.root.position.x += (r.tx - r.root.position.x) * k3;
+          r.root.position.z += (r.tz - r.root.position.z) * k3;
+          r.root.rotation.y += (r.tyaw - r.root.rotation.y) * k3;
+          if (r.bubble && t > r.bubbleUntil) r.bubble.isVisible = false;
         }
       }
       // BGM: crossfade feria ↔ estadio según dónde estés
@@ -3472,37 +3796,8 @@ function boot(): void {
     validate();
 
     // dino pixel art naranja (guía del estadio)
-    const DINO_PX = [
-      '..........ooooooo.',
-      '..........obwoooo.',
-      '..........ooooooo.',
-      '..........oooo....',
-      '..........ooooooo.',
-      'o........ooooo....',
-      'oo......oooooo....',
-      'ooo....ooooooodd..',
-      'oooo..ooooooooo...',
-      'ooooooooooooooo...',
-      'oooooooooooooo....',
-      '.oooooooooooo.....',
-      '..oooooooooo......',
-      '...oooooooo.......',
-      '....ooo..oo.......',
-      '....oo....oo......',
-      '....oo.....oo.....',
-      '....ooo....ooo....',
-    ];
     const dcv = $id('dinocv') as HTMLCanvasElement;
-    const dc = dcv.getContext('2d') as CanvasRenderingContext2D;
-    const DCOLS: Record<string, string> = { o: '#ff7a2d', d: '#d95f1e', w: '#ffffff', b: '#14171f' };
-    for (let y = 0; y < DINO_PX.length; y++) {
-      for (let x = 0; x < DINO_PX[y].length; x++) {
-        const ch = DINO_PX[y][x];
-        if (ch === '.') continue;
-        dc.fillStyle = DCOLS[ch];
-        dc.fillRect(x, y, 1, 1);
-      }
-    }
+    drawDino(dcv.getContext('2d') as CanvasRenderingContext2D, 1, 0, 0);
     const dino = $id('dino');
     $id('dinobub').addEventListener('pointerdown', () => { dino.style.display = 'none'; });
     dcv.addEventListener('pointerdown', () => { dino.style.display = 'none'; });
@@ -3566,6 +3861,7 @@ function boot(): void {
       OUTFIT_ST.piel = baseCol; // manos/cuello del color de la bola
       PLAYER = buildPlayer(scene, compositeCv, nombre);
       initPhysics();
+      connectNet(scene, nombre); // online si hay ?ws= configurado
       // BGM como el original: feria en el parque, calma adentro del estadio
       try {
         BGM_FAIR = new Audio(bgmFairUrl);
@@ -3739,7 +4035,11 @@ function boot(): void {
       precio.textContent = '🪙 colores 5 · sombreros 25 · anteojos 15 · bufandas 10';
       shopPanel.appendChild(precio);
       if (shop.id === 'shirts' || shop.id === 'customize') {
-        shopPanel.appendChild(swatchRow(PALETA, (c) => tryBuy(5, () => { OUTFIT_ST.remera = c; repaintOutfit(); })));
+        shopPanel.appendChild(swatchRow(PALETA, (c) => tryBuy(5, () => { OUTFIT_ST.remera = c; OUTFIT_ST.remeraPat = -1; repaintOutfit(); })));
+        shopPanel.appendChild(itemRow(['✕ liso', '〰 rayas', '➖ aros', '◧ mitades', '🌌 galaxy', '🔷 geo', '🌴 tropical'], (i) => tryBuy(i < 0 ? 0 : 15, () => {
+          OUTFIT_ST.remeraPat = i;
+          repaintOutfit();
+        })));
       } else if (shop.id === 'pants') {
         shopPanel.appendChild(swatchRow(PALETA, (c) => tryBuy(5, () => { OUTFIT_ST.pantalon = c; repaintOutfit(); })));
       } else if (shop.id === 'shoes') {
@@ -3782,7 +4082,10 @@ function boot(): void {
       for (const m of MALAS) { // filtro de lenguaje (mecánica del original)
         txt = txt.replace(new RegExp(m, 'gi'), '***');
       }
-      if (txt) showChat(scene, txt);
+      if (txt) {
+        showChat(scene, txt);
+        if (NETROOM) NETROOM.send('chat', txt);
+      }
       chatInput.value = '';
       chatBar.style.display = 'none';
     };
