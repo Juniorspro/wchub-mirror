@@ -1652,22 +1652,22 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const root = new TransformNode(`portal-${i}`, scene);
     root.position.set(px, 0, pz);
     root.rotation.y = Math.atan2(nx, nz); // +Z local hacia el campo
-    // marco de puerta: jambas + dintel + fondo oscuro
-    for (const sx of [-1.25, 1.25]) {
-      const jamb = MeshBuilder.CreateBox('portal-jamb', { width: 0.3, height: 3.5, depth: 0.5 }, scene);
+    // marco de puerta GRANDE (a escala de las tribunas): jambas + dintel + fondo
+    for (const sx of [-2.0, 2.0]) {
+      const jamb = MeshBuilder.CreateBox('portal-jamb', { width: 0.45, height: 5.5, depth: 0.6 }, scene);
       jamb.parent = root;
-      jamb.position.set(sx, 1.75, 0);
+      jamb.position.set(sx, 2.75, 0);
       jamb.material = stoneMat;
       jamb.isPickable = false;
     }
-    const lintel = MeshBuilder.CreateBox('portal-lintel', { width: 2.9, height: 0.35, depth: 0.55 }, scene);
+    const lintel = MeshBuilder.CreateBox('portal-lintel', { width: 4.6, height: 0.5, depth: 0.65 }, scene);
     lintel.parent = root;
-    lintel.position.set(0, 3.6, 0);
+    lintel.position.set(0, 5.75, 0);
     lintel.material = stdMat(scene, `portal-lintel-${i}`, '#e6c34a');
     lintel.isPickable = false;
-    const fondo = MeshBuilder.CreateBox('portal-fondo', { width: 2.3, height: 3.4, depth: 0.18 }, scene);
+    const fondo = MeshBuilder.CreateBox('portal-fondo', { width: 3.7, height: 5.4, depth: 0.18 }, scene);
     fondo.parent = root;
-    fondo.position.set(0, 1.7, -0.1);
+    fondo.position.set(0, 2.7, -0.1);
     fondo.material = stdMat(scene, 'portal-fondo-mat', '#15151c');
     fondo.isPickable = false;
     // cover del juego = la puerta en sí (tocable)
@@ -1677,10 +1677,10 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     cmat.emissiveTexture = ctex;
     cmat.emissiveColor = new Color3(0.42, 0.42, 0.42);
     cmat.specularColor = new Color3(0, 0, 0);
-    const puerta = MeshBuilder.CreatePlane(`portal-img-${i}`, { width: 2.1, height: 3.1 }, scene);
+    const puerta = MeshBuilder.CreatePlane(`portal-img-${i}`, { width: 3.4, height: 5.0 }, scene);
     puerta.parent = root;
-    puerta.rotation.y = Math.PI; // frente (-Z) hacia afuera
-    puerta.position.set(0, 1.72, 0.04);
+    puerta.rotation.y = Math.PI; // frente (-Z) hacia el campo
+    puerta.position.set(0, 2.72, 0.04);
     puerta.material = cmat;
     puerta.isPickable = true;
     puerta.metadata = { portalUrl: PORTALES[i].url, portalLabel: PORTALES[i].label };
@@ -1704,10 +1704,10 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     lmat.emissiveTexture = ltex;
     lmat.emissiveColor = new Color3(0.5, 0.5, 0.5);
     lmat.specularColor = new Color3(0, 0, 0);
-    const lplane = MeshBuilder.CreatePlane(`portal-label-pl-${i}`, { width: 2.7, height: 0.5 }, scene);
+    const lplane = MeshBuilder.CreatePlane(`portal-label-pl-${i}`, { width: 4.2, height: 0.78 }, scene);
     lplane.parent = root;
     lplane.rotation.y = Math.PI;
-    lplane.position.set(0, 4.1, 0.05);
+    lplane.position.set(0, 6.45, 0.05);
     lplane.material = lmat;
     lplane.isPickable = false;
   }
