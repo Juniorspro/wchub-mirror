@@ -1349,13 +1349,30 @@ function remoteFor(scene: Scene, id: string, name: string): Remote {
   return r;
 }
 function connectNet(scene: Scene, nombre: string): void {
+  // ONLINE AUTOMÁTICO al entrar. Resolución del endpoint (en orden):
+  //   1. ?ws=wss://...        (override manual)
+  //   2. localStorage maplab_ws
+  //   3. window.WCHUB_WS      (lo inyecta la app al hostear el HTML)
+  //   4. servido por http(s) → mismo host (patrón Worker del original)
+  //   5. file:// → ws://localhost:2567 (dev local)
   let url = '';
   try {
-    url = new URLSearchParams(location.search).get('ws') || localStorage.getItem('maplab_ws') || '';
+    url = new URLSearchParams(location.search).get('ws')
+      || localStorage.getItem('maplab_ws')
+      || ((window as unknown as Record<string, unknown>).WCHUB_WS as string)
+      || '';
   } catch { /* sin storage */ }
-  if (!url) return; // offline: el online se prende con ?ws= o maplab_ws
+  if (!url) {
+    if (location.protocol === 'http:' || location.protocol === 'https:') {
+      url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    } else {
+      url = 'ws://localhost:2567';
+    }
+  }
   try {
     const client = new ColyseusClient(url);
+    // joinOrCreate llena la sala "patio" que tenga lugar y si están todas
+    // completas (30 c/u) crea una nueva — matchmaking automático
     client.joinOrCreate('patio', { name: nombre }).then((room) => {
       NETROOM = room as ColyseusRoom;
       netSendState();

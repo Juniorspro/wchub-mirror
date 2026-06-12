@@ -18,7 +18,8 @@ interface Cached {
 }
 
 export class PatioRoom extends Room {
-  maxClients = 20; // mismo cap que el juego original
+  maxClients = 30; // salas de 30: joinOrCreate llena la que tenga lugar
+  // y el matchmaker de Colyseus crea una nueva cuando están completas
   private cache = new Map<string, Cached>();
 
   onCreate(): void {
