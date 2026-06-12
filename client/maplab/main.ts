@@ -1204,37 +1204,116 @@ interface Player {
 let PLAYER: Player | null = null;
 let LASTJ: Joints | null = null; // última pose construida (para el ragdoll)
 let PAUSED = false;
-// jugadores remotos (capsulita + nombre + globo) sincronizados a 10Hz
+// jugadores remotos de CUERPO ENTERO: figura + outfit + cara + anims
 interface Remote {
   root: TransformNode;
-  tx: number;
-  tz: number;
-  tyaw: number;
+  mesh: Mesh;
+  decal: Mesh;
+  decalPos: Float32Array;
+  outfitTex: DynamicTexture;
+  faceTex: DynamicTexture;
+  st: OutfitSt;
+  hat: TransformNode | null;
+  scarf: TransformNode | null;
   bubble: Mesh | null;
   bubbleTex: DynamicTexture | null;
   bubbleUntil: number;
+  tx: number; tz: number; tyaw: number;
+  sy: number; m: number; sit: number; sitAmt: number;
+  walkPh: number; emoIdx: number; emoStart: number;
 }
 const REMOTES = new Map<string, Remote>();
 let NETROOM: ColyseusRoom | null = null;
 let lastNetSend = 0;
+let NORM_SCRATCH: Float32Array | null = null;
+let BALL_OWN = false;
+let lastBallSend = 0;
+function netSendState(): void {
+  if (NETROOM) NETROOM.send('state', { outfit: OUTFIT_ST, name: (localStorage.getItem('maplab_name') || 'wacho') });
+}
+function netSendFace(): void {
+  if (!NETROOM || !FACECV) return;
+  // composito + anteojos a jpeg chico (viaja una vez)
+  const tmp = document.createElement('canvas');
+  tmp.width = 512;
+  tmp.height = 256;
+  const tc = tmp.getContext('2d') as CanvasRenderingContext2D;
+  tc.drawImage(FACECV, 0, 0, 512, 256);
+  NETROOM.send('face', { jpg: tmp.toDataURL('image/jpeg', 0.65) });
+}
 function remoteFor(scene: Scene, id: string, name: string): Remote {
   let r = REMOTES.get(id);
   if (r) return r;
   const root = new TransformNode('remote-' + id, scene);
-  // colores por hash del id
-  let hh = 0;
-  for (const ch of id) hh = (hh * 31 + ch.charCodeAt(0)) | 0;
-  const col = PALETA[Math.abs(hh) % PALETA.length];
-  const body = MeshBuilder.CreateCapsule('rem-body', { radius: 0.26, height: 1.05, tessellation: 10 }, scene);
-  body.parent = root;
-  body.position.y = 0.62;
-  body.material = stdMat(scene, 'rem-mat-' + id, col);
-  body.isPickable = false;
-  const head = MeshBuilder.CreateSphere('rem-head', { diameter: 0.5, segments: 10 }, scene);
-  head.parent = root;
-  head.position.y = 1.42;
-  head.material = stdMat(scene, 'rem-skin-' + id, '#e8b88f');
-  head.isPickable = false;
+  root.scaling.setAll(PSCALE);
+  // figura completa (mismos índices/uvs que el jugador)
+  buildFigure(J0());
+  const mesh = new Mesh('rem-fig-' + id, scene);
+  const vd = new VertexData();
+  vd.positions = new Float32Array(FIG.pos as Float32Array);
+  vd.indices = FIG.idx as Uint16Array;
+  const nor = new Float32Array(FIG.vc * 3);
+  VertexData.ComputeNormals(FIG.pos, FIG.idx, nor);
+  vd.normals = nor;
+  const meta = FIG.meta as number[];
+  const ouvs = new Float32Array(FIG.vc * 2);
+  for (let i = 0; i < FIG.vc; i++) {
+    const b = BANDS[meta[i * 3]] || BANDS[7];
+    ouvs[i * 2] = meta[i * 3 + 2] < 0 ? 0.5 : meta[i * 3 + 2] / 6.2832;
+    ouvs[i * 2 + 1] = b[0] + meta[i * 3 + 1] * (b[1] - b[0]);
+  }
+  vd.uvs = ouvs;
+  vd.applyToMesh(mesh, true);
+  const outfitTex = new DynamicTexture('rem-outfit-' + id, { width: 256, height: 512 }, scene, true);
+  const st: OutfitSt = { remera: '#f2f2ee', remeraPat: -1, pantalon: '#1d1d22', zapas: '#3dbf5a', piel: '#e8b88f', hat: -1, glasses: -1, scarf: -1 };
+  paintOutfitTexInto(outfitTex, st);
+  const mat = new StandardMaterial('rem-mat-' + id, scene);
+  mat.diffuseTexture = outfitTex;
+  mat.specularColor = new Color3(0.05, 0.05, 0.05);
+  mat.backFaceCulling = false;
+  mesh.material = mat;
+  mesh.parent = root;
+  mesh.isPickable = false;
+  mesh.alwaysSelectAsActiveMesh = true;
+  // decal de cara (carita default hasta que llegue la suya)
+  const decalPos = new Float32Array((DEC_U + 1) * (DEC_V + 1) * 3);
+  decalPositions(J0(), decalPos, DEC_U, DEC_V, DEC_PHI, DEC_T0, DEC_T1);
+  const dvd = new VertexData();
+  dvd.positions = decalPos;
+  const uvs2 = new Float32Array((DEC_U + 1) * (DEC_V + 1) * 2);
+  const didx2: number[] = [];
+  let k4 = 0;
+  for (let j = 0; j <= DEC_V; j++) {
+    for (let i = 0; i <= DEC_U; i++) {
+      uvs2[k4++] = i / DEC_U;
+      uvs2[k4++] = 1 - j / DEC_V;
+    }
+  }
+  for (let j = 0; j < DEC_V; j++) {
+    for (let i = 0; i < DEC_U; i++) {
+      const a = j * (DEC_U + 1) + i;
+      didx2.push(a, a + DEC_U + 1, a + 1, a + 1, a + DEC_U + 1, a + DEC_U + 2);
+    }
+  }
+  dvd.uvs = uvs2;
+  dvd.indices = didx2;
+  const decal = new Mesh('rem-cara-' + id, scene);
+  dvd.applyToMesh(decal, true);
+  const faceTex = new DynamicTexture('rem-face-' + id, { width: 1024, height: 512 }, scene, true);
+  const fc3 = faceTex.getContext() as unknown as CanvasRenderingContext2D;
+  fc3.fillStyle = '#e8b88f';
+  fc3.fillRect(0, 0, 1024, 512);
+  faceTex.update();
+  const dmat2 = new StandardMaterial('rem-face-mat-' + id, scene);
+  dmat2.diffuseTexture = faceTex;
+  dmat2.emissiveColor = new Color3(0.28, 0.28, 0.28);
+  dmat2.specularColor = new Color3(0, 0, 0);
+  dmat2.backFaceCulling = false;
+  decal.material = dmat2;
+  decal.parent = root;
+  decal.isPickable = false;
+  decal.alwaysSelectAsActiveMesh = true;
+  // nombre flotante
   const ntex = new DynamicTexture('rem-name-' + id, { width: 256, height: 64 }, scene, true);
   const nc2 = ntex.getContext() as unknown as CanvasRenderingContext2D;
   nc2.clearRect(0, 0, 256, 64);
@@ -1256,11 +1335,16 @@ function remoteFor(scene: Scene, id: string, name: string): Remote {
   nmat.backFaceCulling = false;
   const np = MeshBuilder.CreatePlane('rem-name-pl', { width: 1.3, height: 0.34 }, scene);
   np.parent = root;
-  np.position.y = 1.95;
+  np.position.y = 1.72;
   np.billboardMode = Mesh.BILLBOARDMODE_Y;
   np.material = nmat;
   np.isPickable = false;
-  r = { root, tx: 0, tz: 0, tyaw: 0, bubble: null, bubbleTex: null, bubbleUntil: 0 };
+  r = {
+    root, mesh, decal, decalPos, outfitTex, faceTex, st,
+    hat: null, scarf: null, bubble: null, bubbleTex: null, bubbleUntil: 0,
+    tx: 0, tz: 0, tyaw: 0, sy: 0, m: 0, sit: 0, sitAmt: 0,
+    walkPh: 0, emoIdx: -1, emoStart: -10,
+  };
   REMOTES.set(id, r);
   return r;
 }
@@ -1274,15 +1358,59 @@ function connectNet(scene: Scene, nombre: string): void {
     const client = new ColyseusClient(url);
     client.joinOrCreate('patio', { name: nombre }).then((room) => {
       NETROOM = room as ColyseusRoom;
-      room.onMessage('pos', (d: { id: string; x: number; z: number; yaw: number; name: string }) => {
+      netSendState();
+      netSendFace();
+      room.onMessage('pos', (d: { id: string; x: number; z: number; yaw: number; name: string; m: number; sy: number; sit: number; wph: number }) => {
         const r = remoteFor(scene, d.id, d.name || 'wacho');
         r.tx = d.x;
         r.tz = d.z;
         r.tyaw = d.yaw;
+        r.m = d.m || 0;
+        r.sy = d.sy || 0;
+        r.sit = d.sit || 0;
+        r.walkPh = d.wph || r.walkPh;
+      });
+      room.onMessage('state', (d: { id: string; outfit: OutfitSt; name: string }) => {
+        const r = remoteFor(scene, d.id, d.name || 'wacho');
+        Object.assign(r.st, d.outfit);
+        paintOutfitTexInto(r.outfitTex, r.st);
+        if (r.hat) { r.hat.dispose(false, true); r.hat = null; }
+        if (r.scarf) { r.scarf.dispose(false, true); r.scarf = null; }
+        r.hat = buildHatNode(scene, r.st.hat, r.root);
+        r.scarf = buildScarfNode(scene, r.st.scarf, r.root);
+      });
+      room.onMessage('face', (d: { id: string; jpg: string }) => {
+        const r = REMOTES.get(d.id);
+        if (!r) return;
+        const img = new Image();
+        img.onload = () => {
+          const c = r.faceTex.getContext() as unknown as CanvasRenderingContext2D;
+          c.save();
+          c.translate(0, 512);
+          c.scale(1, -1);
+          c.drawImage(img, 0, 0, 1024, 512);
+          c.restore();
+          r.faceTex.update(false);
+        };
+        img.src = d.jpg;
+      });
+      room.onMessage('emote', (d: { id: string; i: number }) => {
+        const r = REMOTES.get(d.id);
+        if (r) {
+          r.emoIdx = d.i;
+          r.emoStart = performance.now() / 1000;
+        }
       });
       room.onMessage('chat', (d: { id: string; txt: string }) => {
         const r = REMOTES.get(d.id);
         if (r) remoteBubble(scene, r, d.txt);
+      });
+      room.onMessage('ball', (d: { x: number; y: number; z: number; vx: number; vy: number; vz: number }) => {
+        if (BALLB) { // pelota COMPARTIDA: el que patea manda
+          BALLB.position.set(d.x, d.y, d.z);
+          BALLB.velocity.set(d.vx, d.vy, d.vz);
+          BALL_OWN = false;
+        }
       });
       room.onMessage('leave', (id: string) => {
         const r = REMOTES.get(id);
@@ -1307,7 +1435,7 @@ function remoteBubble(scene: Scene, r: Remote, txt: string): void {
     r.bubble = MeshBuilder.CreatePlane('rem-bub-pl', { width: 2.0, height: 0.62 }, scene);
     r.bubble.parent = r.root;
     r.bubble.billboardMode = Mesh.BILLBOARDMODE_ALL;
-    r.bubble.position.y = 2.4;
+    r.bubble.position.y = 2.05;
     r.bubble.material = m;
     r.bubble.isPickable = false;
   }
@@ -1451,9 +1579,9 @@ function patImg(idx: number, url: string): HTMLImageElement {
   }
   return PAT_IMGS[idx];
 }
-function paintOutfitTex(): void {
-  if (!OUTFIT_TEX) return;
-  const c = OUTFIT_TEX.getContext() as unknown as CanvasRenderingContext2D;
+type OutfitSt = { remera: string; remeraPat: number; pantalon: string; zapas: string; piel: string; hat: number; glasses: number; scarf: number };
+function paintOutfitTexInto(tex: DynamicTexture, st: OutfitSt): void {
+  const c = tex.getContext() as unknown as CanvasRenderingContext2D;
   const W = 256;
   const H = 512;
   // franja [v0,v1] → píxeles (v=1 arriba de la textura)
@@ -1463,49 +1591,49 @@ function paintOutfitTex(): void {
     c.fillStyle = col;
     c.fillRect(0, y, W, h);
   };
-  c.fillStyle = OUTFIT_ST.piel;
+  c.fillStyle = st.piel;
   c.fillRect(0, 0, W, H);
   // TORSO: estampado o color (el cuello t>=0.92 queda piel)
   const tb = BANDS[0];
   const tTop = tb[0] + 0.92 * (tb[1] - tb[0]);
   const [ty, th] = strip(tb[0], tTop);
-  if (OUTFIT_ST.remeraPat >= 3) { // assets reales del juego
+  if (st.remeraPat >= 3) { // assets reales del juego
     const urls = [shirtGalaxyUrl, shirtGeoUrl, shirtTropUrl];
-    const im = patImg(OUTFIT_ST.remeraPat, urls[OUTFIT_ST.remeraPat - 3]);
-    c.fillStyle = OUTFIT_ST.remera;
+    const im = patImg(st.remeraPat, urls[st.remeraPat - 3]);
+    c.fillStyle = st.remera;
     c.fillRect(0, ty, W, th);
     if (im.complete && im.naturalWidth > 0) c.drawImage(im, 0, ty, W, th);
-  } else if (OUTFIT_ST.remeraPat === 0) { // rayas verticales
+  } else if (st.remeraPat === 0) { // rayas verticales
     for (let i = 0; i < 8; i++) {
-      c.fillStyle = i % 2 === 0 ? OUTFIT_ST.remera : '#f4f1e6';
+      c.fillStyle = i % 2 === 0 ? st.remera : '#f4f1e6';
       c.fillRect(i * (W / 8), ty, W / 8, th);
     }
-  } else if (OUTFIT_ST.remeraPat === 1) { // aros horizontales
+  } else if (st.remeraPat === 1) { // aros horizontales
     for (let i = 0; i < 6; i++) {
-      c.fillStyle = i % 2 === 0 ? OUTFIT_ST.remera : '#f4f1e6';
+      c.fillStyle = i % 2 === 0 ? st.remera : '#f4f1e6';
       c.fillRect(0, ty + i * (th / 6), W, th / 6);
     }
-  } else if (OUTFIT_ST.remeraPat === 2) { // mitades
-    c.fillStyle = OUTFIT_ST.remera;
+  } else if (st.remeraPat === 2) { // mitades
+    c.fillStyle = st.remera;
     c.fillRect(0, ty, W / 2, th);
     c.fillStyle = '#f4f1e6';
     c.fillRect(W / 2, ty, W / 2, th);
   } else {
-    c.fillStyle = OUTFIT_ST.remera;
+    c.fillStyle = st.remera;
     c.fillRect(0, ty, W, th);
   }
   // MANGAS: t<0.30 de cada brazo con el color de la remera
   for (const part of [1, 2]) {
     const b = BANDS[part];
     const vS = b[0] + 0.30 * (b[1] - b[0]);
-    fill(b[0], vS, OUTFIT_ST.remera);
+    fill(b[0], vS, st.remera);
   }
   // PIERNAS pantalón, PIES zapas
-  fill(BANDS[3][0], BANDS[3][1], OUTFIT_ST.pantalon);
-  fill(BANDS[5][0], BANDS[5][1], OUTFIT_ST.pantalon);
-  fill(BANDS[4][0], BANDS[4][1], OUTFIT_ST.zapas);
-  fill(BANDS[6][0], BANDS[6][1], OUTFIT_ST.zapas);
-  OUTFIT_TEX.update();
+  fill(BANDS[3][0], BANDS[3][1], st.pantalon);
+  fill(BANDS[5][0], BANDS[5][1], st.pantalon);
+  fill(BANDS[4][0], BANDS[4][1], st.zapas);
+  fill(BANDS[6][0], BANDS[6][1], st.zapas);
+  tex.update();
 }
 let FACETEX: DynamicTexture | null = null;
 let FACECV: HTMLCanvasElement | null = null;
@@ -1885,9 +2013,13 @@ function hex2v3(h: string): [number, number, number] {
 function saveOutfit(): void {
   try { localStorage.setItem('maplab_outfit', JSON.stringify(OUTFIT_ST)); } catch { /* sin storage */ }
 }
+function paintOutfitTex(): void {
+  if (OUTFIT_TEX) paintOutfitTexInto(OUTFIT_TEX, OUTFIT_ST as OutfitSt);
+}
 function repaintOutfit(): void {
   paintOutfitTex();
   saveOutfit();
+  netSendState(); // el outfit viaja a los demás
 }
 // cara del jugador: el compuesto pintado en la bola mapea 1:1 + anteojos
 function paintPlayerFace(): void {
@@ -1923,13 +2055,10 @@ function paintPlayerFace(): void {
   FACETEX.update(false);
 }
 // sombreros procedurales (se siguen del marco de la cabeza por frame)
-function equipHat(scene: Scene, idx: number): void {
-  if (HATNODE) { HATNODE.dispose(false, true); HATNODE = null; }
-  OUTFIT_ST.hat = idx;
-  saveOutfit();
-  if (idx < 0 || !PLAYER) return;
+function buildHatNode(scene: Scene, idx: number, parent: TransformNode): TransformNode | null {
+  if (idx < 0) return null;
   const n = new TransformNode('hat', scene);
-  n.parent = PLAYER.root;
+  n.parent = parent;
   const col = ['#3a6ea5', '#1d1d22', '#9bd96b', '#e8c84a', '#e8c84a', '#c14444'][idx];
   const m = stdMat(scene, `hat-mat-${idx}`, col);
   const add = (mesh: Mesh, y: number, z = 0): Mesh => {
@@ -1964,15 +2093,20 @@ function equipHat(scene: Scene, idx: number): void {
     add(B.CreateSphere('h', { diameter: 0.34, segments: 10 }, scene), 0.03).scaling.set(1, 0.6, 1);
     add(B.CreateTorus('h', { diameter: 0.32, thickness: 0.05, tessellation: 16 }, scene), -0.03);
   }
-  HATNODE = n;
+  return n;
 }
-function equipScarf(scene: Scene, idx: number): void {
-  if (SCARFNODE) { SCARFNODE.dispose(false, true); SCARFNODE = null; }
-  OUTFIT_ST.scarf = idx;
+function equipHat(scene: Scene, idx: number): void {
+  if (HATNODE) { HATNODE.dispose(false, true); HATNODE = null; }
+  OUTFIT_ST.hat = idx;
   saveOutfit();
-  if (idx < 0 || !PLAYER) return;
+  netSendState();
+  if (!PLAYER) return;
+  HATNODE = buildHatNode(scene, idx, PLAYER.root);
+}
+function buildScarfNode(scene: Scene, idx: number, parent: TransformNode): TransformNode | null {
+  if (idx < 0) return null;
   const n = new TransformNode('scarf', scene);
-  n.parent = PLAYER.root;
+  n.parent = parent;
   const m = stdMat(scene, `scarf-mat-${idx}`, PALETA[(idx * 2 + 1) % PALETA.length]);
   const loop = MeshBuilder.CreateTorus('sc', { diameter: 0.27, thickness: 0.075, tessellation: 16 }, scene);
   loop.parent = n;
@@ -1983,7 +2117,15 @@ function equipScarf(scene: Scene, idx: number): void {
   tail.position.set(0.07, -0.15, -0.13);
   tail.material = m;
   tail.isPickable = false;
-  SCARFNODE = n;
+  return n;
+}
+function equipScarf(scene: Scene, idx: number): void {
+  if (SCARFNODE) { SCARFNODE.dispose(false, true); SCARFNODE = null; }
+  OUTFIT_ST.scarf = idx;
+  saveOutfit();
+  netSendState();
+  if (!PLAYER) return;
+  SCARFNODE = buildScarfNode(scene, idx, PLAYER.root);
 }
 // ragdoll: rotación del root + manoteo de extremidades
 function ragRotX(e: number): number {
@@ -2046,6 +2188,7 @@ function showEmote(scene: Scene, idx: number): void {
   (emoTex as DynamicTexture).update(false);
   EMOTE.start = performance.now() / 1000;
   EMOTE.type = idx; // 24 gestos únicos, uno por emoji
+  if (NETROOM) NETROOM.send('emote', idx); // el gesto lo ven todos
 }
 const PSCALE = 1.22; // personaje más grande
 const DEC_U = 48;
@@ -3109,6 +3252,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
               1.5 + sp * 0.45,
               nz2 * (2.4 + sp * 1.2) + PLAYER.vz * 0.6));
             lastKick = t;
+            BALL_OWN = true; // mi patada manda la pelota a la red
           }
           // GOL: la pelota entra al arco → suma el marcador de ese arco
           for (const g of GOALS) {
@@ -3224,17 +3368,63 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
           SCARFNODE.rotation.set(tiltX, 0, tiltZ);
         }
       }
-      // ONLINE: mando mi pos a 10Hz e interpolo a los demás
+      // ONLINE: pos+anim a 10Hz, remotos de CUERPO ENTERO animados
       if (NETROOM) {
         if (t - lastNetSend > 0.1) {
           lastNetSend = t;
-          NETROOM.send('pos', { x: PLAYER.root.position.x, z: PLAYER.root.position.z, yaw: PLAYER.yaw, name: (localStorage.getItem('maplab_name') || 'wacho') });
+          NETROOM.send('pos', {
+            x: PLAYER.root.position.x, z: PLAYER.root.position.z, yaw: PLAYER.yaw,
+            m: PLAYER.moveAmt, sy: JUMP.y, sit: SIT.amt > 0.5 ? 1 : 0, wph: PLAYER.walkPh,
+            name: (localStorage.getItem('maplab_name') || 'wacho'),
+          });
         }
+        // pelota compartida: el último que pateó es la autoridad
+        if (BALL_OWN && BALLB && t - lastBallSend > 0.1) {
+          lastBallSend = t;
+          NETROOM.send('ball', {
+            x: BALLB.position.x, y: BALLB.position.y, z: BALLB.position.z,
+            vx: BALLB.velocity.x, vy: BALLB.velocity.y, vz: BALLB.velocity.z,
+          });
+        }
+        if (!NORM_SCRATCH) NORM_SCRATCH = new Float32Array(FIG.vc * 3);
         for (const r of REMOTES.values()) {
           const k3 = Math.min(1, dt * 8);
           r.root.position.x += (r.tx - r.root.position.x) * k3;
           r.root.position.z += (r.tz - r.root.position.z) * k3;
-          r.root.rotation.y += (r.tyaw - r.root.rotation.y) * k3;
+          r.root.position.y += (r.sy - r.root.position.y) * k3;
+          let dY3 = r.tyaw - r.root.rotation.y;
+          while (dY3 > Math.PI) dY3 -= Math.PI * 2;
+          while (dY3 < -Math.PI) dY3 += Math.PI * 2;
+          r.root.rotation.y += dY3 * k3;
+          // su figura ENTERA: caminata/sentado/emote como la propia
+          r.walkPh += dt * (5.2 + 4.0 * r.m) * r.m;
+          r.sitAmt += (r.sit - r.sitAmt) * Math.min(1, dt * 6);
+          let Jr = poseCartoon(t, r.walkPh, r.m);
+          if (r.sitAmt > 0.01) {
+            Jr = mixJoints(Jr, poseSit(t), r.sitAmt);
+            Jr.pelvisY -= 0.085 * r.sitAmt;
+          }
+          const eT2 = t - r.emoStart;
+          if (r.emoIdx >= 0 && eT2 >= 0 && eT2 < 2.4) applyGesture(Jr, r.emoIdx, eT2, t);
+          buildFigure(Jr);
+          r.mesh.updateVerticesData('position', FIG.pos as Float32Array);
+          VertexData.ComputeNormals(FIG.pos, FIG.idx, NORM_SCRATCH);
+          r.mesh.updateVerticesData('normal', NORM_SCRATCH);
+          decalPositions(Jr, r.decalPos, DEC_U, DEC_V, DEC_PHI, DEC_T0, DEC_T1);
+          r.decal.updateVerticesData('position', r.decalPos);
+          if (r.hat || r.scarf) {
+            const hfr = headFrame(Jr);
+            const tX = Math.atan2(hfr.hax[2], hfr.hax[1]);
+            const tZ = -Math.atan2(hfr.hax[0], hfr.hax[1]);
+            if (r.hat) {
+              r.hat.position.set(hfr.neckTop[0] + hfr.hax[0] * 0.27, hfr.neckTop[1] + hfr.hax[1] * 0.27, hfr.neckTop[2] + hfr.hax[2] * 0.27);
+              r.hat.rotation.set(tX, Jr.headTurn * 0.5, tZ);
+            }
+            if (r.scarf) {
+              r.scarf.position.set(hfr.neckTop[0], hfr.neckTop[1] + 0.01, hfr.neckTop[2]);
+              r.scarf.rotation.set(tX, 0, tZ);
+            }
+          }
           if (r.bubble && t > r.bubbleUntil) r.bubble.isVisible = false;
         }
       }
