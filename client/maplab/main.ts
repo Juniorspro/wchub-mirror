@@ -54,6 +54,8 @@ import coverRacingUrl from '../src/assets/sprite/sprite_portal-cover-racing_c7b1
 import portraitUrl from '../src/assets/portrait/portrait_poster-worldcup-portrait_69e0b1.webp';
 // el humanoide esculpido del viewer (figlab) porteado: malla por frame
 import { FIG, buildFigure, J0, poseCartoon, poseSit, mixJoints, paintOutfit, decalPositions, headFrame, type Joints } from './figura';
+// física REAL (ragdoll + pelota): cannon-es
+import * as CANNON from 'cannon-es';
 
 // ─── Constantes del layout (portables a world.ts) ───────────────────────
 const RING_RADIUS = 17.5;        // radio del anillo de tiendas
@@ -325,8 +327,24 @@ function buildCancha(scene: Scene, cx: number, cz: number, woodMat: StandardMate
   circle.material = lineMat;
   circle.isPickable = false;
 
-  // arcos procedurales (mismas proporciones que el juego)
+  // arcos DE VERDAD: postes + travesaño + RED + marcador arriba
   const goalMat = stdMat(scene, 'cancha-goal', '#f4f4ee');
+  const netTex = new DynamicTexture('net-tex', { width: 128, height: 128 }, scene, true);
+  const nc2 = netTex.getContext() as unknown as CanvasRenderingContext2D;
+  nc2.clearRect(0, 0, 128, 128);
+  nc2.strokeStyle = 'rgba(244,244,238,0.95)';
+  nc2.lineWidth = 3;
+  for (let i = 0; i <= 8; i++) {
+    nc2.beginPath(); nc2.moveTo(i * 16, 0); nc2.lineTo(i * 16, 128); nc2.stroke();
+    nc2.beginPath(); nc2.moveTo(0, i * 16); nc2.lineTo(128, i * 16); nc2.stroke();
+  }
+  netTex.update();
+  netTex.hasAlpha = true;
+  const netMat = new StandardMaterial('net-mat', scene);
+  netMat.diffuseTexture = netTex;
+  netMat.emissiveColor = new Color3(0.35, 0.35, 0.35);
+  netMat.specularColor = new Color3(0, 0, 0);
+  netMat.backFaceCulling = false;
   for (const sign of [1, -1] as const) {
     const gz = cz + sign * (D / 2 + 0.4);
     const bar = MeshBuilder.CreateBox('goal-bar', { width: 5, height: 0.15, depth: 0.15 }, scene);
@@ -342,9 +360,50 @@ function buildCancha(scene: Scene, cx: number, cz: number, woodMat: StandardMate
         post.material = goalMat;
       }
     }
+    // RED: fondo + techo + costados (rejilla con alpha)
+    const nb = MeshBuilder.CreatePlane('net-back', { width: 5, height: 2.3 }, scene);
+    nb.position.set(cx, 1.15, gz + sign * 1.0);
+    nb.material = netMat;
+    nb.isPickable = false;
+    const nt = MeshBuilder.CreatePlane('net-top', { width: 5, height: 1.0 }, scene);
+    nt.position.set(cx, 2.28, gz + sign * 0.5);
+    nt.rotation.x = Math.PI / 2;
+    nt.material = netMat;
+    nt.isPickable = false;
+    for (const px of [-2.4, 2.4]) {
+      const ns = MeshBuilder.CreatePlane('net-side', { width: 1.0, height: 2.3 }, scene);
+      ns.position.set(cx + px, 1.15, gz + sign * 0.5);
+      ns.rotation.y = Math.PI / 2;
+      ns.material = netMat;
+      ns.isPickable = false;
+    }
+    // MARCADOR sobre el arco (se resetea cada 3 minutos)
+    const btex = new DynamicTexture(`board-${sign}`, { width: 256, height: 128 }, scene, true);
+    const bmat2 = new StandardMaterial(`board-mat-${sign}`, scene);
+    bmat2.diffuseTexture = btex;
+    bmat2.emissiveTexture = btex;
+    bmat2.emissiveColor = new Color3(0.55, 0.55, 0.55);
+    bmat2.specularColor = new Color3(0, 0, 0);
+    const bplane = MeshBuilder.CreatePlane(`board-${sign}`, { width: 2.6, height: 1.3 }, scene);
+    bplane.position.set(cx, 3.75, gz + sign * 0.9);
+    bplane.rotation.y = sign > 0 ? 0 : Math.PI; // de cara a la cancha
+    bplane.material = bmat2;
+    bplane.isPickable = false;
+    for (const px of [-1.0, 1.0]) {
+      const bpost = MeshBuilder.CreateCylinder('board-post', { diameter: 0.1, height: 1.0, tessellation: 8 }, scene);
+      bpost.position.set(cx + px, 2.75, gz + sign * 0.9);
+      bpost.material = goalMat;
+      bpost.isPickable = false;
+    }
+    const g: GoalBoard = { sign, score: 0, tex: btex, cool: false };
+    GOALS.push(g);
+    paintBoard(g);
   }
 
-  // pelota al centro: blanca con parches negros
+  // pelota PATEABLE: root sincronizado con el cuerpo físico
+  const ballRoot = new TransformNode('cancha-ball-root', scene);
+  ballRoot.position.set(cx + 1.2, 0.34, cz - 1.5);
+  BALLST = { root: ballRoot, home: { x: cx + 1.2, y: 0.45, z: cz - 1.5 } };
   const ballMat = stdMat(scene, 'cancha-ball', '#f4f4ee');
   const patchMat = stdMat(scene, 'cancha-ball-patch', '#1a1a1d');
   const ball = MeshBuilder.CreateSphere('cancha-ball', { diameter: 0.55, segments: 14 }, scene);
@@ -364,7 +423,9 @@ function buildCancha(scene: Scene, cx: number, cz: number, woodMat: StandardMate
     ));
     patch.material = patchMat;
     patch.isPickable = false;
+    patch.setParent(ballRoot);
   }
+  ball.setParent(ballRoot);
 
   // banderines de córner neón + banco de suplentes
   const cornerMat = neonMat(scene, 'corner-flag', '#ff4d6d');
@@ -1183,69 +1244,114 @@ const SHOPS: Array<{ x: number; z: number; id: string; nombre: string }> = [];
 let NEAR_SHOP: { x: number; z: number; id: string; nombre: string } | null = null;
 // salto + ragdoll FÍSICO (verlet: partículas + palitos, piso de verdad)
 const JUMP = { y: 0, vy: 0, active: false };
-interface RagP { x: number; y: number; z: number; px: number; py: number; pz: number; r: number }
-const RAGD = { on: false, t0: -10, P: [] as RagP[] };
+interface RagP { x: number; y: number; z: number; r: number; body: CANNON.Body | null }
+const RAGD = { on: false, t0: -10, P: [] as RagP[], cons: [] as CANNON.Constraint[] };
 const RAG_LINKS: Array<[number, number, number]> = [
   [0, 1, 0.40], [1, 2, 0.30],   // pelvis–pecho, pecho–cabeza
   [0, 3, 0.50], [0, 4, 0.50],   // pelvis–pies
   [1, 5, 0.42], [1, 6, 0.42],   // pecho–manos
   [3, 4, 0.26], [5, 6, 0.55],   // separaciones
 ];
+// mundo cannon compartido (ragdoll + pelota); se crea al entrar al juego
+let PHYS: CANNON.World | null = null;
+let PHYS_MAT: CANNON.Material | null = null;
+function initPhysics(): void {
+  if (PHYS) return;
+  PHYS = new CANNON.World({ gravity: new CANNON.Vec3(0, -13, 0) });
+  PHYS_MAT = new CANNON.Material('suelo');
+  PHYS.defaultContactMaterial.friction = 0.35;
+  PHYS.defaultContactMaterial.restitution = 0.42;
+  const ground = new CANNON.Body({ mass: 0, shape: new CANNON.Plane(), material: PHYS_MAT });
+  ground.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+  PHYS.addBody(ground);
+}
 function ragStart(vx: number, vz: number): void {
-  if (!PLAYER) return;
+  if (!PLAYER || !PHYS) return;
+  ragClear();
   const p = PLAYER.root.position;
   const yaw = PLAYER.yaw;
   const fx = Math.sin(yaw);
   const fz = Math.cos(yaw);
-  const mk = (ox: number, y: number, oz: number, r: number, kick: number): RagP => ({
-    x: p.x + ox, y: y + JUMP.y, z: p.z + oz, r,
-    px: p.x + ox - vx * 0.04 - fx * kick * 0.03,
-    py: y + JUMP.y - 0.015,
-    pz: p.z + oz - vz * 0.04 - fz * kick * 0.03,
-  });
-  RAGD.P = [
-    mk(0, 0.60, 0, 0.15, 0.2),
-    mk(fx * 0.02, 1.00, fz * 0.02, 0.15, 0.8),
-    mk(fx * 0.04, 1.28, fz * 0.04, 0.16, 1.3),
-    mk(-fz * 0.10, 0.08, fx * 0.10, 0.07, -0.4),
-    mk(fz * 0.10, 0.08, -fx * 0.10, 0.07, -0.4),
-    mk(-fz * 0.30, 0.95, fx * 0.30, 0.07, 1.0),
-    mk(fz * 0.30, 0.95, -fx * 0.30, 0.07, 1.0),
+  const defs: Array<[number, number, number, number, number, number]> = [
+    // [ox, y, oz, radio, masa, patada]
+    [0, 0.60, 0, 0.15, 3, 0.4],
+    [fx * 0.02, 1.00, fz * 0.02, 0.15, 3, 1.2],
+    [fx * 0.04, 1.28, fz * 0.04, 0.16, 2, 1.8],
+    [-fz * 0.10, 0.10, fx * 0.10, 0.07, 1, -0.5],
+    [fz * 0.10, 0.10, -fx * 0.10, 0.07, 1, -0.5],
+    [-fz * 0.30, 0.95, fx * 0.30, 0.07, 0.8, 1.4],
+    [fz * 0.30, 0.95, -fx * 0.30, 0.07, 0.8, 1.4],
   ];
+  RAGD.P = defs.map(([ox, y, oz, r, mass, kick]) => {
+    const body = new CANNON.Body({
+      mass,
+      shape: new CANNON.Sphere(r),
+      position: new CANNON.Vec3(p.x + ox, y + JUMP.y + 0.05, p.z + oz),
+      velocity: new CANNON.Vec3(vx * 1.4 + fx * kick, 1.6 + kick * 0.8, vz * 1.4 + fz * kick),
+      linearDamping: 0.25,
+      angularDamping: 0.4,
+      material: PHYS_MAT as CANNON.Material,
+    });
+    (PHYS as CANNON.World).addBody(body);
+    return { x: p.x + ox, y: y + JUMP.y, z: p.z + oz, r, body };
+  });
+  RAGD.cons = RAG_LINKS.map(([a, b, L]) => {
+    const c = new CANNON.DistanceConstraint(
+      RAGD.P[a].body as CANNON.Body, RAGD.P[b].body as CANNON.Body, L, 90);
+    (PHYS as CANNON.World).addConstraint(c);
+    return c;
+  });
   RAGD.on = true;
   RAGD.t0 = performance.now() / 1000;
 }
-function ragStep(dt: number): void {
-  const sub = Math.min(dt, 0.033);
-  const G = 13;
+function ragClear(): void {
+  if (!PHYS) return;
+  for (const c of RAGD.cons) PHYS.removeConstraint(c);
+  for (const q of RAGD.P) if (q.body) PHYS.removeBody(q.body);
+  RAGD.cons = [];
+  RAGD.P = [];
+}
+function ragSync(): void {
   for (const q of RAGD.P) {
-    const nx = q.x + (q.x - q.px) * 0.985;
-    const ny = q.y + (q.y - q.py) * 0.985 - G * sub * sub;
-    const nz = q.z + (q.z - q.pz) * 0.985;
-    q.px = q.x; q.py = q.y; q.pz = q.z;
-    q.x = nx; q.y = ny; q.z = nz;
-    if (q.y < q.r) { // PISO: nadie lo atraviesa — rebote + fricción
-      const vy = q.y - q.py;
-      q.y = q.r;
-      q.py = q.y + vy * 0.35;
-      q.px = q.x - (q.x - q.px) * 0.55;
-      q.pz = q.z - (q.z - q.pz) * 0.55;
-    }
+    if (!q.body) continue;
+    q.x = q.body.position.x;
+    q.y = q.body.position.y;
+    q.z = q.body.position.z;
   }
-  for (let it = 0; it < 3; it++) {
-    for (const [a, b, L] of RAG_LINKS) {
-      const A = RAGD.P[a];
-      const B = RAGD.P[b];
-      let dx = B.x - A.x;
-      let dy = B.y - A.y;
-      let dz = B.z - A.z;
-      const d = Math.hypot(dx, dy, dz) || 1;
-      const corr = (d - L) / d / 2;
-      dx *= corr; dy *= corr; dz *= corr;
-      A.x += dx; A.y += dy; A.z += dz;
-      B.x -= dx; B.y -= dy; B.z -= dz;
-    }
-  }
+}
+// pelota pateable + arcos con marcador (reset cada 3 minutos)
+let BALLST: { root: TransformNode; home: { x: number; y: number; z: number } } | null = null;
+let BALLB: CANNON.Body | null = null;
+interface GoalBoard { sign: 1 | -1; score: number; tex: DynamicTexture; cool: boolean }
+const GOALS: GoalBoard[] = [];
+let SCORE_RESET_AT = Infinity;
+let lastKick = 0;
+let lastBoardT = 0;
+function paintBoard(g: GoalBoard): void {
+  const c = g.tex.getContext() as unknown as CanvasRenderingContext2D;
+  c.fillStyle = '#10204a';
+  c.fillRect(0, 0, 256, 128);
+  c.strokeStyle = '#ffd34d';
+  c.lineWidth = 6;
+  c.strokeRect(3, 3, 250, 122);
+  c.fillStyle = '#ffffff';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.font = '800 64px Inter, system-ui, sans-serif';
+  c.fillText(String(g.score), 128, 52);
+  const rem = Math.max(0, SCORE_RESET_AT - performance.now() / 1000);
+  const mm = Math.floor(rem / 60);
+  const ss = Math.floor(rem % 60);
+  c.font = '600 26px Inter, system-ui, sans-serif';
+  c.fillStyle = '#ffd34d';
+  c.fillText('⏱ ' + mm + ':' + String(ss).padStart(2, '0'), 128, 102);
+  g.tex.update();
+}
+function resetBall(): void {
+  if (!BALLB || !BALLST) return;
+  BALLB.position.set(BALLST.home.x, BALLST.home.y, BALLST.home.z);
+  BALLB.velocity.set(0, 0, 0);
+  BALLB.angularVelocity.set(0, 0, 0);
 }
 // colisiones del mapa (círculos) + luces para día/noche
 const COLLIDERS: Array<{ x: number; z: number; r: number }> = [];
@@ -2162,8 +2268,54 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         J.shAbdL += 0.9 * air;
         J.shAbdR += 0.9 * air;
       }
+      if (PHYS) {
+        PHYS.step(1 / 60, Math.min(dt, 0.05), 3);
+        if (BALLB && BALLST) {
+          BALLST.root.position.set(BALLB.position.x, BALLB.position.y, BALLB.position.z);
+          if (!BALLST.root.rotationQuaternion) BALLST.root.rotationQuaternion = new Quaternion();
+          BALLST.root.rotationQuaternion.set(BALLB.quaternion.x, BALLB.quaternion.y, BALLB.quaternion.z, BALLB.quaternion.w);
+          // PATEAR: pasás por encima y sale disparada
+          const kdx = BALLB.position.x - PLAYER.root.position.x;
+          const kdz = BALLB.position.z - PLAYER.root.position.z;
+          const kd = Math.hypot(kdx, kdz);
+          if (kd < 0.85 && t - lastKick > 0.35 && !RAGD.on) {
+            const sp = Math.hypot(PLAYER.vx, PLAYER.vz);
+            const nx2 = kd > 0.01 ? kdx / kd : Math.sin(PLAYER.yaw);
+            const nz2 = kd > 0.01 ? kdz / kd : Math.cos(PLAYER.yaw);
+            BALLB.applyImpulse(new CANNON.Vec3(
+              nx2 * (2.4 + sp * 1.2) + PLAYER.vx * 0.6,
+              1.5 + sp * 0.45,
+              nz2 * (2.4 + sp * 1.2) + PLAYER.vz * 0.6));
+            lastKick = t;
+          }
+          // GOL: la pelota entra al arco → suma el marcador de ese arco
+          for (const g of GOALS) {
+            const gz = CANCHA.z + g.sign * 13.4;
+            const inX = Math.abs(BALLB.position.x - CANCHA.x) < 2.35;
+            const inZ = g.sign > 0
+              ? BALLB.position.z > gz - 0.05 && BALLB.position.z < gz + 1.15
+              : BALLB.position.z < gz + 0.05 && BALLB.position.z > gz - 1.15;
+            if (!g.cool && inX && inZ && BALLB.position.y < 2.2) {
+              g.score++;
+              g.cool = true;
+              paintBoard(g);
+              setTimeout(() => { resetBall(); g.cool = false; }, 900);
+            }
+          }
+          if (Math.abs(BALLB.position.x - CANCHA.x) > 16 || Math.abs(BALLB.position.z - CANCHA.z) > 22) resetBall();
+        }
+        // reset de marcadores cada 3 minutos + countdown vivo
+        if (t > SCORE_RESET_AT) {
+          SCORE_RESET_AT = t + 180;
+          for (const g of GOALS) { g.score = 0; paintBoard(g); }
+        }
+        if (t - lastBoardT > 1) {
+          lastBoardT = t;
+          for (const g of GOALS) paintBoard(g);
+        }
+      }
       if (ragOn) {
-        ragStep(dt);
+        ragSync();
         ragdollJ(J, Math.min(ragE, 2.1), t); // manoteo de extremidades
         const P0 = RAGD.P[0];
         const P1 = RAGD.P[1];
@@ -2187,7 +2339,10 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
           rx *= k; rz *= k; pyy *= k;
           ppx = ppx + (PLAYER.root.position.x - ppx) * (1 - k);
           ppz = ppz + (PLAYER.root.position.z - ppz) * (1 - k);
-          if (u >= 1) RAGD.on = false;
+          if (u >= 1) {
+            RAGD.on = false;
+            ragClear();
+          }
         }
         PLAYER.root.rotation.x = rx;
         PLAYER.root.rotation.z = rz;
@@ -2614,6 +2769,20 @@ function boot(): void {
       cctx.drawImage(strokesCv, 0, 0);
       OUTFIT_ST.piel = baseCol; // manos/cuello del color de la bola
       PLAYER = buildPlayer(scene, compositeCv, nombre);
+      initPhysics();
+      if (BALLST && !BALLB) {
+        BALLB = new CANNON.Body({
+          mass: 1.1,
+          shape: new CANNON.Sphere(0.28),
+          position: new CANNON.Vec3(BALLST.home.x, BALLST.home.y, BALLST.home.z),
+          linearDamping: 0.35,
+          angularDamping: 0.35,
+          material: PHYS_MAT as CANNON.Material,
+        });
+        (PHYS as CANNON.World).addBody(BALLB);
+      }
+      SCORE_RESET_AT = performance.now() / 1000 + 180;
+      for (const g of GOALS) paintBoard(g);
       engine2.stopRenderLoop();
       engine2.dispose();
       $id('intro').style.display = 'none';
