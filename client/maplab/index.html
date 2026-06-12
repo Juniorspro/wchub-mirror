@@ -247,6 +247,10 @@
       touch-action: none; max-width: 86vw;
     }
     #shoppanel { bottom: calc(env(safe-area-inset-bottom, 0px) + 150px); }
+    #shoppanel.panel-center {
+      left: 50%; top: 50%; right: auto; bottom: auto;
+      transform: translate(-50%, -50%); max-height: 86vh; overflow-y: auto;
+    }
     #emopanel  { bottom: calc(env(safe-area-inset-bottom, 0px) + 86px); grid-template-columns: repeat(6, 44px); gap: 6px; }
     .shoptitle { margin-bottom: 9px; letter-spacing: 0.08em; color: var(--accent); }
     .swrow { display: flex; flex-wrap: wrap; gap: 7px; max-width: 280px; }
@@ -298,6 +302,9 @@
       <div class="mopt"><span id="lgfx">Gráficos</span>
         <div id="gfxopt" class="seg"><b data-g="0" class="on">Clásico</b><b data-g="1">PBR</b><b data-g="2">RTX</b></div>
       </div>
+      <div class="mopt"><span id="lsha">Sombras</span>
+        <div id="shaopt" class="seg"><b data-s="512">Baja</b><b data-s="1024" class="on">Media</b><b data-s="2048">Alta</b></div>
+      </div>
       <div class="mopt" id="paintrow" style="justify-content:center;cursor:pointer">
         <span id="paintbtn">🎨 pintá tu propia cara</span>
       </div>
@@ -316,6 +323,9 @@
       </div>
       <div class="mopt"><span id="plgfx">Gráficos</span>
         <div id="pgfxopt" class="seg"><b data-g="0" class="on">Clásico</b><b data-g="1">PBR</b><b data-g="2">RTX</b></div>
+      </div>
+      <div class="mopt"><span id="plsha">Sombras</span>
+        <div id="pshaopt" class="seg"><b data-s="512">Baja</b><b data-s="1024" class="on">Media</b><b data-s="2048">Alta</b></div>
       </div>
       <div class="pbtn primary" id="presume">▶ Reanudar</div>
       <div class="pbtn" id="pexit">↩ Salir al menú</div>

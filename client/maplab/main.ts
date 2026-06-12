@@ -2927,7 +2927,7 @@ function boot(): void {
     const I18N: Record<string, Record<string, string>> = {
       es: {
         play: 'JUGAR', lang: 'Idioma', res: 'Resolución', low: 'Baja', med: 'Media', high: 'Alta',
-        gfx: 'Gráficos', classic: 'Clásico', paint: '🎨 pintá tu propia cara',
+        gfx: 'Gráficos', classic: 'Clásico', shadows: 'Sombras', paint: '🎨 pintá tu propia cara',
         isub: 'pintá tu cabeza en la bola 3D<br/>(girala con el 🔄) y poné tu nombre',
         isubName: 'poné tu nombre y entrá<br/>(la cara la podés pintar desde el menú)',
         name: 'tu nombre…', enter: 'ENTRAR AL PATIO',
@@ -2941,7 +2941,7 @@ function boot(): void {
       },
       en: {
         play: 'PLAY', lang: 'Language', res: 'Resolution', low: 'Low', med: 'Medium', high: 'High',
-        gfx: 'Graphics', classic: 'Classic', paint: '🎨 paint your own face',
+        gfx: 'Graphics', classic: 'Classic', shadows: 'Shadows', paint: '🎨 paint your own face',
         isub: 'paint your head on the 3D ball<br/>(spin it with 🔄) and type your name',
         isubName: 'type your name and jump in<br/>(you can paint your face from the menu)',
         name: 'your name…', enter: 'ENTER THE PLAZA',
@@ -2955,7 +2955,7 @@ function boot(): void {
       },
       pt: {
         play: 'JOGAR', lang: 'Idioma', res: 'Resolução', low: 'Baixa', med: 'Média', high: 'Alta',
-        gfx: 'Gráficos', classic: 'Clássico', paint: '🎨 pinte seu próprio rosto',
+        gfx: 'Gráficos', classic: 'Clássico', shadows: 'Sombras', paint: '🎨 pinte seu próprio rosto',
         isub: 'pinte sua cabeça na bola 3D<br/>(gire com o 🔄) e digite seu nome',
         isubName: 'digite seu nome e entre<br/>(você pode pintar o rosto no menu)',
         name: 'seu nome…', enter: 'ENTRAR NO PÁTIO',
@@ -2982,6 +2982,12 @@ function boot(): void {
       resBs[1].textContent = T('med');
       resBs[2].textContent = T('high');
       (document.querySelectorAll('#gfxopt b')[0] as HTMLElement).textContent = T('classic'); // PBR y RTX son marcas fijas
+      $id('lsha').textContent = T('shadows');
+      const plsha = document.getElementById('plsha');
+      if (plsha) plsha.textContent = T('shadows');
+      document.querySelectorAll('#shaopt b, #pshaopt b').forEach((el, i) => {
+        el.textContent = [T('low'), T('med'), T('high')][i % 3];
+      });
       $id('iname').setAttribute('placeholder', T('name'));
       $id('ienter').textContent = T('enter');
       $id('dinobub').innerHTML = T('dino');
@@ -3052,6 +3058,8 @@ function boot(): void {
     //        rayos de sol volumétricos + puntos de luz en faroles + bloom bajito
     let pipeline: DefaultRenderingPipeline | null = null;
     let shadowGen: ShadowGenerator | null = null;
+    let SHADOWRES = 1024; // ajustable en Ajustes (vale en PBR y RTX)
+    let CURG = '0';
     let ssao: SSAO2RenderingPipeline | null = null;
     let godrays: VolumetricLightScatteringPostProcess | null = null;
     let lampLights: PointLight[] = [];
@@ -3101,12 +3109,13 @@ function boot(): void {
     };
     const setGraphics = (g: string): void => {
       gfxTeardown();
+      CURG = g;
       if (g === '1') { // PBR: lindo y liviano
         mkPipeline(0.22);
-        mkShadows(512, false, false);
+        mkShadows(SHADOWRES, false, false);
       } else if (g === '2') { // RTX: todos los chiches
         mkPipeline(0.10); // bloom no tan alto
-        mkShadows(2048, true, true);
+        mkShadows(SHADOWRES, true, true);
         ssao = new SSAO2RenderingPipeline('ssao', scene, 0.5, [cam0]);
         ssao.radius = 0.6;
         ssao.totalStrength = 1.1;
@@ -3143,6 +3152,14 @@ function boot(): void {
         document.querySelectorAll('#gfxopt b').forEach((x) => x.classList.remove('on'));
         el.classList.add('on');
         setGraphics((el as HTMLElement).dataset.g as string);
+      });
+    });
+    document.querySelectorAll('#shaopt b, #pshaopt b').forEach((el) => {
+      el.addEventListener('click', () => {
+        document.querySelectorAll('#shaopt b, #pshaopt b').forEach((x) => x.classList.remove('on'));
+        document.querySelectorAll(`#shaopt b[data-s="${(el as HTMLElement).dataset.s}"], #pshaopt b[data-s="${(el as HTMLElement).dataset.s}"]`).forEach((x) => x.classList.add('on'));
+        SHADOWRES = parseInt((el as HTMLElement).dataset.s as string, 10);
+        if (CURG !== '0') setGraphics(CURG); // regenera con la nueva resolución
       });
     });
     // reloj real: hora local del dispositivo YA, y la API por IP la refina
@@ -3590,7 +3607,10 @@ function boot(): void {
     // ─── tiendas: abrir y equipar (mecánica del original) ──────────────
     const shopBtn = $id('shopbtn');
     const shopPanel = $id('shoppanel');
-    const closeShop = (): void => { shopPanel.style.display = 'none'; };
+    const closeShop = (): void => {
+      shopPanel.style.display = 'none';
+      shopPanel.classList.remove('panel-center');
+    };
     const swatchRow = (cols: string[], pick: (c: string) => void): HTMLElement => {
       const row = document.createElement('div');
       row.className = 'swrow';
@@ -3624,6 +3644,7 @@ function boot(): void {
       return row;
     };
     const openShop = (shop: { id: string; nombre: string }): void => {
+      shopPanel.classList.remove('panel-center');
       shopPanel.innerHTML = '';
       const title = document.createElement('div');
       title.className = 'shoptitle';
@@ -3699,6 +3720,7 @@ function boot(): void {
     $id('betbtn').addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      shopPanel.classList.remove('panel-center');
       shopPanel.innerHTML = '';
       const title = document.createElement('div');
       title.className = 'shoptitle';
@@ -3807,6 +3829,7 @@ function boot(): void {
     $id('dicebtn').addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      shopPanel.classList.add('panel-center'); // en el medio de la pantalla
       shopPanel.innerHTML = '';
       const title = document.createElement('div');
       title.className = 'shoptitle';
