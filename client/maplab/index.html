@@ -154,8 +154,35 @@
       letter-spacing: 0.12em; cursor: pointer;
     }
     #ienter:disabled { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); cursor: not-allowed; }
+    /* ── monedas + chat + apuestas ── */
+    #coins {
+      position: fixed; top: calc(env(safe-area-inset-top, 0px) + 10px);
+      right: 14px; z-index: 11; display: none;
+      padding: 7px 14px; border-radius: 999px;
+      background: var(--glass); backdrop-filter: blur(12px);
+      border: 1px solid var(--line);
+      font: 700 13px/1 var(--font); color: var(--accent);
+      letter-spacing: 0.04em; transition: background 0.25s;
+    }
+    #coins.nofunds { background: rgba(193, 39, 45, 0.55); color: #fff; }
+    #chatbar {
+      position: fixed; left: 50%; transform: translateX(-50%); z-index: 15;
+      bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
+      display: none; gap: 8px; align-items: center;
+      background: var(--glass); backdrop-filter: blur(16px);
+      border: 1px solid var(--line); border-radius: 999px; padding: 8px 10px;
+      width: min(480px, 86vw);
+    }
+    #chatinput {
+      flex: 1; border: 0; outline: none; background: transparent;
+      color: var(--txt); font: 600 14px var(--font); padding: 4px 8px;
+    }
+    #chatsend {
+      border: 0; border-radius: 999px; background: var(--accent);
+      color: #14171f; font: 800 13px var(--font); padding: 9px 16px; cursor: pointer;
+    }
     /* ── botones de acción ── */
-    #sitbtn, #emobtn, #jumpbtn, #ragbtn, #shopbtn {
+    #sitbtn, #emobtn, #jumpbtn, #ragbtn, #shopbtn, #chatbtn, #betbtn {
       position: fixed; z-index: 12; display: none;
       width: 56px; height: 56px; border-radius: 50%;
       background: var(--glass); backdrop-filter: blur(12px);
@@ -170,6 +197,8 @@
     #ragbtn  { right: 148px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
     #sitbtn  { right: 16px;  bottom: calc(env(safe-area-inset-bottom, 0px) + 82px); font-size: 24px; }
     #shopbtn { right: 82px;  bottom: calc(env(safe-area-inset-bottom, 0px) + 82px); }
+    #chatbtn { right: 214px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+    #betbtn  { right: 148px; bottom: calc(env(safe-area-inset-bottom, 0px) + 82px); }
     #shoppanel, #emopanel {
       position: fixed; right: 12px; z-index: 14; display: none;
       background: var(--glass); backdrop-filter: blur(16px);
@@ -236,11 +265,15 @@
     <div id="mclock">🕒 …</div>
   </div>
   <div id="joy"><div id="knob"></div></div>
+  <div id="coins">🪙 0</div>
   <div id="sitbtn">🪑</div>
   <div id="emobtn">😀</div>
   <div id="jumpbtn">🦘</div>
   <div id="ragbtn">🤸</div>
   <div id="shopbtn">🛍</div>
+  <div id="chatbtn">💬</div>
+  <div id="betbtn">🎲</div>
+  <div id="chatbar"><input id="chatinput" maxlength="64" placeholder="decí algo…" /><button id="chatsend">➤</button></div>
   <div id="emopanel"></div>
   <div id="shoppanel"></div>
   <div id="dino">

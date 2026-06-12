@@ -1329,6 +1329,154 @@ function ragSync(): void {
     q.z = q.body.position.z;
   }
 }
+// RAGDOLL 100% físico: las articulaciones salen de los CUERPOS de
+// cannon por IK inversa de las fórmulas FK de la figura (cero animación)
+const _rv = new Vector3();
+function ragdollPose(invM: import('@babylonjs/core').Matrix): Joints {
+  const J = J0();
+  J.breath = 0.5;
+  const loc = (i: number): { x: number; y: number; z: number } => {
+    Vector3.TransformCoordinatesToRef(_rv.set(RAGD.P[i].x, RAGD.P[i].y, RAGD.P[i].z), invM, _rv);
+    return { x: _rv.x, y: _rv.y, z: _rv.z };
+  };
+  const clampA = (v: number, m: number): number => Math.max(-m, Math.min(m, v));
+  // brazos: dirección hombro→mano resuelve abd/fwd; el codo, por distancia
+  const arm = (s: 1 | -1, idx: number): void => {
+    const T = loc(idx);
+    const dx = T.x - s * 0.165;
+    const dy = T.y - 0.922;
+    const dz = T.z - (-0.01);
+    const d = Math.hypot(dx, dy, dz) || 1e-4;
+    const ux = dx / d;
+    const uy = dy / d;
+    const uz = dz / d;
+    const a1 = Math.asin(clampA(ux, 0.999));
+    const ca = Math.max(0.08, Math.cos(a1));
+    const f = Math.atan2(-uz / ca, -uy / ca);
+    const abd = clampA(a1 * s, 2.6);
+    const fwd = clampA(f, 2.6);
+    const elbow = (1 - Math.min(1, d / 0.40)) * 2.3;
+    if (s === 1) { J.shAbdL = abd; J.shFwdL = fwd; J.elbowL = elbow; }
+    else { J.shAbdR = abd; J.shFwdR = fwd; J.elbowR = elbow; }
+  };
+  arm(1, 5);
+  arm(-1, 6);
+  // piernas: cadera→pie resuelve hipFwd/hipAbd; rodilla por distancia
+  const leg = (s: 1 | -1, idx: number): void => {
+    const T = loc(idx);
+    const dx = T.x - s * 0.082;
+    const dy = T.y - 0.60;
+    const dz = T.z;
+    const d = Math.hypot(dx, dy, dz) || 1e-4;
+    const ux = dx / d;
+    const uy = dy / d;
+    const uz = dz / d;
+    const a1 = Math.asin(clampA(ux, 0.999));
+    const ca = Math.max(0.08, Math.cos(a1));
+    const f = Math.atan2(-uz / ca, -uy / ca);
+    const knee = (1 - Math.min(1, d / 0.53)) * 2.4;
+    if (s === 1) { J.hipAbdL = clampA(a1 * s, 1.4); J.hipFwdL = clampA(f, 2.2); J.kneeL = knee; }
+    else { J.hipAbdR = clampA(a1 * s, 1.4); J.hipFwdR = clampA(f, 2.2); J.kneeR = knee; }
+  };
+  leg(1, 3);
+  leg(-1, 4);
+  // cabeza: pecho→cabeza
+  const H = loc(2);
+  const hx = H.x;
+  const hy = H.y - 0.95;
+  const hz = H.z;
+  const hl = Math.hypot(hx, hy, hz) || 1e-4;
+  J.headNod = clampA(Math.atan2(hz / hl, Math.max(0.15, hy / hl)), 0.9);
+  J.headTilt = clampA(-Math.atan2(hx / hl, Math.max(0.15, hy / hl)), 0.8);
+  return J;
+}
+// ─── MONEDAS (como el original): se ganan con goles, se gastan en
+// tiendas y apuestas; persisten en localStorage ───────────────────────
+let COINS = 100;
+try { COINS = parseInt(localStorage.getItem('maplab_coins') || '100', 10); } catch { /* sin storage */ }
+function updCoins(): void {
+  const el = document.getElementById('coins');
+  if (el) el.textContent = '🪙 ' + COINS;
+  try { localStorage.setItem('maplab_coins', String(COINS)); } catch { /* ídem */ }
+}
+function flashCoins(): void {
+  const el = document.getElementById('coins');
+  if (!el) return;
+  el.classList.add('nofunds');
+  setTimeout(() => el.classList.remove('nofunds'), 600);
+}
+function tryBuy(price: number, fn: () => void): void {
+  if (price <= 0 || COINS >= price) {
+    COINS -= Math.max(0, price);
+    updCoins();
+    fn();
+  } else {
+    flashCoins();
+  }
+}
+// apuesta activa (fixture board)
+const BET = { active: false, team: '', amount: 0, resolveAt: 0 };
+// globo de chat sobre el jugador
+let chatPlane: Mesh | null = null;
+let chatTex: DynamicTexture | null = null;
+let chatUntil = 0;
+function showChat(scene: Scene, txt: string): void {
+  if (!PLAYER) return;
+  if (!chatPlane) {
+    chatTex = new DynamicTexture('chat-tex', { width: 512, height: 160 }, scene, true);
+    chatTex.hasAlpha = true;
+    const m = new StandardMaterial('chat-mat', scene);
+    m.diffuseTexture = chatTex;
+    m.emissiveColor = new Color3(1, 1, 1);
+    m.useAlphaFromDiffuseTexture = true;
+    m.disableLighting = true;
+    m.backFaceCulling = false;
+    chatPlane = MeshBuilder.CreatePlane('chat-plane', { width: 2.3, height: 0.72 }, scene);
+    chatPlane.parent = PLAYER.root;
+    chatPlane.billboardMode = Mesh.BILLBOARDMODE_ALL;
+    chatPlane.position.y = 2.45;
+    chatPlane.material = m;
+    chatPlane.isPickable = false;
+  }
+  const c = (chatTex as DynamicTexture).getContext() as unknown as CanvasRenderingContext2D;
+  c.save();
+  c.clearRect(0, 0, 512, 160);
+  c.translate(0, 160);
+  c.scale(1, -1);
+  // globo redondeado + colita
+  c.fillStyle = '#ffffff';
+  c.beginPath();
+  (c as CanvasRenderingContext2D & { roundRect: (x: number, y: number, w: number, h: number, r: number) => void }).roundRect(8, 8, 496, 116, 26);
+  c.fill();
+  c.beginPath();
+  c.moveTo(236, 122);
+  c.lineTo(276, 122);
+  c.lineTo(256, 152);
+  c.closePath();
+  c.fill();
+  c.fillStyle = '#1b2030';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.font = '600 34px Inter, system-ui, sans-serif';
+  // wrap simple a 2 líneas
+  const words = txt.split(' ');
+  let l1 = '';
+  let l2 = '';
+  for (const w of words) {
+    if (l2 === '' && c.measureText(l1 + ' ' + w).width < 440) l1 = (l1 + ' ' + w).trim();
+    else l2 = (l2 + ' ' + w).trim();
+  }
+  if (l2) {
+    c.fillText(l1, 256, 46, 460);
+    c.fillText(l2.length > 30 ? l2.slice(0, 29) + '…' : l2, 256, 90, 460);
+  } else {
+    c.fillText(l1, 256, 66, 460);
+  }
+  c.restore();
+  (chatTex as DynamicTexture).update(false);
+  chatPlane.isVisible = true;
+  chatUntil = performance.now() / 1000 + 5;
+}
 // pelota pateable + arcos con marcador (reset cada 3 minutos)
 let BALLST: { root: TransformNode; home: { x: number; y: number; z: number } } | null = null;
 let BALLB: CANNON.Body | null = null;
@@ -2327,6 +2475,9 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
               g.score++;
               g.cool = true;
               paintBoard(g);
+              COINS += 10; // ¡GOLAZO paga!
+              updCoins();
+              showChat(scene, '⚽ ¡GOLAZO! +10 🪙');
               setTimeout(() => { resetBall(); g.cool = false; }, 900);
             }
           }
@@ -2344,7 +2495,6 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       }
       if (ragOn) {
         ragSync();
-        ragdollJ(J, Math.min(ragE, 2.1), t); // manoteo de extremidades
         const P0 = RAGD.P[0];
         const P1 = RAGD.P[1];
         let ux = P1.x - P0.x;
@@ -2377,6 +2527,17 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         PLAYER.root.position.x = ppx;
         PLAYER.root.position.z = ppz;
         PLAYER.root.position.y = pyy;
+        // articulaciones desde la física (IK), mezcla al levantarse
+        if (RAGD.P.length === 7) { // (al final ragClear vacía los cuerpos)
+          PLAYER.root.computeWorldMatrix(true);
+          const invM = PLAYER.root.getWorldMatrix().clone().invert();
+          let ragJ = ragdollPose(invM);
+          if (ragE > 2.6) {
+            const u2 = Math.min(1, (ragE - 2.6) / 0.6);
+            ragJ = mixJoints(ragJ, J, u2 * u2 * (3 - 2 * u2));
+          }
+          J = ragJ;
+        }
       } else {
         PLAYER.root.rotation.x = 0;
         PLAYER.root.rotation.z = 0;
@@ -2415,6 +2576,25 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
           SCARFNODE.position.set(hf.neckTop[0], hf.neckTop[1] + 0.01, hf.neckTop[2]);
           SCARFNODE.rotation.set(tiltX, 0, tiltZ);
         }
+      }
+      // globo de chat: se esconde al vencer
+      if (chatPlane && t > chatUntil) chatPlane.isVisible = false;
+      // apuesta activa: se resuelve a los 45s (50/50, paga doble)
+      if (BET.active && t > BET.resolveAt) {
+        BET.active = false;
+        if (Math.random() < 0.5) {
+          COINS += BET.amount * 2;
+          updCoins();
+          showChat(scene, '🎲 ¡Ganó ' + BET.team + '! +' + (BET.amount * 2) + ' 🪙');
+        } else {
+          showChat(scene, '🎲 Perdió ' + BET.team + '… la próxima');
+        }
+      }
+      // fixture board cerca → botón de apostar
+      const betBtn = document.getElementById('betbtn');
+      if (betBtn) {
+        const nearBoard = Math.hypot(PLAYER.root.position.x - 28, PLAYER.root.position.z - 11) < 5;
+        betBtn.style.display = nearBoard && !BET.active ? 'flex' : 'none';
       }
       // tienda cercana → botón de abrir
       NEAR_SHOP = null;
@@ -3019,6 +3199,9 @@ function boot(): void {
       $id('emobtn').style.display = 'flex';
       $id('jumpbtn').style.display = 'flex';
       $id('ragbtn').style.display = 'flex';
+      $id('chatbtn').style.display = 'flex';
+      $id('coins').style.display = 'block';
+      updCoins();
       const cam = scene.activeCamera as ArcRotateCamera;
       cam.alpha = -Math.PI / 2;
       cam.beta = 1.22;
@@ -3155,22 +3338,27 @@ function boot(): void {
       title.className = 'shoptitle';
       title.textContent = '🛍 ' + shop.nombre;
       shopPanel.appendChild(title);
+      const precio = document.createElement('div');
+      precio.className = 'isub';
+      precio.style.cssText = 'opacity:0.65;margin-bottom:6px;font-size:11px';
+      precio.textContent = '🪙 colores 5 · sombreros 25 · anteojos 15 · bufandas 10';
+      shopPanel.appendChild(precio);
       if (shop.id === 'shirts' || shop.id === 'customize') {
-        shopPanel.appendChild(swatchRow(PALETA, (c) => { OUTFIT_ST.remera = c; repaintOutfit(); }));
+        shopPanel.appendChild(swatchRow(PALETA, (c) => tryBuy(5, () => { OUTFIT_ST.remera = c; repaintOutfit(); })));
       } else if (shop.id === 'pants') {
-        shopPanel.appendChild(swatchRow(PALETA, (c) => { OUTFIT_ST.pantalon = c; repaintOutfit(); }));
+        shopPanel.appendChild(swatchRow(PALETA, (c) => tryBuy(5, () => { OUTFIT_ST.pantalon = c; repaintOutfit(); })));
       } else if (shop.id === 'shoes') {
-        shopPanel.appendChild(swatchRow(PALETA.concat(['#3dbf5a']), (c) => { OUTFIT_ST.zapas = c; repaintOutfit(); }));
+        shopPanel.appendChild(swatchRow(PALETA.concat(['#3dbf5a']), (c) => tryBuy(5, () => { OUTFIT_ST.zapas = c; repaintOutfit(); })));
       } else if (shop.id === 'hats') {
-        shopPanel.appendChild(itemRow([T('remove'), '🧢 gorra', '🎩 galera', '🤕 vincha', '👒 piluso', '👑 corona', '🥶 beanie'], (i) => equipHat(scene, i)));
+        shopPanel.appendChild(itemRow([T('remove'), '🧢 gorra', '🎩 galera', '🤕 vincha', '👒 piluso', '👑 corona', '🥶 beanie'], (i) => tryBuy(i < 0 ? 0 : 25, () => equipHat(scene, i))));
       } else if (shop.id === 'glasses') {
-        shopPanel.appendChild(itemRow([T('remove'), '🕶 redondos', '😎 grandes', '🥽 deportivos', '🤓 cuadrados'], (i) => {
+        shopPanel.appendChild(itemRow([T('remove'), '🕶 redondos', '😎 grandes', '🥽 deportivos', '🤓 cuadrados'], (i) => tryBuy(i < 0 ? 0 : 15, () => {
           OUTFIT_ST.glasses = i;
           saveOutfit();
           paintPlayerFace();
-        }));
+        })));
       } else if (shop.id === 'scarves') {
-        shopPanel.appendChild(itemRow([T('remove'), '🧣 roja', '🧣 amarilla', '🧣 rosa', '🧣 violeta', '🧣 celeste', '🧣 naranja'], (i) => equipScarf(scene, i)));
+        shopPanel.appendChild(itemRow([T('remove'), '🧣 roja', '🧣 amarilla', '🧣 rosa', '🧣 violeta', '🧣 celeste', '🧣 naranja'], (i) => tryBuy(i < 0 ? 0 : 10, () => equipScarf(scene, i))));
       }
       const cls = document.createElement('div');
       cls.className = 'shopitem shopclose';
@@ -3187,6 +3375,61 @@ function boot(): void {
       e.preventDefault();
       e.stopPropagation();
       if (NEAR_SHOP) openShop(NEAR_SHOP);
+    });
+
+    // ─── chat con globo de texto ────────────────────────────────────────
+    const chatBtn = $id('chatbtn');
+    const chatBar = $id('chatbar');
+    const chatInput = $id('chatinput') as HTMLInputElement;
+    const sendChat = (): void => {
+      const txt = chatInput.value.trim();
+      if (txt) showChat(scene, txt);
+      chatInput.value = '';
+      chatBar.style.display = 'none';
+    };
+    chatBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      chatBar.style.display = chatBar.style.display === 'flex' ? 'none' : 'flex';
+      if (chatBar.style.display === 'flex') chatInput.focus();
+    });
+    $id('chatsend').addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      sendChat();
+    });
+    chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+
+    // ─── apuestas en el fixture board (paga doble, 50/50) ───────────────
+    $id('betbtn').addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      shopPanel.innerHTML = '';
+      const title = document.createElement('div');
+      title.className = 'shoptitle';
+      title.textContent = '🎲 PRODE · apostá 25 🪙 (paga 50)';
+      shopPanel.appendChild(title);
+      const equipos = ['ARG', 'BRA', 'GER', 'FRA', 'URU', 'MEX'];
+      shopPanel.appendChild(itemRow(['✕'].concat(equipos.map((e2) => '⚽ ' + e2)), (i) => {
+        if (i < 0) return;
+        tryBuy(25, () => {
+          BET.active = true;
+          BET.team = equipos[i];
+          BET.amount = 25;
+          BET.resolveAt = performance.now() / 1000 + 45;
+          showChat(scene, '🎲 25 🪙 a ' + BET.team + ' — en 45s sale');
+        });
+      }));
+      const cls = document.createElement('div');
+      cls.className = 'shopitem shopclose';
+      cls.textContent = T('close');
+      cls.addEventListener('pointerdown', (e3) => {
+        e3.preventDefault();
+        e3.stopPropagation();
+        closeShop();
+      });
+      shopPanel.appendChild(cls);
+      shopPanel.style.display = 'block';
     });
 
     // ─── teclado (desktop) ──────────────────────────────────────────────
