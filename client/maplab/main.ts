@@ -49,6 +49,9 @@ import cutStoneUrl from '../src/assets/sprite/sprite_tex-cut-stone_525147.webp';
 import turfUrl from '../src/assets/sprite/sprite_stadium-turf_f0a345.png';
 import crowdUrl from '../src/assets/sprite/sprite_stadium-crowd_1c49a4.png';
 import bannerUrl from '../src/assets/bg/bg_poster-worldcup-banner_e92888.webp';
+// música del original (loop de feria + calma de estadio, switch por zona)
+import bgmFairUrl from '../src/assets/bgm/bgm_bgm-fair-loop_2f7397.mp3';
+import bgmCalmUrl from '../src/assets/bgm/bgm_bgm-stadium-calm_060593.mp3';
 // carteles del juego original (covers de portales + lámina del mundial)
 import coverCardsUrl from '../src/assets/sprite/sprite_portal-cover-cards_abc1fd.webp';
 import coverDribblerUrl from '../src/assets/sprite/sprite_portal-cover-dribbler_3b541b.webp';
@@ -1194,6 +1197,8 @@ interface Player {
 let PLAYER: Player | null = null;
 let LASTJ: Joints | null = null; // última pose construida (para el ragdoll)
 let PAUSED = false;
+let BGM_FAIR: HTMLAudioElement | null = null;
+let BGM_CALM: HTMLAudioElement | null = null;
 const INPUT = { kx: 0, ky: 0, jx: 0, jy: 0 };
 // puertas-portal del estadio (hint de cercanía + pulso)
 const PORTAL_DOORS: Array<{ x: number; z: number; url: string; label: string; mat: StandardMaterial }> = [];
@@ -2237,6 +2242,74 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     }
   }
 
+  // ─── Anfiteatro (del original): 3 gradas en arco + escenario ─────────
+  const ANF = { x: -36, z: 26 };
+  COLLIDERS.push({ x: ANF.x, z: ANF.z, r: 7.5 });
+  for (let tier = 0; tier < 3; tier++) {
+    const rad = 4.6 + tier * 1.7;
+    const hh2 = 0.42 + tier * 0.38;
+    for (let s2 = 0; s2 < 7; s2++) {
+      const a2 = -Math.PI / 3 + (s2 / 6) * (Math.PI * 2 / 3) + Math.PI; // arco mirando al este
+      const gx = ANF.x + Math.cos(a2) * rad;
+      const gz = ANF.z + Math.sin(a2) * rad;
+      const grada = MeshBuilder.CreateBox('anf-grada', { width: 1.9, height: hh2, depth: 1.3 }, scene);
+      grada.position.set(gx, hh2 / 2, gz);
+      grada.rotation.y = Math.atan2(ANF.x - gx, ANF.z - gz);
+      grada.material = stoneMat;
+      grada.isPickable = false;
+      SHADOW_CASTERS.push(grada);
+    }
+  }
+  const anfStage = MeshBuilder.CreateDisc('anf-stage', { radius: 2.6, tessellation: 28 }, scene);
+  anfStage.rotation.x = Math.PI / 2;
+  anfStage.position.set(ANF.x + 1.2, 0.025, ANF.z);
+  const anfMat = stdMat(scene, 'anf-stage-mat', '#ffffff');
+  const anfTex = new Texture(flagstoneUrl, scene);
+  anfTex.uScale = 2.5;
+  anfTex.vScale = 2.5;
+  anfMat.diffuseTexture = anfTex;
+  anfStage.material = anfMat;
+  anfStage.isPickable = false;
+
+  // ─── Photo spot (del original): marco de foto + disco ───────────────
+  const PHO = { x: 50, z: 22 };
+  COLLIDERS.push({ x: PHO.x, z: PHO.z, r: 1.3 });
+  const phoDisc = MeshBuilder.CreateDisc('pho-disc', { radius: 2.2, tessellation: 24 }, scene);
+  phoDisc.rotation.x = Math.PI / 2;
+  phoDisc.position.set(PHO.x, 0.025, PHO.z);
+  phoDisc.material = anfMat;
+  phoDisc.isPickable = false;
+  for (const sx of [-1.3, 1.3]) {
+    const pp = MeshBuilder.CreateCylinder('pho-post', { diameter: 0.16, height: 2.6, tessellation: 8 }, scene);
+    pp.position.set(PHO.x + sx, 1.3, PHO.z);
+    pp.material = woodDarkMat;
+    pp.isPickable = false;
+  }
+  const phoTop = MeshBuilder.CreateBox('pho-top', { width: 2.9, height: 0.16, depth: 0.16 }, scene);
+  phoTop.position.set(PHO.x, 2.5, PHO.z);
+  phoTop.material = woodDarkMat;
+  phoTop.isPickable = false;
+  const phoTex = new DynamicTexture('pho-tex', { width: 256, height: 64 }, scene, true);
+  const ph2 = phoTex.getContext() as unknown as CanvasRenderingContext2D;
+  ph2.fillStyle = '#e8c84a';
+  ph2.fillRect(0, 0, 256, 64);
+  ph2.fillStyle = '#10204a';
+  ph2.textAlign = 'center';
+  ph2.textBaseline = 'middle';
+  ph2.font = '800 36px Inter, system-ui, sans-serif';
+  ph2.fillText('📸 PHOTO SPOT', 128, 34);
+  phoTex.update();
+  const phoMat2 = new StandardMaterial('pho-sign-mat', scene);
+  phoMat2.diffuseTexture = phoTex;
+  phoMat2.emissiveTexture = phoTex;
+  phoMat2.emissiveColor = new Color3(0.5, 0.5, 0.5);
+  phoMat2.specularColor = new Color3(0, 0, 0);
+  phoMat2.backFaceCulling = false;
+  const phoSign = MeshBuilder.CreatePlane('pho-sign', { width: 2.4, height: 0.55 }, scene);
+  phoSign.position.set(PHO.x, 2.95, PHO.z);
+  phoSign.material = phoMat2;
+  phoSign.isPickable = false;
+
   // ─── Picnic (como el plot del original): mantel a cuadros + canasta ──
   const picTex = new DynamicTexture('picnic-tex', { width: 128, height: 128 }, scene, true);
   const pc2 = picTex.getContext() as unknown as CanvasRenderingContext2D;
@@ -2840,6 +2913,15 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
           SCARFNODE.position.set(hf.neckTop[0], hf.neckTop[1] + 0.01, hf.neckTop[2]);
           SCARFNODE.rotation.set(tiltX, 0, tiltZ);
         }
+      }
+      // BGM: crossfade feria ↔ estadio según dónde estés
+      if (BGM_FAIR && BGM_CALM) {
+        const exb = (PLAYER.root.position.x - ESTADIO.x) / EST_A;
+        const ezb = (PLAYER.root.position.z - ESTADIO.z) / EST_B;
+        const adentro = exb * exb + ezb * ezb < 1;
+        const k2 = Math.min(1, dt * 1.2);
+        BGM_FAIR.volume += ((adentro ? 0 : 0.5) - BGM_FAIR.volume) * k2;
+        BGM_CALM.volume += ((adentro ? 0.5 : 0) - BGM_CALM.volume) * k2;
       }
       // globo de chat: se esconde al vencer
       if (chatPlane && t > chatUntil) chatPlane.isVisible = false;
@@ -3484,6 +3566,17 @@ function boot(): void {
       OUTFIT_ST.piel = baseCol; // manos/cuello del color de la bola
       PLAYER = buildPlayer(scene, compositeCv, nombre);
       initPhysics();
+      // BGM como el original: feria en el parque, calma adentro del estadio
+      try {
+        BGM_FAIR = new Audio(bgmFairUrl);
+        BGM_FAIR.loop = true;
+        BGM_FAIR.volume = 0.5;
+        BGM_FAIR.play().catch(() => { /* autoplay bloqueado */ });
+        BGM_CALM = new Audio(bgmCalmUrl);
+        BGM_CALM.loop = true;
+        BGM_CALM.volume = 0;
+        BGM_CALM.play().catch(() => { /* ídem */ });
+      } catch { /* sin audio */ }
       if (BALLST && !BALLB) {
         BALLB = new CANNON.Body({
           mass: 1.1,
@@ -3504,7 +3597,6 @@ function boot(): void {
       $id('joy').style.display = 'block';
       $id('emobtn').style.display = 'flex';
       $id('jumpbtn').style.display = 'flex';
-      $id('ragbtn').style.display = 'flex';
       $id('chatbtn').style.display = 'flex';
       $id('coins').style.display = 'block';
       $id('pausebtn').style.display = 'flex';
@@ -3595,15 +3687,6 @@ function boot(): void {
         JUMP.vy = 5.4;
       }
     });
-    const rb = $id('ragbtn');
-    rb.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!RAGD.on && SIT.target === 0 && PLAYER) {
-        ragStart(PLAYER.vx, PLAYER.vz);
-      }
-    });
-
     // ─── tiendas: abrir y equipar (mecánica del original) ──────────────
     const shopBtn = $id('shopbtn');
     const shopPanel = $id('shoppanel');
