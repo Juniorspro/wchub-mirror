@@ -1256,10 +1256,15 @@ const JUMP = { y: 0, vy: 0, active: false };
 interface RagP { x: number; y: number; z: number; r: number; body: CANNON.Body | null }
 const RAGD = { on: false, t0: -10, P: [] as RagP[], cons: [] as CANNON.Constraint[] };
 const RAG_LINKS: Array<[number, number, number]> = [
-  [0, 1, 0.40], [1, 2, 0.30],   // pelvis–pecho, pecho–cabeza
-  [0, 3, 0.50], [0, 4, 0.50],   // pelvis–pies
-  [1, 5, 0.42], [1, 6, 0.42],   // pecho–manos
-  [3, 4, 0.26], [5, 6, 0.55],   // separaciones
+  // esqueleto de 11 huesos: 0 pelvis, 1 pecho, 2 cabeza,
+  // 3 rodillaL, 4 pieL, 5 rodillaR, 6 pieR,
+  // 7 codoL, 8 manoL, 9 codoR, 10 manoR
+  [0, 1, 0.40], [1, 2, 0.30],
+  [0, 3, 0.27], [3, 4, 0.26],
+  [0, 5, 0.27], [5, 6, 0.26],
+  [1, 7, 0.24], [7, 8, 0.26],
+  [1, 9, 0.24], [9, 10, 0.26],
+  [3, 5, 0.16], [7, 9, 0.34],
 ];
 // mundo cannon compartido (ragdoll + pelota); se crea al entrar al juego
 let PHYS: CANNON.World | null = null;
@@ -1283,14 +1288,18 @@ function ragStart(vx: number, vz: number): void {
   const fz = Math.cos(yaw);
   const S = PSCALE;
   const defs: Array<[number, number, number, number, number, number]> = [
-    // [ox, y, oz, radio, masa, patada]
-    [0, 0.60 * S, 0, 0.15 * S, 3, 0.4],
-    [fx * 0.02, 1.00 * S, fz * 0.02, 0.15 * S, 3, 1.2],
-    [fx * 0.04, 1.28 * S, fz * 0.04, 0.16 * S, 2, 1.8],
-    [-fz * 0.10, 0.10, fx * 0.10, 0.07, 1, -0.5],
-    [fz * 0.10, 0.10, -fx * 0.10, 0.07, 1, -0.5],
-    [-fz * 0.30, 0.95 * S, fx * 0.30, 0.07, 0.8, 1.4],
-    [fz * 0.30, 0.95 * S, -fx * 0.30, 0.07, 0.8, 1.4],
+    // [ox, y, oz, radio, masa, patada] — esqueleto completo
+    [0, 0.60 * S, 0, 0.14 * S, 3, 0.4],                       // 0 pelvis
+    [fx * 0.02, 1.00 * S, fz * 0.02, 0.14 * S, 3, 1.2],       // 1 pecho
+    [fx * 0.04, 1.28 * S, fz * 0.04, 0.16 * S, 2, 1.8],       // 2 cabeza
+    [-fz * 0.10, 0.34 * S, fx * 0.10, 0.06, 0.8, 0.1],        // 3 rodilla L
+    [-fz * 0.11, 0.08, fx * 0.11, 0.07, 0.7, -0.5],           // 4 pie L
+    [fz * 0.10, 0.34 * S, -fx * 0.10, 0.06, 0.8, 0.1],        // 5 rodilla R
+    [fz * 0.11, 0.08, -fx * 0.11, 0.07, 0.7, -0.5],           // 6 pie R
+    [-fz * 0.24, 0.80 * S, fx * 0.24, 0.06, 0.6, 0.9],        // 7 codo L
+    [-fz * 0.32, 0.62 * S, fx * 0.32, 0.06, 0.5, 1.4],        // 8 mano L
+    [fz * 0.24, 0.80 * S, -fx * 0.24, 0.06, 0.6, 0.9],        // 9 codo R
+    [fz * 0.32, 0.62 * S, -fx * 0.32, 0.06, 0.5, 1.4],        // 10 mano R
   ];
   RAGD.P = defs.map(([ox, y, oz, r, mass, kick]) => {
     const body = new CANNON.Body({
@@ -1340,46 +1349,41 @@ function ragdollPose(invM: import('@babylonjs/core').Matrix): Joints {
     return { x: _rv.x, y: _rv.y, z: _rv.z };
   };
   const clampA = (v: number, m: number): number => Math.max(-m, Math.min(m, v));
-  // brazos: dirección hombro→mano resuelve abd/fwd; el codo, por distancia
-  const arm = (s: 1 | -1, idx: number): void => {
-    const T = loc(idx);
-    const dx = T.x - s * 0.165;
-    const dy = T.y - 0.922;
-    const dz = T.z - (-0.01);
+  // ángulo entre dos segmentos físicos (mundo: invariante)
+  const bend = (a: number, b: number, c: number): number => {
+    const v1x = RAGD.P[b].x - RAGD.P[a].x;
+    const v1y = RAGD.P[b].y - RAGD.P[a].y;
+    const v1z = RAGD.P[b].z - RAGD.P[a].z;
+    const v2x = RAGD.P[c].x - RAGD.P[b].x;
+    const v2y = RAGD.P[c].y - RAGD.P[b].y;
+    const v2z = RAGD.P[c].z - RAGD.P[b].z;
+    const l1 = Math.hypot(v1x, v1y, v1z) || 1e-4;
+    const l2 = Math.hypot(v2x, v2y, v2z) || 1e-4;
+    return Math.acos(clampA((v1x * v2x + v1y * v2y + v1z * v2z) / (l1 * l2), 0.999));
+  };
+  // dirección del PRIMER hueso (hombro→codo / cadera→rodilla) fija
+  // abducción y avance; el doblez es el ángulo físico en codo/rodilla
+  const limb = (s: 1 | -1, anchorX: number, anchorY: number, midIdx: number): { abd: number; fwd: number } => {
+    const M = loc(midIdx);
+    const dx = M.x - s * anchorX;
+    const dy = M.y - anchorY;
+    const dz = M.z;
     const d = Math.hypot(dx, dy, dz) || 1e-4;
     const ux = dx / d;
     const uy = dy / d;
     const uz = dz / d;
     const a1 = Math.asin(clampA(ux, 0.999));
     const ca = Math.max(0.08, Math.cos(a1));
-    const f = Math.atan2(-uz / ca, -uy / ca);
-    const abd = clampA(a1 * s, 2.6);
-    const fwd = clampA(f, 2.6);
-    const elbow = (1 - Math.min(1, d / 0.40)) * 2.3;
-    if (s === 1) { J.shAbdL = abd; J.shFwdL = fwd; J.elbowL = elbow; }
-    else { J.shAbdR = abd; J.shFwdR = fwd; J.elbowR = elbow; }
+    return { abd: clampA(a1 * s, 2.6), fwd: clampA(Math.atan2(-uz / ca, -uy / ca), 2.6) };
   };
-  arm(1, 5);
-  arm(-1, 6);
-  // piernas: cadera→pie resuelve hipFwd/hipAbd; rodilla por distancia
-  const leg = (s: 1 | -1, idx: number): void => {
-    const T = loc(idx);
-    const dx = T.x - s * 0.082;
-    const dy = T.y - 0.60;
-    const dz = T.z;
-    const d = Math.hypot(dx, dy, dz) || 1e-4;
-    const ux = dx / d;
-    const uy = dy / d;
-    const uz = dz / d;
-    const a1 = Math.asin(clampA(ux, 0.999));
-    const ca = Math.max(0.08, Math.cos(a1));
-    const f = Math.atan2(-uz / ca, -uy / ca);
-    const knee = (1 - Math.min(1, d / 0.53)) * 2.4;
-    if (s === 1) { J.hipAbdL = clampA(a1 * s, 1.4); J.hipFwdL = clampA(f, 2.2); J.kneeL = knee; }
-    else { J.hipAbdR = clampA(a1 * s, 1.4); J.hipFwdR = clampA(f, 2.2); J.kneeR = knee; }
-  };
-  leg(1, 3);
-  leg(-1, 4);
+  const aL = limb(1, 0.165, 0.922, 7);
+  J.shAbdL = aL.abd; J.shFwdL = aL.fwd; J.elbowL = bend(1, 7, 8);
+  const aR = limb(-1, 0.165, 0.922, 9);
+  J.shAbdR = aR.abd; J.shFwdR = aR.fwd; J.elbowR = bend(1, 9, 10);
+  const lL = limb(1, 0.082, 0.60, 3);
+  J.hipAbdL = clampA(lL.abd, 1.4); J.hipFwdL = clampA(lL.fwd, 2.2); J.kneeL = bend(0, 3, 4);
+  const lR = limb(-1, 0.082, 0.60, 5);
+  J.hipAbdR = clampA(lR.abd, 1.4); J.hipFwdR = clampA(lR.fwd, 2.2); J.kneeR = bend(0, 5, 6);
   // cabeza: pecho→cabeza
   const H = loc(2);
   const hx = H.x;
@@ -1393,10 +1397,10 @@ function ragdollPose(invM: import('@babylonjs/core').Matrix): Joints {
 // ─── MONEDAS (como el original): se ganan con goles, se gastan en
 // tiendas y apuestas; persisten en localStorage ───────────────────────
 let COINS = 100;
-try { COINS = parseInt(localStorage.getItem('maplab_coins') || '100', 10); } catch { /* sin storage */ }
+try { COINS = parseFloat(localStorage.getItem('maplab_coins') || '100'); } catch { /* sin storage */ }
 function updCoins(): void {
   const el = document.getElementById('coins');
-  if (el) el.textContent = '🪙 ' + COINS;
+  if (el) el.textContent = '🪙 ' + (Number.isInteger(COINS) ? COINS : COINS.toFixed(1));
   try { localStorage.setItem('maplab_coins', String(COINS)); } catch { /* ídem */ }
 }
 function flashCoins(): void {
@@ -1443,7 +1447,6 @@ function showChat(scene: Scene, txt: string): void {
   c.clearRect(0, 0, 512, 160);
   c.translate(0, 160);
   c.scale(1, -1);
-  // globo redondeado + colita
   c.fillStyle = '#ffffff';
   c.beginPath();
   (c as CanvasRenderingContext2D & { roundRect: (x: number, y: number, w: number, h: number, r: number) => void }).roundRect(8, 8, 496, 116, 26);
@@ -1458,7 +1461,6 @@ function showChat(scene: Scene, txt: string): void {
   c.textAlign = 'center';
   c.textBaseline = 'middle';
   c.font = '600 34px Inter, system-ui, sans-serif';
-  // wrap simple a 2 líneas
   const words = txt.split(' ');
   let l1 = '';
   let l2 = '';
@@ -2124,6 +2126,76 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     }
   }
 
+  // ─── Picnic (como el plot del original): mantel a cuadros + canasta ──
+  const picTex = new DynamicTexture('picnic-tex', { width: 128, height: 128 }, scene, true);
+  const pc2 = picTex.getContext() as unknown as CanvasRenderingContext2D;
+  for (let i = 0; i < 8; i++) {
+    for (let j2 = 0; j2 < 8; j2++) {
+      pc2.fillStyle = (i + j2) % 2 === 0 ? '#c14444' : '#f2efe6';
+      pc2.fillRect(i * 16, j2 * 16, 16, 16);
+    }
+  }
+  picTex.update();
+  const picMat = new StandardMaterial('picnic-mat', scene);
+  picMat.diffuseTexture = picTex;
+  picMat.specularColor = new Color3(0, 0, 0);
+  const mantel = MeshBuilder.CreateGround('picnic', { width: 2.4, height: 2.4 }, scene);
+  mantel.position.set(14, 0.03, -18);
+  mantel.material = picMat;
+  mantel.isPickable = false;
+  const canasta = MeshBuilder.CreateBox('picnic-canasta', { width: 0.5, height: 0.32, depth: 0.36 }, scene);
+  canasta.position.set(14.5, 0.19, -18.4);
+  canasta.material = woodMat;
+  canasta.isPickable = false;
+  const asa = MeshBuilder.CreateTorus('picnic-asa', { diameter: 0.4, thickness: 0.04, tessellation: 12 }, scene);
+  asa.position.set(14.5, 0.42, -18.4);
+  asa.rotation.z = Math.PI / 2;
+  asa.material = woodDarkMat;
+  asa.isPickable = false;
+
+  // ─── Obelisco Top-Hero (monumento del pool, como el original) ────────
+  const obBase = MeshBuilder.CreateCylinder('ob-base', { diameter: 2.4, height: 0.5, tessellation: 20 }, scene);
+  obBase.position.set(-16, 0.25, -20);
+  obBase.material = stoneMat;
+  obBase.isPickable = false;
+  const obelisco = MeshBuilder.CreateCylinder('ob-shaft', { diameterTop: 0.35, diameterBottom: 0.8, height: 4.6, tessellation: 8 }, scene);
+  obelisco.position.set(-16, 2.8, -20);
+  obelisco.material = stoneMat;
+  obelisco.isPickable = false;
+  SHADOW_CASTERS.push(obelisco);
+  COLLIDERS.push({ x: -16, z: -20, r: 1.4 });
+  const obTex = new DynamicTexture('ob-tex', { width: 256, height: 384 }, scene, true);
+  const oc2 = obTex.getContext() as unknown as CanvasRenderingContext2D;
+  oc2.fillStyle = '#10204a';
+  oc2.fillRect(0, 0, 256, 384);
+  oc2.strokeStyle = '#ffd34d';
+  oc2.lineWidth = 8;
+  oc2.strokeRect(4, 4, 248, 376);
+  oc2.fillStyle = '#ffd34d';
+  oc2.textAlign = 'center';
+  oc2.font = '800 38px Inter, system-ui, sans-serif';
+  oc2.fillText('TOP HERO', 128, 56);
+  oc2.fillStyle = '#2a3a64';
+  oc2.fillRect(38, 120, 180, 36);
+  oc2.fillStyle = '#ffd34d';
+  oc2.fillRect(38, 120, 180 * 0.65, 36);
+  oc2.fillStyle = '#f3ecd9';
+  oc2.font = '700 30px Inter, system-ui, sans-serif';
+  oc2.fillText('65%', 128, 210);
+  oc2.font = '600 22px Inter, system-ui, sans-serif';
+  oc2.fillText('pool del patio', 128, 260);
+  obTex.update();
+  const obMat = new StandardMaterial('ob-mat', scene);
+  obMat.diffuseTexture = obTex;
+  obMat.emissiveTexture = obTex;
+  obMat.emissiveColor = new Color3(0.45, 0.45, 0.45);
+  obMat.specularColor = new Color3(0, 0, 0);
+  const obPlane = MeshBuilder.CreatePlane('ob-face', { width: 1.3, height: 1.95 }, scene);
+  obPlane.position.set(-16, 1.7, -20 + 0.62);
+  obPlane.rotation.y = Math.PI; // mira al sendero / spawn
+  obPlane.material = obMat;
+  obPlane.isPickable = false;
+
   // ─── Carteles del juego original ──────────────────────────────────────
   // Tablón de fixtures camino a la cancha + láminas del mundial en stands.
   buildFixtureBoard(scene, 28, 11, Math.atan2(-28, -11), woodDarkMat);
@@ -2271,6 +2343,86 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       plane.rotation.y = a + yaw; // orientación variada
       plane.material = oakMat;
       plane.isPickable = false;
+    }
+  }
+
+  // ─── ZONA "COMING SOON": cuadro cercado lleno de árboles al costado
+  // de la cancha, del otro lado de la cerca perimetral, con su puerta
+  // (cerrada — la zona todavía no abre) ─────────────────────────────────
+  const ZX0 = FENCE.x1;       // comparte el lado este de la cerca
+  const ZX1 = FENCE.x1 + 26;
+  const ZZ0 = -22;
+  const ZZ1 = 8;
+  const zRail = stdMat(scene, 'cs-rail', '#8a6435');
+  const zPost = stdMat(scene, 'cs-post', '#6b4e26');
+  const zSide = (w: number, d: number, px: number, pz: number): void => {
+    const r2 = MeshBuilder.CreateBox('cs-rail', { width: w, height: 1.1, depth: d }, scene);
+    r2.position.set(px, 0.55, pz);
+    r2.material = zRail;
+    r2.isPickable = false;
+  };
+  zSide(ZX1 - ZX0, 0.18, (ZX0 + ZX1) / 2, ZZ0);
+  zSide(ZX1 - ZX0, 0.18, (ZX0 + ZX1) / 2, ZZ1);
+  zSide(0.18, ZZ1 - ZZ0, ZX1, (ZZ0 + ZZ1) / 2);
+  for (let zz = ZZ0; zz <= ZZ1; zz += 8) {
+    for (const xx of [ZX1]) {
+      const p2 = MeshBuilder.CreateBox('cs-post', { width: 0.32, height: 1.4, depth: 0.32 }, scene);
+      p2.position.set(xx, 0.7, zz);
+      p2.material = zPost;
+      p2.isPickable = false;
+    }
+  }
+  // puerta en la cerca compartida (marco + hoja de madera + cartel)
+  const GATE_Z = -7;
+  for (const gz2 of [GATE_Z - 1.6, GATE_Z + 1.6]) {
+    const jamb2 = MeshBuilder.CreateBox('cs-jamb', { width: 0.4, height: 2.6, depth: 0.4 }, scene);
+    jamb2.position.set(ZX0, 1.3, gz2);
+    jamb2.material = zPost;
+    jamb2.isPickable = false;
+  }
+  const lint2 = MeshBuilder.CreateBox('cs-lintel', { width: 0.5, height: 0.3, depth: 3.6 }, scene);
+  lint2.position.set(ZX0, 2.7, GATE_Z);
+  lint2.material = zRail;
+  lint2.isPickable = false;
+  const hoja = MeshBuilder.CreateBox('cs-door', { width: 0.14, height: 2.4, depth: 3.0 }, scene);
+  hoja.position.set(ZX0, 1.2, GATE_Z);
+  hoja.material = texMat(scene, 'cs-door-mat', woodPlanksUrl, 2, '#b08a5a');
+  hoja.isPickable = false;
+  const csTex = new DynamicTexture('cs-sign', { width: 512, height: 128 }, scene, true);
+  const cc2 = csTex.getContext() as unknown as CanvasRenderingContext2D;
+  cc2.fillStyle = '#10204a';
+  cc2.fillRect(0, 0, 512, 128);
+  cc2.strokeStyle = '#ffd34d';
+  cc2.lineWidth = 8;
+  cc2.strokeRect(4, 4, 504, 120);
+  cc2.fillStyle = '#f3ecd9';
+  cc2.textAlign = 'center';
+  cc2.textBaseline = 'middle';
+  cc2.font = '800 52px Inter, system-ui, sans-serif';
+  cc2.fillText('🌲 COMING SOON 🌲', 256, 64, 480);
+  csTex.update();
+  const csMat = new StandardMaterial('cs-sign-mat', scene);
+  csMat.diffuseTexture = csTex;
+  csMat.emissiveTexture = csTex;
+  csMat.emissiveColor = new Color3(0.5, 0.5, 0.5);
+  csMat.specularColor = new Color3(0, 0, 0);
+  const csPlane = MeshBuilder.CreatePlane('cs-sign-pl', { width: 3.4, height: 0.85 }, scene);
+  csPlane.position.set(ZX0 - 0.3, 3.3, GATE_Z);
+  csPlane.rotation.y = Math.PI / 2; // de cara al parque
+  csPlane.material = csMat;
+  csPlane.isPickable = false;
+  // bosque tupido adentro (zona inaccesible: la cerca del mapa te frena)
+  const rng2 = rng(777);
+  for (let i = 0; i < 16; i++) {
+    const tx2 = ZX0 + 3 + rng2() * (ZX1 - ZX0 - 6);
+    const tz2 = ZZ0 + 2.5 + rng2() * (ZZ1 - ZZ0 - 5);
+    const s2 = 6.5 + rng2() * 3.5;
+    for (const yaw2 of [0, Math.PI / 2]) {
+      const pl2 = MeshBuilder.CreatePlane('cs-oak', { width: s2, height: s2 }, scene);
+      pl2.position.set(tx2, s2 / 2 - s2 * 0.07, tz2);
+      pl2.rotation.y = rng2() * Math.PI + yaw2;
+      pl2.material = oakMat;
+      pl2.isPickable = false;
     }
   }
 
@@ -2433,7 +2585,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       let J: Joints = poseCartoon(t, PLAYER.walkPh, PLAYER.moveAmt);
       if (SIT.amt > 0.01) {
         J = mixJoints(J, poseSit(t), SIT.amt);
-        J.pelvisY -= 0.105 * SIT.amt; // compensa PSCALE: cola a altura de banco
+        J.pelvisY -= 0.085 * SIT.amt; // compensa PSCALE: cola a altura de banco
       }
       if (JUMP.active) { // piernas recogidas + brazos arriba en el aire
         const air = Math.min(1, JUMP.y / 0.5);
@@ -2475,9 +2627,9 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
               g.score++;
               g.cool = true;
               paintBoard(g);
-              COINS += 10; // ¡GOLAZO paga!
+              COINS += 0.5; // ¡GOLAZO paga!
               updCoins();
-              showChat(scene, '⚽ ¡GOLAZO! +10 🪙');
+              showChat(scene, '⚽ ¡GOLAZO! +0.5 🪙');
               setTimeout(() => { resetBall(); g.cool = false; }, 900);
             }
           }
@@ -2528,7 +2680,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         PLAYER.root.position.z = ppz;
         PLAYER.root.position.y = pyy;
         // articulaciones desde la física (IK), mezcla al levantarse
-        if (RAGD.P.length === 7) { // (al final ragClear vacía los cuerpos)
+        if (RAGD.P.length === 11) { // (al final ragClear vacía los cuerpos)
           PLAYER.root.computeWorldMatrix(true);
           const invM = PLAYER.root.getWorldMatrix().clone().invert();
           let ragJ = ragdollPose(invM);
@@ -3381,8 +3533,12 @@ function boot(): void {
     const chatBtn = $id('chatbtn');
     const chatBar = $id('chatbar');
     const chatInput = $id('chatinput') as HTMLInputElement;
+    const MALAS = ['puto', 'puta', 'pija', 'mierda', 'forro', 'concha', 'pelotudo', 'fuck', 'shit', 'bitch', 'asshole', 'caralho', 'porra', 'merda'];
     const sendChat = (): void => {
-      const txt = chatInput.value.trim();
+      let txt = chatInput.value.trim();
+      for (const m of MALAS) { // filtro de lenguaje (mecánica del original)
+        txt = txt.replace(new RegExp(m, 'gi'), '***');
+      }
       if (txt) showChat(scene, txt);
       chatInput.value = '';
       chatBar.style.display = 'none';

@@ -544,14 +544,14 @@ export function mixJoints(a: Joints, b: Joints, m: number): Joints {
 export function poseSit(t: number): Joints {
   const J = J0();
   J.breath = 0.5 + 0.5 * Math.sin(t * 1.05);
-  J.hipFwdL = 1.45;
-  J.hipFwdR = 1.45;
+  J.hipFwdL = 1.25; // muslos apenas caídos: sentado natural, no piernas arriba
+  J.hipFwdR = 1.25;
   // piernitas colgando que se hamacan alternadas (el petiso no llega al piso)
-  J.kneeL = 1.35 + Math.sin(t * 1.6) * 0.22;
-  J.kneeR = 1.35 + Math.sin(t * 1.6 + 2.4) * 0.22;
-  J.ankleL = 0.2;
-  J.ankleR = 0.2;
-  J.pelvisY = -0.075;
+  J.kneeL = 1.45 + Math.sin(t * 1.6) * 0.16;
+  J.kneeR = 1.45 + Math.sin(t * 1.6 + 2.4) * 0.16;
+  J.ankleL = 0.25;
+  J.ankleR = 0.25;
+  J.pelvisY = -0.04;
   J.spineFwd = -0.05;
   J.spineSide = Math.sin(t * 0.45) * 0.03;
   J.shFwdL = 0.32;
