@@ -1164,7 +1164,7 @@ function applyGesture(J: Joints, type: number, e: number, t: number): void {
 
 // ─── outfit equipable (tiendas como el original) ────────────────────────
 const PALETA = ['#f2f2ee', '#c14444', '#3a6ea5', '#e8c84a', '#9bd96b', '#d96bc4', '#e89c4a', '#a85dd9', '#1d1d22', '#4aa3a3', '#ff7a5c', '#6bd0ff'];
-const OUTFIT_ST = { remera: '#f2f2ee', pantalon: '#1d1d22', zapas: '#3dbf5a', hat: -1, glasses: -1, scarf: -1 };
+const OUTFIT_ST = { remera: '#f2f2ee', pantalon: '#1d1d22', zapas: '#3dbf5a', piel: '#e8b88f', hat: -1, glasses: -1, scarf: -1 };
 let COLORS_BUF: Float32Array | null = null;
 let FACETEX: DynamicTexture | null = null;
 let FACECV: HTMLCanvasElement | null = null;
@@ -1184,42 +1184,37 @@ function saveOutfit(): void {
 }
 function repaintOutfit(): void {
   if (!PLAYER || !COLORS_BUF) return;
-  paintOutfit(COLORS_BUF, hex2v3(OUTFIT_ST.remera), hex2v3(OUTFIT_ST.pantalon), hex2v3(OUTFIT_ST.zapas), [0.91, 0.72, 0.56]);
+  paintOutfit(COLORS_BUF, hex2v3(OUTFIT_ST.remera), hex2v3(OUTFIT_ST.pantalon), hex2v3(OUTFIT_ST.zapas), hex2v3(OUTFIT_ST.piel));
   PLAYER.mesh.updateVerticesData('color', COLORS_BUF);
   saveOutfit();
 }
-// cara del jugador: lienzo del usuario con corrección de aspecto + anteojos
+// cara del jugador: el compuesto pintado en la bola mapea 1:1 + anteojos
 function paintPlayerFace(): void {
   if (!FACETEX || !FACECV) return;
   const c = FACETEX.getContext() as unknown as CanvasRenderingContext2D;
   c.save();
-  c.fillStyle = '#e8b88f';
-  c.fillRect(0, 0, 512, 512);
   c.translate(0, 512);
   c.scale(1, -1);
-  // el decal es ~1.55 más ancho que alto: dibujar centrado y angosto
-  // para que la cara dibujada quede redonda (no estirada)
-  const w = 330;
-  c.drawImage(FACECV, (512 - w) / 2, 0, w, 512);
-  if (OUTFIT_ST.glasses >= 0) { // anteojos pintados sobre la cara
+  c.drawImage(FACECV, 0, 0, 1024, 512);
+  if (OUTFIT_ST.glasses >= 0) { // anteojos pintados sobre la cara (frente u=0.5)
     const g = OUTFIT_ST.glasses;
-    const ey = 200;
+    const ey = 196;
     c.strokeStyle = ['#1d1d22', '#c1272d', '#3a6ea5', '#e8c84a'][g];
-    c.lineWidth = 11;
+    c.lineWidth = 9;
     if (g === 2) { // banda deportiva
       c.fillStyle = '#1d1d22cc';
-      c.fillRect(116, ey - 32, 280, 62);
+      c.fillRect(512 - 140, ey - 26, 280, 52);
     } else {
-      const rx = g === 1 ? 50 : 44;
+      const rx = g === 1 ? 46 : 40;
       for (const sx of [-1, 1]) {
         c.beginPath();
-        if (g === 3) c.rect(256 + sx * 78 - rx, ey - 34, rx * 2, 66);
-        else c.arc(256 + sx * 78, ey, rx, 0, 7);
+        if (g === 3) c.rect(512 + sx * 74 - rx, ey - 30, rx * 2, 58);
+        else c.arc(512 + sx * 74, ey, rx, 0, 7);
         c.stroke();
       }
       c.beginPath();
-      c.moveTo(256 - 34, ey);
-      c.lineTo(256 + 34, ey);
+      c.moveTo(512 - 32, ey);
+      c.lineTo(512 + 32, ey);
       c.stroke();
     }
   }
@@ -1351,11 +1346,11 @@ function showEmote(scene: Scene, idx: number): void {
   EMOTE.start = performance.now() / 1000;
   EMOTE.type = idx; // 24 gestos únicos, uno por emoji
 }
-const DEC_U = 32;
-const DEC_V = 24;
-const DEC_PHI = 0.95;
-const DEC_T0 = 0.18;
-const DEC_T1 = 0.70;
+const DEC_U = 48;
+const DEC_V = 28;
+const DEC_PHI = Math.PI; // wrap completo: la pintura cubre TODA la cabeza
+const DEC_T0 = 0.03;     // (la costura cae atrás, en θ = F±π)
+const DEC_T1 = 0.985;
 
 function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): Player {
   const root = new TransformNode('player', scene);
@@ -1374,7 +1369,7 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
     const saved = localStorage.getItem('maplab_outfit');
     if (saved) Object.assign(OUTFIT_ST, JSON.parse(saved));
   } catch { /* sin storage */ }
-  paintOutfit(colors, hex2v3(OUTFIT_ST.remera), hex2v3(OUTFIT_ST.pantalon), hex2v3(OUTFIT_ST.zapas), [0.91, 0.72, 0.56]);
+  paintOutfit(colors, hex2v3(OUTFIT_ST.remera), hex2v3(OUTFIT_ST.pantalon), hex2v3(OUTFIT_ST.zapas), hex2v3(OUTFIT_ST.piel));
   vd.colors = colors;
   vd.applyToMesh(mesh, true);
   const mat = new StandardMaterial('player-mat', scene);
@@ -1417,7 +1412,7 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
   dvd.applyToMesh(decal, true);
   // textura de cara 512 con filtrado suave (chau pixelado feo del Poco)
   FACECV = faceCv;
-  FACETEX = new DynamicTexture('pl-face', { width: 512, height: 512 }, scene, true);
+  FACETEX = new DynamicTexture('pl-face', { width: 1024, height: 512 }, scene, true);
   paintPlayerFace();
   const dmat = new StandardMaterial('pl-face-mat', scene);
   dmat.diffuseTexture = FACETEX;
@@ -2149,76 +2144,206 @@ function boot(): void {
     engine.runRenderLoop(() => scene.render());
     window.addEventListener('resize', () => engine.resize());
 
-    // ─── ENTRADA OBLIGATORIA: dibujá tu cara + nombre ──────────────────
+    // ─── ENTRADA OBLIGATORIA: pintá tu cabeza en la BOLA 3D + nombre ────
     const $id = (s: string): HTMLElement => document.getElementById(s) as HTMLElement;
-    const facecv = $id('facecv') as HTMLCanvasElement;
     const iname = $id('iname') as HTMLInputElement;
     const ienter = $id('ienter') as HTMLButtonElement;
-    const fctx = facecv.getContext('2d') as CanvasRenderingContext2D;
-    const SKINBG = '#e8b88f';
-    fctx.fillStyle = SKINBG;
-    fctx.fillRect(0, 0, 256, 256);
+    // capas de pintura: trazos (transparente) + color base → compuesto
+    const FW = 1024;
+    const FH = 512;
+    const strokesCv = document.createElement('canvas');
+    strokesCv.width = FW;
+    strokesCv.height = FH;
+    const sctx = strokesCv.getContext('2d') as CanvasRenderingContext2D;
+    const compositeCv = document.createElement('canvas');
+    compositeCv.width = FW;
+    compositeCv.height = FH;
+    const cctx = compositeCv.getContext('2d') as CanvasRenderingContext2D;
+    let baseCol = '#e8b88f';
     let ink = '#2b1c12';
     let drew = 0;
-    let drawing = false;
-    let lx = 0;
-    let ly = 0;
     const validate = (): void => {
       ienter.disabled = !(iname.value.trim().length >= 2 && drew > 0);
     };
-    const cvPos = (e: PointerEvent): [number, number] => {
-      const r = facecv.getBoundingClientRect();
-      return [(e.clientX - r.left) * 256 / r.width, (e.clientY - r.top) * 256 / r.height];
+    // mini-escena de la bola: la MISMA geometría de la cabeza del jugador
+    const ballcv = $id('ballcv') as HTMLCanvasElement;
+    const engine2 = new Engine(ballcv, true, { stencil: false });
+    const scene2 = new Scene(engine2);
+    scene2.clearColor = Color4.FromHexString('#0b0e18ff');
+    const cam2 = new ArcRotateCamera('c2', Math.PI / 2, 1.45, 0.46, new Vector3(0, 0, 0), scene2);
+    cam2.minZ = 0.01;
+    const h2 = new HemisphericLight('h2', new Vector3(0, 1, 0), scene2);
+    h2.intensity = 0.95;
+    const d2 = new DirectionalLight('d2', new Vector3(-0.4, -0.7, -0.6), scene2);
+    d2.intensity = 0.55;
+    // malla de la cabeza (decal full-wrap) centrada en el origen
+    const bpos = new Float32Array((DEC_U + 1) * (DEC_V + 1) * 3);
+    decalPositions(J0(), bpos, DEC_U, DEC_V, DEC_PHI, DEC_T0, DEC_T1);
+    let byMin = 1e9;
+    let byMax = -1e9;
+    for (let i = 1; i < bpos.length; i += 3) {
+      byMin = Math.min(byMin, bpos[i]);
+      byMax = Math.max(byMax, bpos[i]);
+    }
+    const byC = (byMin + byMax) / 2;
+    for (let i = 1; i < bpos.length; i += 3) bpos[i] -= byC;
+    const bvd = new VertexData();
+    bvd.positions = bpos;
+    const buvs = new Float32Array((DEC_U + 1) * (DEC_V + 1) * 2);
+    const bidx: number[] = [];
+    let bk = 0;
+    for (let j = 0; j <= DEC_V; j++) {
+      for (let i = 0; i <= DEC_U; i++) {
+        buvs[bk++] = i / DEC_U;
+        buvs[bk++] = 1 - j / DEC_V;
+      }
+    }
+    for (let j = 0; j < DEC_V; j++) {
+      for (let i = 0; i < DEC_U; i++) {
+        const a = j * (DEC_U + 1) + i;
+        bidx.push(a, a + DEC_U + 1, a + 1, a + 1, a + DEC_U + 1, a + DEC_U + 2);
+      }
+    }
+    bvd.uvs = buvs;
+    bvd.indices = bidx;
+    const bnorm = new Float32Array(bpos.length);
+    VertexData.ComputeNormals(bpos, bidx, bnorm);
+    bvd.normals = bnorm;
+    const ball = new Mesh('bola', scene2);
+    bvd.applyToMesh(ball);
+    const ballTex = new DynamicTexture('bola-tex', { width: FW, height: FH }, scene2, true);
+    const bmat = new StandardMaterial('bola-mat', scene2);
+    bmat.diffuseTexture = ballTex;
+    bmat.specularColor = new Color3(0.06, 0.06, 0.06);
+    bmat.backFaceCulling = false;
+    ball.material = bmat;
+    const compose = (): void => {
+      cctx.fillStyle = baseCol;
+      cctx.fillRect(0, 0, FW, FH);
+      cctx.drawImage(strokesCv, 0, 0);
+      const bc = ballTex.getContext() as unknown as CanvasRenderingContext2D;
+      bc.save();
+      bc.translate(0, FH);
+      bc.scale(1, -1); // flip Y de DynamicTexture
+      bc.drawImage(compositeCv, 0, 0);
+      bc.restore();
+      ballTex.update(false);
     };
-    facecv.addEventListener('pointerdown', (e) => {
-      drawing = true;
-      [lx, ly] = cvPos(e);
-      facecv.setPointerCapture(e.pointerId);
-      e.preventDefault();
-    });
-    facecv.addEventListener('pointermove', (e) => {
-      if (!drawing) return;
-      const [x, y] = cvPos(e);
-      fctx.strokeStyle = ink === 'ERASE' ? SKINBG : ink;
-      fctx.lineWidth = ink === 'ERASE' ? 24 : 9;
-      fctx.lineCap = 'round';
-      fctx.beginPath();
-      fctx.moveTo(lx, ly);
-      fctx.lineTo(x, y);
-      fctx.stroke();
-      lx = x;
-      ly = y;
+    compose();
+    engine2.runRenderLoop(() => scene2.render());
+    // pintar tocando la bola: pick → UV → trazo en strokesCv
+    let painting = false;
+    let lastU = -1;
+    let lastV = -1;
+    const paintAt = (e: PointerEvent, lineFrom: boolean): void => {
+      const r = ballcv.getBoundingClientRect();
+      const pick = scene2.pick((e.clientX - r.left) * (ballcv.width / r.width), (e.clientY - r.top) * (ballcv.height / r.height));
+      if (!pick?.hit || pick.pickedMesh !== ball) return;
+      const uv = pick.getTextureCoordinates();
+      if (!uv) return;
+      const px = uv.x * FW;
+      const py = (1 - uv.y) * FH;
+      sctx.lineCap = 'round';
+      if (ink === 'ERASE') {
+        sctx.save();
+        sctx.globalCompositeOperation = 'destination-out';
+        sctx.beginPath();
+        sctx.arc(px, py, 34, 0, 7);
+        sctx.fill();
+        sctx.restore();
+      } else {
+        sctx.strokeStyle = ink;
+        sctx.fillStyle = ink;
+        sctx.lineWidth = 26;
+        // si cruza la costura del wrap (salto de u), solo punto
+        if (lineFrom && lastU >= 0 && Math.abs(px - lastU) < FW / 2) {
+          sctx.beginPath();
+          sctx.moveTo(lastU, lastV);
+          sctx.lineTo(px, py);
+          sctx.stroke();
+        } else {
+          sctx.beginPath();
+          sctx.arc(px, py, 13, 0, 7);
+          sctx.fill();
+        }
+      }
+      lastU = px;
+      lastV = py;
       drew++;
       validate();
+      compose();
+    };
+    ballcv.addEventListener('pointerdown', (e) => {
+      painting = true;
+      lastU = -1;
+      ballcv.setPointerCapture(e.pointerId);
+      paintAt(e, false);
+      e.preventDefault();
     });
-    window.addEventListener('pointerup', () => { drawing = false; });
-    document.querySelectorAll('#tools .tool').forEach((el) => {
+    ballcv.addEventListener('pointermove', (e) => { if (painting) paintAt(e, true); });
+    window.addEventListener('pointerup', () => { painting = false; });
+    // rotador: arrastrá el redondo de la derecha para girar la bola
+    const rot = $id('ballrot');
+    let rotting = -1;
+    let rlx = 0;
+    let rly = 0;
+    rot.addEventListener('pointerdown', (e) => {
+      rotting = e.pointerId;
+      rot.setPointerCapture(rotting);
+      rlx = e.clientX;
+      rly = e.clientY;
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    rot.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== rotting) return;
+      ball.rotation.y -= (e.clientX - rlx) * 0.012;
+      ball.rotation.x = Math.max(-1.1, Math.min(1.1, ball.rotation.x + (e.clientY - rly) * 0.01));
+      rlx = e.clientX;
+      rly = e.clientY;
+    });
+    const rotEnd = (): void => { rotting = -1; };
+    rot.addEventListener('pointerup', rotEnd);
+    rot.addEventListener('pointercancel', rotEnd);
+    // tintas (arriba y abajo) + color base de la bola
+    document.querySelectorAll('.inkrow .tool').forEach((el) => {
       el.addEventListener('click', () => {
         const c = (el as HTMLElement).dataset.c as string;
         if (c === 'CLEAR') {
-          fctx.fillStyle = SKINBG;
-          fctx.fillRect(0, 0, 256, 256);
+          sctx.clearRect(0, 0, FW, FH);
           drew = 0;
           validate();
+          compose();
           return;
         }
         ink = c;
-        document.querySelectorAll('#tools .tool').forEach((t2) => t2.classList.remove('on'));
+        document.querySelectorAll('.inkrow .tool').forEach((t2) => t2.classList.remove('on'));
         el.classList.add('on');
+      });
+    });
+    document.querySelectorAll('#baserow .tool').forEach((el) => {
+      el.addEventListener('click', () => {
+        baseCol = (el as HTMLElement).dataset.b as string;
+        document.querySelectorAll('#baserow .tool').forEach((t2) => t2.classList.remove('on'));
+        el.classList.add('on');
+        compose();
       });
     });
     iname.addEventListener('input', validate);
     // cara/nombre guardados: precarga (igual te muestra la entrada)
     try {
       const sn = localStorage.getItem('maplab_name');
-      const sf = localStorage.getItem('maplab_face');
+      const sf = localStorage.getItem('maplab_face2');
+      const sb = localStorage.getItem('maplab_base');
       if (sn) iname.value = sn;
+      if (sb) { baseCol = sb; }
       if (sf) {
         const img = new Image();
         img.onload = () => {
-          fctx.drawImage(img, 0, 0, 256, 256);
+          sctx.drawImage(img, 0, 0, FW, FH);
           drew = Math.max(drew, 1);
           validate();
+          compose();
         };
         img.src = sf;
       }
@@ -2230,9 +2355,16 @@ function boot(): void {
       const nombre = iname.value.trim().slice(0, 14) || 'WACHO';
       try {
         localStorage.setItem('maplab_name', nombre);
-        localStorage.setItem('maplab_face', facecv.toDataURL('image/png'));
+        localStorage.setItem('maplab_face2', strokesCv.toDataURL('image/png'));
+        localStorage.setItem('maplab_base', baseCol);
       } catch { /* ídem */ }
-      PLAYER = buildPlayer(scene, facecv, nombre);
+      cctx.fillStyle = baseCol; // compuesto final fresco
+      cctx.fillRect(0, 0, FW, FH);
+      cctx.drawImage(strokesCv, 0, 0);
+      OUTFIT_ST.piel = baseCol; // manos/cuello del color de la bola
+      PLAYER = buildPlayer(scene, compositeCv, nombre);
+      engine2.stopRenderLoop();
+      engine2.dispose();
       $id('intro').style.display = 'none';
       $id('joy').style.display = 'block';
       $id('emobtn').style.display = 'flex';
@@ -2422,7 +2554,7 @@ function boot(): void {
     // handle de dev para capturas/automatización (shot-maplab.mjs)
     (window as unknown as Record<string, unknown>).__maplab = {
       scene, camera: scene.activeCamera, enterGame,
-      getPlayer: () => PLAYER, input: INPUT, facecv,
+      getPlayer: () => PLAYER, input: INPUT,
     };
     // ocultar el hint a los 7s
     setTimeout(() => {

@@ -53,12 +53,26 @@
     }
     #ibox .ittl { font-size: 18px; letter-spacing: 0.12em; color: #e8c84a; }
     #ibox .isub { font-size: 11px; opacity: 0.8; font-weight: 600; }
-    #facecv {
-      width: min(64vw, 256px); height: min(64vw, 256px);
-      border-radius: 50%; border: 3px solid #3a4666; touch-action: none;
-      background: #e8b88f; cursor: crosshair;
+    #ballwrap { display: flex; align-items: center; gap: 12px; }
+    #ballcv {
+      width: min(56vw, 250px); height: min(56vw, 250px);
+      border-radius: 14px; border: 2px solid #3a4666; touch-action: none;
+      background: #0b0e18; cursor: crosshair;
     }
-    #tools { display: flex; gap: 8px; }
+    #ballrot {
+      width: 64px; height: 64px; border-radius: 50%;
+      background: #0d1220; border: 2px solid #3a4666;
+      display: flex; align-items: center; justify-content: center;
+      touch-action: none; cursor: grab; font-size: 22px; color: #8a90a8;
+      user-select: none; -webkit-user-select: none;
+    }
+    #ballrot:active { border-color: #e8c84a; }
+    .inkrow { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    #baserow {
+      display: flex; gap: 7px; align-items: center;
+      font-size: 11px; color: #8a90a8;
+    }
+    #baserow .tool { width: 26px; height: 26px; }
     .tool {
       width: 34px; height: 34px; border-radius: 50%; border: 2px solid #ffffff44;
       cursor: pointer; font: 700 14px ui-monospace, monospace;
@@ -160,16 +174,36 @@
   <div id="intro">
     <div id="ibox">
       <div class="ittl">⚽ PATIO MUNDIAL</div>
-      <div class="isub">dibujá tu cara (obligatorio) y poné tu nombre</div>
-      <canvas id="facecv" width="256" height="256"></canvas>
-      <div id="tools">
+      <div class="isub">pintá tu cabeza en la bola 3D (girala con el 🔄) y poné tu nombre</div>
+      <div id="tools" class="inkrow">
         <div class="tool on" data-c="#2b1c12" style="background:#2b1c12"></div>
         <div class="tool" data-c="#c1272d" style="background:#c1272d"></div>
         <div class="tool" data-c="#1d3a8f" style="background:#1d3a8f"></div>
         <div class="tool" data-c="#1d7a3a" style="background:#1d7a3a"></div>
+        <div class="tool" data-c="#e8c84a" style="background:#e8c84a"></div>
         <div class="tool" data-c="#f4f4ee" style="background:#f4f4ee"></div>
+      </div>
+      <div id="ballwrap">
+        <canvas id="ballcv" width="300" height="300"></canvas>
+        <div id="ballrot">🔄</div>
+      </div>
+      <div id="tools2" class="inkrow">
+        <div class="tool" data-c="#ff7a5c" style="background:#ff7a5c"></div>
+        <div class="tool" data-c="#d96bc4" style="background:#d96bc4"></div>
+        <div class="tool" data-c="#6bd0ff" style="background:#6bd0ff"></div>
+        <div class="tool" data-c="#7a4a2a" style="background:#7a4a2a"></div>
         <div class="tool" data-c="ERASE" style="background:#e8b88f">⌫</div>
         <div class="tool" data-c="CLEAR" style="background:#3a4666;color:#fff">✕</div>
+      </div>
+      <div id="baserow">
+        <span>bola:</span>
+        <div class="tool on" data-b="#e8b88f" style="background:#e8b88f"></div>
+        <div class="tool" data-b="#c98a5e" style="background:#c98a5e"></div>
+        <div class="tool" data-b="#8a573a" style="background:#8a573a"></div>
+        <div class="tool" data-b="#f2d1b3" style="background:#f2d1b3"></div>
+        <div class="tool" data-b="#9bd96b" style="background:#9bd96b"></div>
+        <div class="tool" data-b="#6bd0ff" style="background:#6bd0ff"></div>
+        <div class="tool" data-b="#e8c84a" style="background:#e8c84a"></div>
       </div>
       <input id="iname" maxlength="14" placeholder="tu nombre…" autocomplete="off" />
       <button id="ienter" disabled>ENTRAR AL PATIO</button>
