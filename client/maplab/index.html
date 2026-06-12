@@ -78,17 +78,41 @@
       letter-spacing: 0.1em; cursor: pointer;
     }
     #ienter:disabled { background: #4a5068; color: #9aa0b8; cursor: not-allowed; }
-    /* ── sentarse + emotes ── */
-    #sitbtn, #emobtn {
+    /* ── botones de acción (sentarse / emotes / saltar / ragdoll / tienda) ── */
+    #sitbtn, #emobtn, #jumpbtn, #ragbtn, #shopbtn {
       position: fixed; z-index: 12; display: none;
-      width: 58px; height: 58px; border-radius: 50%;
+      width: 56px; height: 56px; border-radius: 50%;
       background: rgba(16, 32, 74, 0.9); border: 2px solid #e8c84a;
       color: #f3ecd9; font: 700 22px ui-monospace, monospace;
       align-items: center; justify-content: center; cursor: pointer;
       touch-action: none; user-select: none; -webkit-user-select: none;
     }
-    #emobtn { right: 18px; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); }
-    #sitbtn { right: 88px; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); font-size: 24px; }
+    #emobtn  { right: 16px;  bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+    #jumpbtn { right: 82px;  bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+    #ragbtn  { right: 148px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+    #sitbtn  { right: 16px;  bottom: calc(env(safe-area-inset-bottom, 0px) + 82px); font-size: 24px; }
+    #shopbtn { right: 82px;  bottom: calc(env(safe-area-inset-bottom, 0px) + 82px); }
+    #shoppanel {
+      position: fixed; right: 12px; z-index: 14; display: none;
+      bottom: calc(env(safe-area-inset-bottom, 0px) + 150px);
+      background: rgba(16, 32, 74, 0.95); border: 2px solid #e8c84a;
+      border-radius: 14px; padding: 12px; max-width: 86vw;
+      font: 700 12px ui-monospace, monospace; color: #f3ecd9;
+      touch-action: none;
+    }
+    .shoptitle { margin-bottom: 8px; letter-spacing: 0.06em; color: #e8c84a; }
+    .swrow { display: flex; flex-wrap: wrap; gap: 7px; max-width: 280px; }
+    .sw {
+      width: 34px; height: 34px; border-radius: 50%;
+      border: 2px solid #ffffff55; cursor: pointer;
+    }
+    .sw:active { border-color: #e8c84a; }
+    .shopitem {
+      padding: 8px 10px; border-radius: 9px; background: #0d1220;
+      border: 1px solid #ffffff22; cursor: pointer; font-size: 13px;
+    }
+    .shopitem:active { background: #e8c84a; color: #1d2540; }
+    .shopclose { margin-top: 8px; text-align: center; }
     #emopanel {
       position: fixed; right: 12px; z-index: 13; display: none;
       bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
@@ -127,7 +151,11 @@
   <div id="joy"><div id="knob"></div></div>
   <div id="sitbtn">🪑</div>
   <div id="emobtn">😀</div>
+  <div id="jumpbtn">🦘</div>
+  <div id="ragbtn">🤸</div>
+  <div id="shopbtn">🛍</div>
   <div id="emopanel"></div>
+  <div id="shoppanel"></div>
   <div id="phint" style="display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 152px);z-index:11;background:#10204aee;border:2px solid #e8c84a;border-radius:10px;padding:8px 14px;font:700 12px/1.3 ui-monospace,'Courier New',monospace;color:#f3ecd9;letter-spacing:0.04em;pointer-events:none;max-width:88vw;text-align:center"></div>
   <div id="intro">
     <div id="ibox">

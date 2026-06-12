@@ -169,24 +169,10 @@ function smoothPath(ctrl: V3[], M: number, hint: V3): SPath {
 
 // ─── cara base (cara 0 del figlab) en modo DIBUJADA: nariz/mentón/
 // cachetes/orejas en 3D; ojos/boca/ceja van pintados en el decal ───────
-const FACE = {
-  noseA: 0.045, noseT: 0.50, noseW: 0.30, bridgeA: 0.014,
-  chinA: 0.020, chinT: 0.20,
-  earA: 0.024, earT: 0.46, occA: 0.013,
-  cheekA: 0.014, cheekT: 0.40, cheekSep: 0.62, jawA: 0.007,
-};
-export function headDisp(th: number, t: number): number {
-  const F = 1.5708;
-  const C = FACE;
-  let r = 0;
-  r += C.noseA * gauss(angDist(th, F), C.noseW) * gauss(t - C.noseT, 0.085);
-  r += C.bridgeA * gauss(angDist(th, F), 0.42) * gauss(t - 0.68, 0.05);
-  r += C.chinA * gauss(angDist(th, F), 0.32) * gauss(t - C.chinT, 0.06);
-  r += C.earA * (gauss(angDist(th, 0), 0.22) + gauss(angDist(th, 3.1416), 0.22)) * gauss(t - C.earT, 0.06);
-  r += C.occA * gauss(angDist(th, 4.712), 0.75) * gauss(t - 0.70, 0.10);
-  r += C.cheekA * (gauss(angDist(th, F - C.cheekSep), 0.30) + gauss(angDist(th, F + C.cheekSep), 0.30)) * gauss(t - C.cheekT, 0.07);
-  r += C.jawA * (gauss(angDist(th, F - 0.9), 0.35) + gauss(angDist(th, F + 0.9), 0.35)) * gauss(t - 0.25, 0.07);
-  return r;
+// v2: cabeza FULL REDONDA — sin esculpido (la cara va dibujada en el
+// decal y cualquier bump deformaba el dibujo en el Poco).
+export function headDisp(_th: number, _t: number): number {
+  return 0;
 }
 
 // ─── escritor de figura ──────────────────────────────────────────────────
@@ -560,18 +546,21 @@ export function poseSit(t: number): Joints {
   J.breath = 0.5 + 0.5 * Math.sin(t * 1.05);
   J.hipFwdL = 1.45;
   J.hipFwdR = 1.45;
-  J.kneeL = 1.5;
-  J.kneeR = 1.5;
-  J.ankleL = 0.15;
-  J.ankleR = 0.15;
+  // piernitas colgando que se hamacan alternadas (el petiso no llega al piso)
+  J.kneeL = 1.35 + Math.sin(t * 1.6) * 0.22;
+  J.kneeR = 1.35 + Math.sin(t * 1.6 + 2.4) * 0.22;
+  J.ankleL = 0.2;
+  J.ankleR = 0.2;
   J.pelvisY = -0.075;
-  J.spineFwd = -0.06;
-  J.shFwdL = 0.3;
-  J.shFwdR = 0.3;
-  J.elbowL = 0.55;
-  J.elbowR = 0.55;
-  J.headTurn = Math.sin(t * 0.3) * 0.25;
-  J.headNod = Math.sin(t * 0.5) * 0.04;
+  J.spineFwd = -0.05;
+  J.spineSide = Math.sin(t * 0.45) * 0.03;
+  J.shFwdL = 0.32;
+  J.shFwdR = 0.32;
+  J.elbowL = 0.6;
+  J.elbowR = 0.6;
+  J.headTurn = Math.sin(t * 0.3) * 0.3 + Math.sin(t * 0.7) * 0.08;
+  J.headNod = Math.sin(t * 0.5) * 0.05;
+  J.headTilt = Math.sin(t * 0.4) * 0.04;
   J.jaw = 0.04 + 0.03 * Math.sin(t * 1.05);
   return J;
 }

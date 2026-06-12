@@ -51,7 +51,7 @@ import coverJugglerUrl from '../src/assets/sprite/sprite_portal-cover-juggler_fe
 import coverRacingUrl from '../src/assets/sprite/sprite_portal-cover-racing_c7b1b5.webp';
 import portraitUrl from '../src/assets/portrait/portrait_poster-worldcup-portrait_69e0b1.webp';
 // el humanoide esculpido del viewer (figlab) porteado: malla por frame
-import { FIG, buildFigure, J0, poseCartoon, poseSit, mixJoints, paintOutfit, decalPositions, type Joints } from './figura';
+import { FIG, buildFigure, J0, poseCartoon, poseSit, mixJoints, paintOutfit, decalPositions, headFrame, type Joints } from './figura';
 
 // ─── Constantes del layout (portables a world.ts) ───────────────────────
 const RING_RADIUS = 17.5;        // radio del anillo de tiendas
@@ -380,7 +380,7 @@ function buildCancha(scene: Scene, cx: number, cz: number, woodMat: StandardMate
     tri.isPickable = false;
   }
   for (const bz of [-3.5, 3.5]) {
-    BENCHES.push({ x: cx - W / 2 - 1.6, z: cz + bz, yaw: Math.PI / 2 });
+    registerBench(cx - W / 2 - 1.6, cz + bz, Math.PI / 2);
     const seat = MeshBuilder.CreateBox('cancha-bench', { width: 0.5, height: 0.1, depth: 2.4 }, scene);
     seat.position.set(cx - W / 2 - 1.6, 0.45, cz + bz);
     seat.material = woodMat;
@@ -1114,6 +1114,13 @@ const PORTAL_DOORS: Array<{ x: number; z: number; url: string; label: string; ma
 let PHINT: HTMLElement | null = null;
 // bancos con animación de sentarse
 const BENCHES: Array<{ x: number; z: number; yaw: number }> = [];
+function registerBench(x: number, z: number, yaw: number): void {
+  // dos asientos por banca: corridos ±0.45 sobre el eje largo (X local)
+  const ax = Math.cos(yaw);
+  const az = -Math.sin(yaw);
+  BENCHES.push({ x: x + ax * 0.45, z: z + az * 0.45, yaw });
+  BENCHES.push({ x: x - ax * 0.45, z: z - az * 0.45, yaw });
+}
 let NEAR_BENCH: { x: number; z: number; yaw: number } | null = null;
 const SIT = { amt: 0, target: 0 };
 // emotes: 24 emojis con gesto + globito sobre la cabeza
@@ -1122,47 +1129,196 @@ const EMOTE = { start: -10, type: 0 };
 let emoPlane: Mesh | null = null;
 let emoTex: DynamicTexture | null = null;
 
-// gesto del emote sobre la pose (envolvente con entrada/salida suave)
+// 24 GESTOS ÚNICOS, uno por emote (envolvente con entrada/salida suave)
 function applyGesture(J: Joints, type: number, e: number, t: number): void {
   const env = Math.min(1, e / 0.25, (2.4 - e) / 0.45);
   if (env <= 0) return;
+  const o = Math.sin(t * 12);
   switch (type) {
-    case 0: // saludo
-      J.shAbdR += 2.1 * env;
-      J.elbowR += (0.5 + 0.5 * Math.sin(t * 13)) * env;
-      break;
-    case 1: // salto festejo
-      J.pelvisY += Math.abs(Math.sin(e * 9)) * 0.14 * env;
-      J.shAbdL += 2.2 * env;
-      J.shAbdR += 2.2 * env;
-      break;
-    case 2: // aplauso
-      J.shFwdL += 1.1 * env;
-      J.shFwdR += 1.1 * env;
-      J.elbowL += (0.9 + 0.35 * Math.sin(t * 14)) * env;
-      J.elbowR += (0.9 - 0.35 * Math.sin(t * 14)) * env;
-      break;
-    case 3: // bailecito
-      J.twist += Math.sin(t * 7) * 0.5 * env;
-      J.swayX += Math.sin(t * 7) * 0.05 * env;
-      J.shAbdL += 0.9 * env;
-      J.shAbdR += 0.9 * env;
-      J.elbowL += 0.8 * env;
-      J.elbowR += 0.8 * env;
-      break;
-    case 4: // reverencia
-      J.spineFwd += 0.75 * env;
-      J.headNod += 0.3 * env;
-      break;
-    default: // brazos arriba
-      J.shAbdL += 2.3 * env;
-      J.shAbdR += 2.3 * env;
-      J.headNod -= 0.15 * env;
-      break;
+    case 0: J.shAbdR += 2.1 * env; J.elbowR += (0.5 + 0.5 * o) * env; break;                              // 😀 saludo
+    case 1: J.spineFwd += Math.abs(Math.sin(t * 8)) * 0.3 * env; J.headNod -= 0.25 * env; J.jaw += 0.06 * env; break; // 😂 carcajada
+    case 2: J.shFwdL += 1.25 * env; J.shFwdR += 1.25 * env; J.elbowL += 1.6 * env; J.elbowR += 1.6 * env; J.headTilt += 0.18 * env; break; // 😍 manos al corazón
+    case 3: J.shFwdL += 0.9 * env; J.shFwdR += 0.9 * env; J.elbowL += 1.35 * env; J.elbowR += 1.35 * env; J.headTilt -= 0.15 * env; J.spineFwd -= 0.08 * env; break; // 😎 canchero
+    case 4: J.shFwdR += 1.3 * env; J.elbowR += 1.9 * env; J.headTilt += 0.2 * env; J.headTurn += Math.sin(t * 1.5) * 0.3 * env; break; // 🤔 pensando
+    case 5: J.shFwdL += 1.35 * env; J.shFwdR += 1.35 * env; J.elbowL += 1.85 * env; J.elbowR += 1.85 * env; J.headNod += 0.35 * env; J.spineFwd += 0.2 * env; break; // 😭 llanto
+    case 6: J.elbowL += 0.5 * env; J.elbowR += 0.5 * env; J.twist += Math.sin(t * 16) * 0.18 * env; J.headNod += 0.15 * env; break; // 😡 furia temblando
+    case 7: J.pelvisY += Math.abs(Math.sin(e * 9)) * 0.14 * env; J.shAbdL += 2.2 * env; J.shAbdR += 2.2 * env; break; // 🥳 salto festejo
+    case 8: J.shFwdR += 1.25 * env; J.elbowR += 0.25 * env; break;                                          // 👍 pulgar
+    case 9: J.shFwdR += 1.1 * env; J.elbowR += 0.3 * env; J.headTurn += Math.sin(t * 7) * 0.3 * env; break; // 👎 no no
+    case 10: J.shFwdL += 1.1 * env; J.shFwdR += 1.1 * env; J.elbowL += (0.9 + 0.35 * Math.sin(t * 14)) * env; J.elbowR += (0.9 - 0.35 * Math.sin(t * 14)) * env; break; // 👏 aplauso
+    case 11: J.shAbdL += (2.2 + 0.25 * Math.sin(t * 9)) * env; J.shAbdR += (2.2 - 0.25 * Math.sin(t * 9)) * env; J.pelvisY += Math.abs(Math.sin(t * 4.5)) * 0.04 * env; break; // 🙌 olé olé
+    case 12: J.shAbdR += 1.25 * env; J.elbowR += 2.05 * env; J.headTurn -= 0.45 * env; break;               // 💪 músculo
+    case 13: J.shAbdR += 1.4 * env; J.shFwdR += 0.85 * env; J.elbowR += 2.3 * env; J.spineFwd -= 0.05 * env; break; // 🫡 saludo militar
+    case 14: J.shAbdL += 1.6 * env; J.shAbdR += 1.6 * env; J.elbowL += 1.5 * env; J.elbowR += 1.5 * env; J.headNod -= 0.12 * env; break; // ❤️ corazón arriba
+    case 15: J.twist += Math.sin(t * 9) * 0.55 * env; J.shAbdL += 1.1 * env; J.shAbdR += 1.1 * env; J.elbowL += 0.9 * env; J.elbowR += 0.9 * env; break; // 🔥 prendido fuego
+    case 16: J.hipFwdR += Math.max(0, Math.sin(e * 5.5)) * 1.25 * env; J.kneeR += Math.max(0, -Math.sin(e * 5.5)) * 0.8 * env; J.shFwdL += 0.7 * env; J.spineFwd += 0.1 * env; break; // ⚽ patada
+    case 17: J.shAbdL += 0.5 * env; J.shAbdR += 0.5 * env; J.shFwdL += 1.55 * env; J.shFwdR += 1.55 * env; J.elbowL += 0.8 * env; J.elbowR += 0.8 * env; J.headNod -= 0.25 * env; break; // 🏆 levantar la copa
+    case 18: J.shAbdL += (1.8 + 0.5 * Math.sin(t * 8)) * env; J.shAbdR += (1.8 - 0.5 * Math.sin(t * 8)) * env; J.pelvisY += Math.abs(Math.sin(t * 8)) * 0.06 * env; J.twist += Math.sin(t * 4) * 0.2 * env; break; // 🎉 fiesta
+    case 19: J.headTilt += 0.5 * env; J.headNod += 0.3 * env; J.spineSide += 0.18 * env; J.spineFwd += 0.12 * env; J.jaw += 0.05 * env; break; // 😴 mimido
+    case 20: J.shAbdL += 1.2 * env; J.shAbdR += 1.2 * env; J.shFwdL += 1.1 * env; J.shFwdR += 1.1 * env; J.elbowL += 2.2 * env; J.elbowR += 2.2 * env; J.headNod -= 0.2 * env; break; // 🤯 manos a la cabeza
+    case 21: J.shFwdL += 1.15 * env; J.shFwdR += 1.15 * env; J.elbowL += 1.7 * env; J.elbowR += 1.7 * env; J.headNod += 0.28 * env; break; // 🙏 plegaria
+    case 22: J.swayX += Math.sin(t * 6.5) * 0.09 * env; J.twist += Math.sin(t * 6.5) * 0.4 * env; J.shAbdL += 2.1 * env; J.elbowL += 0.6 * env; J.pelvisY += Math.abs(Math.sin(t * 6.5)) * 0.03 * env; break; // 💃 baile
+    default: J.shFwdR += 1.15 * env; J.elbowR += 0.15 * env; J.spineFwd += 0.16 * env; J.headNod += 0.1 * env; break; // 🤝 trato hecho
   }
 }
 
-// globito de emoji sobre la cabeza (textura repintable)
+// ─── outfit equipable (tiendas como el original) ────────────────────────
+const PALETA = ['#f2f2ee', '#c14444', '#3a6ea5', '#e8c84a', '#9bd96b', '#d96bc4', '#e89c4a', '#a85dd9', '#1d1d22', '#4aa3a3', '#ff7a5c', '#6bd0ff'];
+const OUTFIT_ST = { remera: '#f2f2ee', pantalon: '#1d1d22', zapas: '#3dbf5a', hat: -1, glasses: -1, scarf: -1 };
+let COLORS_BUF: Float32Array | null = null;
+let FACETEX: DynamicTexture | null = null;
+let FACECV: HTMLCanvasElement | null = null;
+let HATNODE: TransformNode | null = null;
+let SCARFNODE: TransformNode | null = null;
+const SHOPS: Array<{ x: number; z: number; id: string; nombre: string }> = [];
+let NEAR_SHOP: { x: number; z: number; id: string; nombre: string } | null = null;
+// salto + ragdoll
+const JUMP = { y: 0, vy: 0, active: false };
+const RAG = { start: -10 };
+
+function hex2v3(h: string): [number, number, number] {
+  return [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
+}
+function saveOutfit(): void {
+  try { localStorage.setItem('maplab_outfit', JSON.stringify(OUTFIT_ST)); } catch { /* sin storage */ }
+}
+function repaintOutfit(): void {
+  if (!PLAYER || !COLORS_BUF) return;
+  paintOutfit(COLORS_BUF, hex2v3(OUTFIT_ST.remera), hex2v3(OUTFIT_ST.pantalon), hex2v3(OUTFIT_ST.zapas), [0.91, 0.72, 0.56]);
+  PLAYER.mesh.updateVerticesData('color', COLORS_BUF);
+  saveOutfit();
+}
+// cara del jugador: lienzo del usuario con corrección de aspecto + anteojos
+function paintPlayerFace(): void {
+  if (!FACETEX || !FACECV) return;
+  const c = FACETEX.getContext() as unknown as CanvasRenderingContext2D;
+  c.save();
+  c.fillStyle = '#e8b88f';
+  c.fillRect(0, 0, 512, 512);
+  c.translate(0, 512);
+  c.scale(1, -1);
+  // el decal es ~1.55 más ancho que alto: dibujar centrado y angosto
+  // para que la cara dibujada quede redonda (no estirada)
+  const w = 330;
+  c.drawImage(FACECV, (512 - w) / 2, 0, w, 512);
+  if (OUTFIT_ST.glasses >= 0) { // anteojos pintados sobre la cara
+    const g = OUTFIT_ST.glasses;
+    const ey = 200;
+    c.strokeStyle = ['#1d1d22', '#c1272d', '#3a6ea5', '#e8c84a'][g];
+    c.lineWidth = 11;
+    if (g === 2) { // banda deportiva
+      c.fillStyle = '#1d1d22cc';
+      c.fillRect(116, ey - 32, 280, 62);
+    } else {
+      const rx = g === 1 ? 50 : 44;
+      for (const sx of [-1, 1]) {
+        c.beginPath();
+        if (g === 3) c.rect(256 + sx * 78 - rx, ey - 34, rx * 2, 66);
+        else c.arc(256 + sx * 78, ey, rx, 0, 7);
+        c.stroke();
+      }
+      c.beginPath();
+      c.moveTo(256 - 34, ey);
+      c.lineTo(256 + 34, ey);
+      c.stroke();
+    }
+  }
+  c.restore();
+  FACETEX.update(false);
+}
+// sombreros procedurales (se siguen del marco de la cabeza por frame)
+function equipHat(scene: Scene, idx: number): void {
+  if (HATNODE) { HATNODE.dispose(false, true); HATNODE = null; }
+  OUTFIT_ST.hat = idx;
+  saveOutfit();
+  if (idx < 0 || !PLAYER) return;
+  const n = new TransformNode('hat', scene);
+  n.parent = PLAYER.root;
+  const col = ['#3a6ea5', '#1d1d22', '#9bd96b', '#e8c84a', '#e8c84a', '#c14444'][idx];
+  const m = stdMat(scene, `hat-mat-${idx}`, col);
+  const add = (mesh: Mesh, y: number, z = 0): Mesh => {
+    mesh.parent = n;
+    mesh.position.set(0, y, z);
+    mesh.material = m;
+    mesh.isPickable = false;
+    return mesh;
+  };
+  const B = MeshBuilder;
+  if (idx === 0) { // gorra
+    add(B.CreateSphere('h', { diameter: 0.34, segments: 10 }, scene), 0.02).scaling.set(1, 0.62, 1);
+    add(B.CreateBox('h', { width: 0.26, height: 0.035, depth: 0.18 }, scene), -0.015, -0.21);
+  } else if (idx === 1) { // galera
+    add(B.CreateCylinder('h', { diameter: 0.42, height: 0.05, tessellation: 18 }, scene), 0);
+    add(B.CreateCylinder('h', { diameter: 0.27, height: 0.3, tessellation: 16 }, scene), 0.17);
+  } else if (idx === 2) { // vincha
+    add(B.CreateTorus('h', { diameter: 0.31, thickness: 0.05, tessellation: 18 }, scene), 0.0);
+  } else if (idx === 3) { // piluso
+    add(B.CreateCylinder('h', { diameterTop: 0.28, diameterBottom: 0.44, height: 0.17, tessellation: 16 }, scene), 0.05);
+  } else if (idx === 4) { // corona
+    const c1 = add(B.CreateCylinder('h', { diameter: 0.3, height: 0.13, tessellation: 12 }, scene), 0.04);
+    c1.material = m;
+    for (let i = 0; i < 4; i++) {
+      const spike = B.CreateCylinder('h', { diameterTop: 0.01, diameterBottom: 0.06, height: 0.1, tessellation: 6 }, scene);
+      spike.parent = n;
+      spike.position.set(Math.cos(i * Math.PI / 2) * 0.12, 0.14, Math.sin(i * Math.PI / 2) * 0.12);
+      spike.material = m;
+      spike.isPickable = false;
+    }
+  } else { // beanie
+    add(B.CreateSphere('h', { diameter: 0.34, segments: 10 }, scene), 0.03).scaling.set(1, 0.6, 1);
+    add(B.CreateTorus('h', { diameter: 0.32, thickness: 0.05, tessellation: 16 }, scene), -0.03);
+  }
+  HATNODE = n;
+}
+function equipScarf(scene: Scene, idx: number): void {
+  if (SCARFNODE) { SCARFNODE.dispose(false, true); SCARFNODE = null; }
+  OUTFIT_ST.scarf = idx;
+  saveOutfit();
+  if (idx < 0 || !PLAYER) return;
+  const n = new TransformNode('scarf', scene);
+  n.parent = PLAYER.root;
+  const m = stdMat(scene, `scarf-mat-${idx}`, PALETA[(idx * 2 + 1) % PALETA.length]);
+  const loop = MeshBuilder.CreateTorus('sc', { diameter: 0.27, thickness: 0.075, tessellation: 16 }, scene);
+  loop.parent = n;
+  loop.material = m;
+  loop.isPickable = false;
+  const tail = MeshBuilder.CreateBox('sc', { width: 0.11, height: 0.26, depth: 0.05 }, scene);
+  tail.parent = n;
+  tail.position.set(0.07, -0.15, -0.13);
+  tail.material = m;
+  tail.isPickable = false;
+  SCARFNODE = n;
+}
+// ragdoll: rotación del root + manoteo de extremidades
+function ragRotX(e: number): number {
+  if (e < 0 || e >= 3.0) return 0;
+  if (e < 0.45) return -(e / 0.45) * 1.52;
+  if (e < 2.2) return -1.52 + Math.sin((e - 0.45) * 9) * 0.07 * Math.exp(-(e - 0.45) * 2);
+  const u = (e - 2.2) / 0.8;
+  return -1.52 * (1 - u * u * (3 - 2 * u));
+}
+function ragdollJ(J: Joints, e: number, t: number): void {
+  const flail = e < 0.6 ? 1 : Math.exp(-(e - 0.6) * 2.2);
+  if (e < 2.2) {
+    J.shAbdL += Math.sin(t * 11 + 1) * 1.2 * flail + 0.5;
+    J.shAbdR += Math.sin(t * 13 + 2) * 1.2 * flail + 0.5;
+    J.elbowL += Math.abs(Math.sin(t * 9)) * 1.1 * flail;
+    J.elbowR += Math.abs(Math.sin(t * 10 + 1)) * 1.1 * flail;
+    J.hipFwdL += Math.sin(t * 8) * 0.7 * flail + 0.25;
+    J.hipFwdR += Math.sin(t * 9.5 + 1) * 0.7 * flail + 0.25;
+    J.kneeL += Math.abs(Math.sin(t * 7)) * 0.9 * flail + 0.2;
+    J.kneeR += Math.abs(Math.sin(t * 8 + 2)) * 0.9 * flail + 0.2;
+    J.headNod += Math.sin(t * 6) * 0.3 * flail;
+    J.twist += Math.sin(t * 5) * 0.4 * flail;
+  } else {
+    const u = (e - 2.2) / 0.8;
+    J.kneeL += (1 - u) * 1.2;
+    J.kneeR += (1 - u) * 1.2;
+    J.spineFwd += Math.sin(u * Math.PI) * 0.6;
+  }
+}
+
+// globito de emoji sobre la cabeza (textura repintable)// globito de emoji sobre la cabeza (textura repintable)
 function showEmote(scene: Scene, idx: number): void {
   if (!PLAYER) return;
   if (!emoPlane) {
@@ -1193,13 +1349,13 @@ function showEmote(scene: Scene, idx: number): void {
   c.restore();
   (emoTex as DynamicTexture).update(false);
   EMOTE.start = performance.now() / 1000;
-  EMOTE.type = idx % 6;
+  EMOTE.type = idx; // 24 gestos únicos, uno por emoji
 }
 const DEC_U = 32;
 const DEC_V = 24;
-const DEC_PHI = 1.1;
-const DEC_T0 = 0.16;
-const DEC_T1 = 0.74;
+const DEC_PHI = 0.95;
+const DEC_T0 = 0.18;
+const DEC_T1 = 0.70;
 
 function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): Player {
   const root = new TransformNode('player', scene);
@@ -1213,11 +1369,12 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
   VertexData.ComputeNormals(FIG.pos, FIG.idx, normals);
   vd.normals = normals;
   const colors = new Float32Array(FIG.vc * 4);
-  paintOutfit(colors,
-    [0.95, 0.95, 0.93],   // remera blanca
-    [0.10, 0.10, 0.13],   // pantalón negro
-    [0.24, 0.75, 0.35],   // zapas verdes
-    [0.91, 0.72, 0.56]);  // piel
+  COLORS_BUF = colors;
+  try { // outfit guardado de sesiones anteriores
+    const saved = localStorage.getItem('maplab_outfit');
+    if (saved) Object.assign(OUTFIT_ST, JSON.parse(saved));
+  } catch { /* sin storage */ }
+  paintOutfit(colors, hex2v3(OUTFIT_ST.remera), hex2v3(OUTFIT_ST.pantalon), hex2v3(OUTFIT_ST.zapas), [0.91, 0.72, 0.56]);
   vd.colors = colors;
   vd.applyToMesh(mesh, true);
   const mat = new StandardMaterial('player-mat', scene);
@@ -1258,18 +1415,12 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
   dvd.normals = dnormals;
   const decal = new Mesh('player-cara', scene);
   dvd.applyToMesh(decal, true);
-  const faceTex = new DynamicTexture('pl-face', { width: 256, height: 256 }, scene, false);
-  // las DynamicTexture sin mipmaps salen espejadas en Y → copiar dado vuelta
-  const fc2 = faceTex.getContext() as unknown as CanvasRenderingContext2D;
-  fc2.save();
-  fc2.translate(0, 256);
-  fc2.scale(1, -1);
-  fc2.drawImage(faceCv, 0, 0, 256, 256);
-  fc2.restore();
-  faceTex.update(false);
-  faceTex.updateSamplingMode(Texture.NEAREST_SAMPLINGMODE);
+  // textura de cara 512 con filtrado suave (chau pixelado feo del Poco)
+  FACECV = faceCv;
+  FACETEX = new DynamicTexture('pl-face', { width: 512, height: 512 }, scene, true);
+  paintPlayerFace();
   const dmat = new StandardMaterial('pl-face-mat', scene);
-  dmat.diffuseTexture = faceTex;
+  dmat.diffuseTexture = FACETEX;
   dmat.emissiveColor = new Color3(0.28, 0.28, 0.28);
   dmat.specularColor = new Color3(0, 0, 0);
   dmat.backFaceCulling = false;
@@ -1307,7 +1458,11 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
   nameP.isPickable = false;
 
   root.position.set(0, 0, -27); // spawn en el sendero sur
-  return { root, mesh, decal, decalPos, normals, walkPh: 0, moveAmt: 0, yaw: 0 };
+  const player: Player = { root, mesh, decal, decalPos, normals, walkPh: 0, moveAmt: 0, yaw: 0 };
+  PLAYER = player; // visible para equipHat/equipScarf
+  if (OUTFIT_ST.hat >= 0) equipHat(scene, OUTFIT_ST.hat);
+  if (OUTFIT_ST.scarf >= 0) equipScarf(scene, OUTFIT_ST.scarf);
+  return player;
 }
 
 // ─── Escena completa ────────────────────────────────────────────────────
@@ -1393,6 +1548,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     // local +Z debe apuntar al centro: yaw = atan2 hacia el origen
     const facing = Math.atan2(-x, -z);
     buildTienda(scene, TIENDAS[i], x, z, facing, woodMat, woodDarkMat, spinners);
+    SHOPS.push({ x, z, id: TIENDAS[i].id, nombre: TIENDAS[i].nombre });
   }
 
   // ─── Monumento central: base escalonada de piedra + copa dorada ──────
@@ -1422,7 +1578,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const bench = new TransformNode(`bench-${i}`, scene);
     bench.position.set(bx, 0, bz);
     bench.rotation.y = Math.atan2(-bx, -bz);
-    BENCHES.push({ x: bx, z: bz, yaw: Math.atan2(-bx, -bz) });
+    registerBench(bx, bz, Math.atan2(-bx, -bz));
     const seat = MeshBuilder.CreateBox('bench-seat', { width: 1.8, height: 0.1, depth: 0.45 }, scene);
     seat.parent = bench;
     seat.position.y = 0.45;
@@ -1600,7 +1756,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const bx = Math.cos(a) * 10.6;
     const bz = Math.sin(a) * 10.6;
     const yaw = Math.atan2(-bx, -bz);
-    BENCHES.push({ x: bx, z: bz, yaw });
+    registerBench(bx, bz, yaw);
     const node = new TransformNode('bench-lawn', scene);
     node.position.set(bx, 0, bz);
     node.rotation.y = yaw;
@@ -1741,9 +1897,8 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   const rand = rng(20260611);
   const oakMat = new StandardMaterial('oak-mat', scene);
   const oakTex = new Texture(oakTreeUrl, scene);
-  oakTex.hasAlpha = true;
-  oakMat.diffuseTexture = oakTex;
-  oakMat.useAlphaFromDiffuseTexture = true;
+  oakTex.hasAlpha = true; // SIN useAlphaFromDiffuseTexture → alpha TEST:
+  oakMat.diffuseTexture = oakTex; // recorte nítido, sin halos ni problemas de orden
   oakMat.backFaceCulling = false;
   oakMat.specularColor = new Color3(0, 0, 0);
   for (let i = 0; i < 16; i++) {
@@ -1756,7 +1911,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const s = 7.2 + rand() * 3.8; // robles grandes (piden presencia)
     for (const yaw of [0, Math.PI / 2]) {
       const plane = MeshBuilder.CreatePlane(`oak-${i}-${yaw > 0 ? 'b' : 'a'}`, { width: s, height: s }, scene);
-      plane.position.set(tx, s / 2 - 0.05, tz);
+      plane.position.set(tx, s / 2 - s * 0.07, tz); // hundido: el tronco toca el piso
       plane.rotation.y = a + yaw; // orientación variada
       plane.material = oakMat;
       plane.isPickable = false;
@@ -1766,9 +1921,8 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   // matas: thin instances de 2 planos cruzados
   const tuftMat = new StandardMaterial('tuft-mat', scene);
   const tuftTex = new Texture(grassTuftUrl, scene);
-  tuftTex.hasAlpha = true;
+  tuftTex.hasAlpha = true; // alpha test, igual que los robles
   tuftMat.diffuseTexture = tuftTex;
-  tuftMat.useAlphaFromDiffuseTexture = true;
   tuftMat.backFaceCulling = false;
   tuftMat.specularColor = new Color3(0, 0, 0);
   const tuftA = MeshBuilder.CreatePlane('tuft-a', { width: 1, height: 1 }, scene);
@@ -1791,10 +1945,10 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     const s = 0.75 + rand() * 0.6;
     const yaw = rand() * Math.PI;
     Quaternion.RotationYawPitchRollToRef(yaw, 0, 0, scratchQ);
-    Matrix.ComposeToRef(new Vector3(s, s, s), scratchQ, new Vector3(px, s / 2 - 0.04, pz), scratchM);
+    Matrix.ComposeToRef(new Vector3(s, s, s), scratchQ, new Vector3(px, s / 2 - s * 0.1, pz), scratchM);
     for (let j = 0; j < 16; j++) tm.push(scratchM.m[j]);
     Quaternion.RotationYawPitchRollToRef(yaw + Math.PI / 2, 0, 0, scratchQ);
-    Matrix.ComposeToRef(new Vector3(s, s, s), scratchQ, new Vector3(px, s / 2 - 0.04, pz), scratchM);
+    Matrix.ComposeToRef(new Vector3(s, s, s), scratchQ, new Vector3(px, s / 2 - s * 0.1, pz), scratchM);
     for (let j = 0; j < 16; j++) tm2.push(scratchM.m[j]);
   }
   if (tm.length) tuftA.thinInstanceSetBuffer('matrix', new Float32Array(tm), 16, true);
@@ -1873,10 +2027,33 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
         PLAYER.yaw += dY * k;
         PLAYER.root.rotation.y = PLAYER.yaw;
       }
+      // salto (arco con física simple)
+      if (JUMP.active) {
+        JUMP.y += JUMP.vy * dt;
+        JUMP.vy -= 14 * dt;
+        if (JUMP.y <= 0) {
+          JUMP.y = 0;
+          JUMP.active = false;
+        }
+      }
+      const ragE = t - RAG.start;
+      const ragOn = ragE >= 0 && ragE < 3.0;
       // mezcla idle↔caminata suave + FK → regenerar la malla esculpida
-      PLAYER.moveAmt += ((moving && SIT.amt < 0.3 ? Math.min(1, len) : 0) - PLAYER.moveAmt) * Math.min(1, dt * 8);
+      PLAYER.moveAmt += ((moving && SIT.amt < 0.3 && !ragOn ? Math.min(1, len) : 0) - PLAYER.moveAmt) * Math.min(1, dt * 8);
       let J: Joints = poseCartoon(t, PLAYER.walkPh, PLAYER.moveAmt);
       if (SIT.amt > 0.01) J = mixJoints(J, poseSit(t), SIT.amt);
+      if (JUMP.active) { // piernas recogidas + brazos arriba en el aire
+        const air = Math.min(1, JUMP.y / 0.5);
+        J.kneeL += 1.1 * air;
+        J.kneeR += 1.1 * air;
+        J.hipFwdL += 0.5 * air;
+        J.hipFwdR += 0.5 * air;
+        J.shAbdL += 0.9 * air;
+        J.shAbdR += 0.9 * air;
+      }
+      if (ragOn) ragdollJ(J, ragE, t);
+      PLAYER.root.position.y = JUMP.y;
+      PLAYER.root.rotation.x = ragRotX(ragE);
       // emote: gesto + globito sobre la cabeza
       const eT = t - EMOTE.start;
       if (eT >= 0 && eT < 2.4) {
@@ -1894,6 +2071,33 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
       PLAYER.mesh.updateVerticesData('normal', PLAYER.normals);
       decalPositions(J, PLAYER.decalPos, DEC_U, DEC_V, DEC_PHI, DEC_T0, DEC_T1);
       PLAYER.decal.updateVerticesData('position', PLAYER.decalPos);
+      // sombrero y bufanda enganchados al marco de la cabeza
+      if (HATNODE || SCARFNODE) {
+        const hf = headFrame(J);
+        const tiltX = Math.atan2(hf.hax[2], hf.hax[1]);
+        const tiltZ = -Math.atan2(hf.hax[0], hf.hax[1]);
+        if (HATNODE) {
+          HATNODE.position.set(
+            hf.neckTop[0] + hf.hax[0] * 0.27,
+            hf.neckTop[1] + hf.hax[1] * 0.27,
+            hf.neckTop[2] + hf.hax[2] * 0.27);
+          HATNODE.rotation.set(tiltX, J.headTurn * 0.5, tiltZ);
+        }
+        if (SCARFNODE) {
+          SCARFNODE.position.set(hf.neckTop[0], hf.neckTop[1] + 0.01, hf.neckTop[2]);
+          SCARFNODE.rotation.set(tiltX, 0, tiltZ);
+        }
+      }
+      // tienda cercana → botón de abrir
+      NEAR_SHOP = null;
+      for (const s of SHOPS) {
+        if (Math.hypot(PLAYER.root.position.x - s.x, PLAYER.root.position.z - s.z) < 3.2) {
+          NEAR_SHOP = s;
+          break;
+        }
+      }
+      const shopBtn = document.getElementById('shopbtn');
+      if (shopBtn) shopBtn.style.display = NEAR_SHOP ? 'flex' : 'none';
       // puertas-portal: pulso + hint al acercarse
       let nearPortal: { url: string; label: string; mat: StandardMaterial } | null = null;
       for (const d of PORTAL_DOORS) {
@@ -2032,6 +2236,8 @@ function boot(): void {
       $id('intro').style.display = 'none';
       $id('joy').style.display = 'block';
       $id('emobtn').style.display = 'flex';
+      $id('jumpbtn').style.display = 'flex';
+      $id('ragbtn').style.display = 'flex';
       const cam = scene.activeCamera as ArcRotateCamera;
       cam.alpha = -Math.PI / 2;
       cam.beta = 1.22;
@@ -2104,6 +2310,104 @@ function boot(): void {
       e.preventDefault();
       e.stopPropagation();
       emoPanel.style.display = emoPanel.style.display === 'grid' ? 'none' : 'grid';
+    });
+
+    // ─── saltar + ragdoll ───────────────────────────────────────────────
+    const jb = $id('jumpbtn');
+    jb.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ragE2 = performance.now() / 1000 - RAG.start;
+      if (!JUMP.active && SIT.target === 0 && !(ragE2 >= 0 && ragE2 < 3)) {
+        JUMP.active = true;
+        JUMP.vy = 5.4;
+      }
+    });
+    const rb = $id('ragbtn');
+    rb.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const now = performance.now() / 1000;
+      if (now - RAG.start > 3.2 && SIT.target === 0) {
+        RAG.start = now;
+        SIT.target = 0;
+      }
+    });
+
+    // ─── tiendas: abrir y equipar (mecánica del original) ──────────────
+    const shopBtn = $id('shopbtn');
+    const shopPanel = $id('shoppanel');
+    const closeShop = (): void => { shopPanel.style.display = 'none'; };
+    const swatchRow = (cols: string[], pick: (c: string) => void): HTMLElement => {
+      const row = document.createElement('div');
+      row.className = 'swrow';
+      for (const c of cols) {
+        const s = document.createElement('div');
+        s.className = 'sw';
+        s.style.background = c;
+        s.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          pick(c);
+        });
+        row.appendChild(s);
+      }
+      return row;
+    };
+    const itemRow = (items: string[], pick: (i: number) => void): HTMLElement => {
+      const row = document.createElement('div');
+      row.className = 'swrow';
+      items.forEach((label, i) => {
+        const b = document.createElement('div');
+        b.className = 'shopitem';
+        b.textContent = label;
+        b.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          pick(i === 0 ? -1 : i - 1); // el primero siempre es "sacar"
+        });
+        row.appendChild(b);
+      });
+      return row;
+    };
+    const openShop = (shop: { id: string; nombre: string }): void => {
+      shopPanel.innerHTML = '';
+      const title = document.createElement('div');
+      title.className = 'shoptitle';
+      title.textContent = '🛍 ' + shop.nombre;
+      shopPanel.appendChild(title);
+      if (shop.id === 'shirts' || shop.id === 'customize') {
+        shopPanel.appendChild(swatchRow(PALETA, (c) => { OUTFIT_ST.remera = c; repaintOutfit(); }));
+      } else if (shop.id === 'pants') {
+        shopPanel.appendChild(swatchRow(PALETA, (c) => { OUTFIT_ST.pantalon = c; repaintOutfit(); }));
+      } else if (shop.id === 'shoes') {
+        shopPanel.appendChild(swatchRow(PALETA.concat(['#3dbf5a']), (c) => { OUTFIT_ST.zapas = c; repaintOutfit(); }));
+      } else if (shop.id === 'hats') {
+        shopPanel.appendChild(itemRow(['✕ sacar', '🧢 gorra', '🎩 galera', '🤕 vincha', '👒 piluso', '👑 corona', '🥶 beanie'], (i) => equipHat(scene, i)));
+      } else if (shop.id === 'glasses') {
+        shopPanel.appendChild(itemRow(['✕ sacar', '🕶 redondos', '😎 grandes', '🥽 deportivos', '🤓 cuadrados'], (i) => {
+          OUTFIT_ST.glasses = i;
+          saveOutfit();
+          paintPlayerFace();
+        }));
+      } else if (shop.id === 'scarves') {
+        shopPanel.appendChild(itemRow(['✕ sacar', '🧣 roja', '🧣 amarilla', '🧣 rosa', '🧣 violeta', '🧣 celeste', '🧣 naranja'], (i) => equipScarf(scene, i)));
+      }
+      const cls = document.createElement('div');
+      cls.className = 'shopitem shopclose';
+      cls.textContent = 'cerrar';
+      cls.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        closeShop();
+      });
+      shopPanel.appendChild(cls);
+      shopPanel.style.display = 'block';
+    };
+    shopBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (NEAR_SHOP) openShop(NEAR_SHOP);
     });
 
     // ─── teclado (desktop) ──────────────────────────────────────────────
