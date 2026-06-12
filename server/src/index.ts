@@ -2,6 +2,7 @@ import { Server } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { createServer } from "http";
 import { GameRoom, roomRuntimeStats } from "./room";
+import { PatioRoom } from "./maplab-room";
 import { gameConfig, serializeClientConfig } from "./game.config";
 
 const PORT = Number(process.env.PORT ?? gameConfig.port);
@@ -43,6 +44,8 @@ const gameServer = new Server({
 // the same code land in the same room, even if multiple rooms coexist in
 // this process.
 gameServer.define(gameConfig.roomName, GameRoom).filterBy(["code"]);
+// WORLD CUP HUB v2: salas "patio" de 30 con matchmaking automático
+gameServer.define("patio", PatioRoom);
 
 gameServer.listen(PORT).then(() => {
   console.log(`[colyseus] listening on :${PORT}`);
