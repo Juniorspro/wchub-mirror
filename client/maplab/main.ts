@@ -21,6 +21,10 @@ import {
   Engine,
   GlowLayer,
   ImageProcessingConfiguration,
+  PointLight,
+  ShadowGenerator,
+  SSAO2RenderingPipeline,
+  VolumetricLightScatteringPostProcess,
   HemisphericLight,
   Matrix,
   Mesh,
@@ -234,6 +238,7 @@ function buildNeonIcon(scene: Scene, id: string, spinners: Spinner[], parent: Tr
 // Farol de caminito: poste de madera + cabeza cálida que brilla.
 function buildLamp(scene: Scene, x: number, z: number, woodDarkMat: StandardMaterial, warmMat: StandardMaterial): void {
   COLLIDERS.push({ x, z, r: 0.25 });
+  LAMP_POS.push({ x, z });
   const post = MeshBuilder.CreateCylinder('lamp-post', { diameter: 0.16, height: 3.4, tessellation: 8 }, scene);
   post.position.set(x, 1.7, z);
   post.material = woodDarkMat;
@@ -303,6 +308,7 @@ function buildCancha(scene: Scene, cx: number, cz: number, woodMat: StandardMate
   pitch.position.set(cx, 0.03, cz);
   pitch.material = turfMat;
   pitch.isPickable = false;
+  pitch.receiveShadows = true;
 
   const lineMat = stdMat(scene, 'cancha-line', '#f4f4ee', '#3a3a38');
   const line = (w: number, d: number, dx: number, dz: number): void => {
@@ -409,6 +415,7 @@ function buildCancha(scene: Scene, cx: number, cz: number, woodMat: StandardMate
   const ball = MeshBuilder.CreateSphere('cancha-ball', { diameter: 0.55, segments: 14 }, scene);
   ball.position.set(cx + 1.2, 0.34, cz - 1.5);
   ball.material = ballMat;
+  SHADOW_CASTERS.push(ball);
   for (const [lon, lat] of [[0, 0.2], [2.1, 0.5], [-2.1, 0.5], [Math.PI, 0.1], [1.0, -0.6]] as const) {
     const patch = MeshBuilder.CreateDisc('ball-patch', { radius: 0.085, tessellation: 6 }, scene);
     const r = 0.28;
@@ -495,6 +502,7 @@ function buildMuneco(scene: Scene, cx: number, cz: number, stoneMat: StandardMat
   body.position.set(cx, 2.4, cz);
   body.scaling.set(0.95, 1.1, 0.95);
   body.material = white;
+  SHADOW_CASTERS.push(body);
   for (let i = 0; i < 3; i++) {
     const btn = MeshBuilder.CreateSphere('mu-btn', { diameter: 0.16, segments: 8 }, scene);
     btn.position.set(cx, 2.0 + i * 0.45, cz - (0.93 - Math.abs(i - 1) * 0.06));
@@ -1046,7 +1054,7 @@ function buildTienda(scene: Scene, def: TiendaDef, x: number, z: number, facing:
   };
 
   // Mostrador ancho + tapa oscura
-  add(MeshBuilder.CreateBox(`${def.id}-counter`, { width: 3.2, height: 0.95, depth: 0.8 }, scene), woodMat, 0, 0.475, 0.9);
+  SHADOW_CASTERS.push(add(MeshBuilder.CreateBox(`${def.id}-counter`, { width: 3.2, height: 0.95, depth: 0.8 }, scene), woodMat, 0, 0.475, 0.9));
   add(MeshBuilder.CreateBox(`${def.id}-counter-top`, { width: 3.4, height: 0.08, depth: 0.95 }, scene), woodDarkMat, 0, 0.99, 0.9);
 
   // 4 postes
@@ -1082,6 +1090,7 @@ function buildTienda(scene: Scene, def: TiendaDef, x: number, z: number, facing:
     panel.rotation.x = sign === 1 ? -(Math.PI / 2 - 0.62) : (Math.PI / 2 - 0.62);
     panel.material = roofMat;
     panel.isPickable = false;
+    SHADOW_CASTERS.push(panel);
   }
 
   // Cenefa festoneada al frente (semicírculos alternados con alpha)
@@ -1357,6 +1366,10 @@ function resetBall(): void {
 // colisiones del mapa (círculos) + luces para día/noche
 const COLLIDERS: Array<{ x: number; z: number; r: number }> = [];
 let LIGHTS: { hemi: HemisphericLight; sun: DirectionalLight } | null = null;
+// sombras dinámicas: emisores registrados al construir el mapa
+const SHADOW_CASTERS: Mesh[] = [];
+const TREE_CASTERS: Mesh[] = [];
+const LAMP_POS: Array<{ x: number; z: number }> = [];
 
 function hex2v3(h: string): [number, number, number] {
   return [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
@@ -1563,6 +1576,7 @@ function buildPlayer(scene: Scene, faceCv: HTMLCanvasElement, nombre: string): P
   mesh.parent = root;
   mesh.isPickable = false;
   mesh.alwaysSelectAsActiveMesh = true; // la malla se regenera por frame
+  SHADOW_CASTERS.push(mesh);
 
   // decal de la cara dibujada, moldeado a la cabeza
   const decalPos = new Float32Array((DEC_U + 1) * (DEC_V + 1) * 3);
@@ -1682,6 +1696,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   const ground = MeshBuilder.CreateGround('patio-ground', { width: GROUND_SIZE, height: GROUND_SIZE, subdivisions: 1 }, scene);
   ground.material = texMat(scene, 'patio-ground-mat', grassUrl, GROUND_SIZE / 7, '#74a05f');
   ground.isPickable = false;
+  ground.receiveShadows = true;
 
   // Paseo de lajas en anillo (ribbon: círculo interno + externo)
   const SEGS = 72;
@@ -1703,6 +1718,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   promMat.backFaceCulling = false;
   prom.material = promMat;
   prom.isPickable = false;
+  prom.receiveShadows = true;
 
   // Sendero de entrada (sur): del portal al centro + acceso exterior
   const pathMat = texMat(scene, 'path-mat', flagstoneUrl, 1);
@@ -1738,6 +1754,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     tier.position.y = y;
     tier.material = stoneMat;
     tier.isPickable = false;
+    SHADOW_CASTERS.push(tier);
   }
   COLLIDERS.push({ x: 0, z: 0, r: 2.9 }); // monumento central
   const goldMat = stdMat(scene, 'gold-mat', '#e8c84a', '#604d12');
@@ -1748,6 +1765,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
   const cup = MeshBuilder.CreateCylinder('mon-cup', { diameterTop: 1.5, diameterBottom: 0.4, height: 1.1, tessellation: 16 }, scene);
   cup.position.y = 3.0;
   cup.material = goldMat;
+  SHADOW_CASTERS.push(cup);
   const ball = MeshBuilder.CreateSphere('mon-ball', { diameter: 0.9, segments: 12 }, scene);
   ball.position.y = 3.8;
   ball.material = goldMat;
@@ -2100,6 +2118,7 @@ function buildScene(engine: Engine, canvas: HTMLCanvasElement): Scene {
     COLLIDERS.push({ x: tx, z: tz, r: 0.85 }); // tronco
     for (const yaw of [0, Math.PI / 2]) {
       const plane = MeshBuilder.CreatePlane(`oak-${i}-${yaw > 0 ? 'b' : 'a'}`, { width: s, height: s }, scene);
+      TREE_CASTERS.push(plane);
       plane.position.set(tx, s / 2 - s * 0.07, tz); // hundido: el tronco toca el piso
       plane.rotation.y = a + yaw; // orientación variada
       plane.material = oakMat;
@@ -2512,7 +2531,7 @@ function boot(): void {
       resBs[0].textContent = T('low');
       resBs[1].textContent = T('med');
       resBs[2].textContent = T('high');
-      (document.querySelectorAll('#gfxopt b')[0] as HTMLElement).textContent = T('classic');
+      (document.querySelectorAll('#gfxopt b')[0] as HTMLElement).textContent = T('classic'); // PBR y RTX son marcas fijas
       $id('iname').setAttribute('placeholder', T('name'));
       $id('ienter').textContent = T('enter');
       $id('dinobub').innerHTML = T('dino');
@@ -2575,31 +2594,81 @@ function boot(): void {
         engine.setHardwareScalingLevel(1 / eff);
       });
     });
-    // ajustes: gráficos Cine·PBR (tonemapping ACES + bloom + FXAA + viñeta)
+    // ajustes: gráficos en 3 niveles
+    //   Clásico: pelado, SIN sombras (rinde en cualquier lado)
+    //   PBR: tonemapping ACES + bloom + FXAA + viñeta + sombras SIMPLES
+    //   RTX: sombras dinámicas PCF (jugador + tiendas + ÁRBOLES) + SSAO +
+    //        rayos de sol volumétricos + puntos de luz en faroles + bloom bajito
     let pipeline: DefaultRenderingPipeline | null = null;
+    let shadowGen: ShadowGenerator | null = null;
+    let ssao: SSAO2RenderingPipeline | null = null;
+    let godrays: VolumetricLightScatteringPostProcess | null = null;
+    let lampLights: PointLight[] = [];
+    const gfxTeardown = (): void => {
+      if (pipeline) { pipeline.dispose(); pipeline = null; }
+      if (shadowGen) { shadowGen.dispose(); shadowGen = null; }
+      if (ssao) { ssao.dispose(); ssao = null; }
+      if (godrays) { godrays.dispose(cam0); godrays = null; }
+      for (const l of lampLights) l.dispose();
+      lampLights = [];
+    };
+    const mkPipeline = (bloom: number): void => {
+      pipeline = new DefaultRenderingPipeline('cine', true, scene, [cam0]);
+      pipeline.fxaaEnabled = true;
+      pipeline.bloomEnabled = bloom > 0;
+      pipeline.bloomThreshold = 0.75;
+      pipeline.bloomWeight = bloom;
+      pipeline.imageProcessing.toneMappingEnabled = true;
+      pipeline.imageProcessing.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
+      pipeline.imageProcessing.contrast = 1.18;
+      pipeline.imageProcessing.exposure = 1.12;
+      pipeline.imageProcessing.vignetteEnabled = true;
+      pipeline.imageProcessing.vignetteWeight = 1.3;
+    };
+    const mkShadows = (size: number, pcf: boolean, conArboles: boolean): void => {
+      if (!LIGHTS) return;
+      shadowGen = new ShadowGenerator(size, LIGHTS.sun);
+      if (pcf) shadowGen.usePercentageCloserFiltering = true;
+      else shadowGen.usePoissonSampling = true;
+      shadowGen.transparencyShadow = true; // respeta el alpha de los robles
+      shadowGen.bias = 0.0012;
+      for (const m of SHADOW_CASTERS) shadowGen.addShadowCaster(m);
+      if (conArboles) for (const m of TREE_CASTERS) shadowGen.addShadowCaster(m);
+    };
+    const setGraphics = (g: string): void => {
+      gfxTeardown();
+      if (g === '1') { // PBR: lindo y liviano
+        mkPipeline(0.22);
+        mkShadows(512, false, false);
+      } else if (g === '2') { // RTX: todos los chiches
+        mkPipeline(0.10); // bloom no tan alto
+        mkShadows(1024, true, true);
+        ssao = new SSAO2RenderingPipeline('ssao', scene, 0.5, [cam0]);
+        ssao.radius = 0.6;
+        ssao.totalStrength = 1.0;
+        ssao.samples = 12;
+        // rayos del sol: disco brillante + scattering volumétrico
+        godrays = new VolumetricLightScatteringPostProcess('rayos', 1.0, cam0, undefined as never, 60, Texture.BILINEAR_SAMPLINGMODE, engine, false);
+        godrays.mesh.position.set(55, 110, 48); // opuesto a la dirección del sol
+        godrays.mesh.scaling.setAll(28);
+        godrays.exposure = 0.18;
+        godrays.decay = 0.967;
+        // puntos de luz cálidos en los faroles más cercanos al patio
+        const cerca = LAMP_POS.slice().sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z)).slice(0, 4);
+        for (const lp of cerca) {
+          const pl = new PointLight(`lamp-${lp.x}-${lp.z}`, new Vector3(lp.x, 3.4, lp.z), scene);
+          pl.diffuse = Color3.FromHexString('#ffca6a');
+          pl.intensity = 0.45;
+          pl.range = 10;
+          lampLights.push(pl);
+        }
+      }
+    };
     document.querySelectorAll('#gfxopt b').forEach((el) => {
       el.addEventListener('click', () => {
         document.querySelectorAll('#gfxopt b').forEach((x) => x.classList.remove('on'));
         el.classList.add('on');
-        const g = (el as HTMLElement).dataset.g as string;
-        if (g === '1') {
-          if (!pipeline) {
-            pipeline = new DefaultRenderingPipeline('cine', true, scene, [cam0]);
-            pipeline.fxaaEnabled = true;
-            pipeline.bloomEnabled = true;
-            pipeline.bloomThreshold = 0.72;
-            pipeline.bloomWeight = 0.22;
-            pipeline.imageProcessing.toneMappingEnabled = true;
-            pipeline.imageProcessing.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
-            pipeline.imageProcessing.contrast = 1.18;
-            pipeline.imageProcessing.exposure = 1.12;
-            pipeline.imageProcessing.vignetteEnabled = true;
-            pipeline.imageProcessing.vignetteWeight = 1.4;
-          }
-        } else if (pipeline) {
-          pipeline.dispose();
-          pipeline = null;
-        }
+        setGraphics((el as HTMLElement).dataset.g as string);
       });
     });
     // reloj real: hora local del dispositivo YA, y la API por IP la refina
